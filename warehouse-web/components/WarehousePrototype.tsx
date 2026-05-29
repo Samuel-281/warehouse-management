@@ -19,7 +19,7 @@ import {
   Warehouse
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { initialState } from "@/lib/demo-data";
 import type {
   InboundSource,
@@ -37,12 +37,9 @@ import {
   formatCategory,
   formatMovementType,
   goodsLabel,
-  makeId,
-  nowText,
   ownerLabel,
   STORAGE_KEY,
-  uniqueBarcodes,
-  warehouseLabel
+  uniqueBarcodes
 } from "@/lib/warehouse-utils";
 
 type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "inventory";
@@ -61,6 +58,17 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
   if (!response.ok || !("data" in payload)) {
     throw new Error("error" in payload ? payload.error : "操作失败");
+  }
+
+  return payload.data;
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(path);
+  const payload = (await response.json()) as ApiResponse<T>;
+
+  if (!response.ok || !("data" in payload)) {
+    throw new Error("error" in payload ? payload.error : "读取数据失败");
   }
 
   return payload.data;
@@ -85,6 +93,7 @@ export default function WarehousePrototype() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [selectedBarcode, setSelectedBarcode] = useState("HJ202605290001");
   const [masterDataSource, setMasterDataSource] = useState<"local" | "database">("local");
+  const [refreshing, setRefreshing] = useState(false);
 
   const [inboundSource, setInboundSource] = useState<InboundSource>("factory");
   const [inboundWarehouseId, setInboundWarehouseId] = useState("wh-main");
@@ -116,6 +125,67 @@ export default function WarehousePrototype() {
     goodsId: "all"
   });
 
+  const applyDatabaseState = useCallback((masterData: WarehouseState, options: { preserveSelection?: boolean } = {}) => {
+    const mainWarehouse =
+      masterData.warehouses.find((warehouse) => warehouse.type === "main" && warehouse.status === "enabled") ??
+      masterData.warehouses[0];
+    const branchWarehouse =
+      masterData.warehouses.find((warehouse) => warehouse.type === "branch" && warehouse.status === "enabled") ??
+      masterData.warehouses.find((warehouse) => warehouse.id !== mainWarehouse?.id);
+    const mainLocation = masterData.locations.find(
+      (location) => location.warehouseId === mainWarehouse?.id && location.status === "enabled"
+    );
+    const branchLocation = masterData.locations.find(
+      (location) => location.warehouseId === branchWarehouse?.id && location.status === "enabled"
+    );
+
+    setState(masterData);
+    setInboundGoodsId(masterData.goods[0]?.id ?? "");
+    setInboundWarehouseId(mainWarehouse?.id ?? "");
+    setInboundLocationId(mainLocation?.id ?? "");
+    setTerminalStoreId(masterData.terminalStores[0]?.id ?? "");
+    setSourceWarehouseId(mainWarehouse?.id ?? "");
+    setTargetWarehouseId(branchWarehouse?.id ?? "");
+    setTargetLocationId(branchLocation?.id ?? "");
+    setSalespersonId(masterData.salespeople[0]?.id ?? "");
+    setReturnWarehouseId(mainWarehouse?.id ?? "");
+    setReturnLocationId(mainLocation?.id ?? "");
+    setInventoryFilters({ keyword: "", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+    setSelectedBarcode((current) => {
+      if (options.preserveSelection && masterData.inventoryItems.some((item) => item.barcode === current)) {
+        return current;
+      }
+      return masterData.inventoryItems[0]?.barcode ?? "";
+    });
+    setMasterDataSource("database");
+    window.localStorage.removeItem(STORAGE_KEY);
+  }, []);
+
+  const refreshWarehouseState = useCallback(
+    async (options: { preserveSelection?: boolean; notify?: boolean } = {}) => {
+      setRefreshing(true);
+      try {
+        const masterData = await getJson<WarehouseState>("/api/master-data");
+        applyDatabaseState(masterData, { preserveSelection: options.preserveSelection ?? true });
+        if (options.notify) {
+          showToast({ tone: "success", message: "已从数据库刷新库存与流水" });
+        }
+        return masterData;
+      } catch (error) {
+        setMasterDataSource("local");
+        if (options.notify) {
+          showToast({ tone: "error", message: error instanceof Error ? error.message : "刷新数据失败" });
+        } else {
+          console.info(error instanceof Error ? error.message : "基础资料接口暂不可用");
+        }
+        return null;
+      } finally {
+        setRefreshing(false);
+      }
+    },
+    [applyDatabaseState]
+  );
+
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     if (stored) {
@@ -133,51 +203,10 @@ export default function WarehousePrototype() {
 
     let cancelled = false;
 
-    fetch("/api/master-data")
-      .then(async (response) => {
-        const payload = (await response.json()) as ApiResponse<MasterDataPayload>;
-        if (!response.ok || !("data" in payload)) {
-          throw new Error("error" in payload ? payload.error : "基础资料接口暂不可用");
-        }
-        return payload.data;
-      })
+    getJson<MasterDataPayload>("/api/master-data")
       .then((masterData) => {
         if (cancelled) return;
-        const mainWarehouse =
-          masterData.warehouses.find((warehouse) => warehouse.type === "main" && warehouse.status === "enabled") ??
-          masterData.warehouses[0];
-        const branchWarehouse =
-          masterData.warehouses.find((warehouse) => warehouse.type === "branch" && warehouse.status === "enabled") ??
-          masterData.warehouses.find((warehouse) => warehouse.id !== mainWarehouse?.id);
-        const mainLocation = masterData.locations.find(
-          (location) => location.warehouseId === mainWarehouse?.id && location.status === "enabled"
-        );
-        const branchLocation = masterData.locations.find(
-          (location) => location.warehouseId === branchWarehouse?.id && location.status === "enabled"
-        );
-
-        setState((previous) => ({
-          ...previous,
-          goods: masterData.goods,
-          warehouses: masterData.warehouses,
-          locations: masterData.locations,
-          salespeople: masterData.salespeople,
-          terminalStores: masterData.terminalStores,
-          inventoryItems: masterData.inventoryItems,
-          movements: masterData.movements
-        }));
-        setInboundGoodsId(masterData.goods[0]?.id ?? "");
-        setInboundWarehouseId(mainWarehouse?.id ?? "");
-        setInboundLocationId(mainLocation?.id ?? "");
-        setTerminalStoreId(masterData.terminalStores[0]?.id ?? "");
-        setSourceWarehouseId(mainWarehouse?.id ?? "");
-        setTargetWarehouseId(branchWarehouse?.id ?? "");
-        setTargetLocationId(branchLocation?.id ?? "");
-        setSalespersonId(masterData.salespeople[0]?.id ?? "");
-        setReturnWarehouseId(mainWarehouse?.id ?? "");
-        setReturnLocationId(mainLocation?.id ?? "");
-        setInventoryFilters({ keyword: "", warehouseId: "all", salespersonId: "all", goodsId: "all" });
-        setMasterDataSource("database");
+        applyDatabaseState(masterData, { preserveSelection: true });
       })
       .catch((error) => {
         if (cancelled) return;
@@ -188,86 +217,13 @@ export default function WarehousePrototype() {
     return () => {
       cancelled = true;
     };
-  }, [hydrated]);
+  }, [applyDatabaseState, hydrated]);
 
   useEffect(() => {
-    if (hydrated) {
+    if (hydrated && masterDataSource === "local") {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }
-  }, [hydrated, state]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-
-    const params = new URLSearchParams(window.location.search);
-    const targetBranchId = params.get("bulkMoveMainToBranch");
-    if (!targetBranchId) return;
-
-    const targetWarehouse = state.warehouses.find(
-      (warehouse) => warehouse.id === targetBranchId && warehouse.type === "branch"
-    );
-    const targetLocation = state.locations.find(
-      (location) => location.warehouseId === targetBranchId && location.status === "enabled"
-    );
-
-    if (!targetWarehouse || !targetLocation) {
-      showToast({ tone: "error", message: "批量挪仓失败：目标分仓或库位无效" });
-      window.history.replaceState(null, "", window.location.pathname);
-      return;
-    }
-
-    const itemsToMove = state.inventoryItems.filter(
-      (item) => item.ownerType === "warehouse" && item.warehouseId === "wh-main"
-    );
-
-    if (itemsToMove.length === 0) {
-      setActiveView("inventory");
-      showToast({ tone: "info", message: "总仓当前没有可挪仓的在库货物" });
-      window.history.replaceState(null, "", window.location.pathname);
-      return;
-    }
-
-    const time = nowText();
-    const targetLabel = warehouseLabel(targetBranchId, state.warehouses, targetLocation.id, state.locations);
-    const movedBarcodes = new Set(itemsToMove.map((item) => item.barcode));
-
-    const nextItems: InventoryItem[] = state.inventoryItems.map((item) => {
-      if (!movedBarcodes.has(item.barcode)) return item;
-      return {
-        ...item,
-        ownerType: "warehouse",
-        warehouseId: targetBranchId,
-        locationId: targetLocation.id,
-        salespersonId: undefined,
-        status: "in_stock",
-        lastMovedAt: time
-      };
-    });
-
-    const nextMovements: StockMovement[] = itemsToMove.map((item) => ({
-      id: makeId("mv"),
-      itemId: item.id,
-      barcode: item.barcode,
-      goodsId: item.goodsId,
-      type: "transfer",
-      fromLabel: warehouseLabel(item.warehouseId, state.warehouses, item.locationId, state.locations),
-      toLabel: targetLabel,
-      operator,
-      occurredAt: time,
-      note: "批量挪仓到分仓"
-    }));
-
-    setState((previous) => ({
-      ...previous,
-      inventoryItems: nextItems,
-      movements: [...nextMovements, ...previous.movements]
-    }));
-    setActiveView("inventory");
-    setInventoryFilters({ keyword: "", warehouseId: targetBranchId, salespersonId: "all", goodsId: "all" });
-    setSelectedBarcode(itemsToMove[0].barcode);
-    showToast({ tone: "success", message: `已将总仓 ${itemsToMove.length} 件货物批量挪到${targetWarehouse.name}` });
-    window.history.replaceState(null, "", window.location.pathname);
-  }, [hydrated, state.inventoryItems, state.locations, state.warehouses]);
+  }, [hydrated, masterDataSource, state]);
 
   useEffect(() => {
     const firstLocation = enabledLocationsForWarehouse(inboundWarehouseId, state.locations)[0];
@@ -333,7 +289,24 @@ export default function WarehousePrototype() {
     window.setTimeout(() => setToast(null), 3200);
   }
 
-  function resetDemoData() {
+  async function resetDemoData() {
+    if (masterDataSource === "database") {
+      window.localStorage.removeItem(STORAGE_KEY);
+      await refreshWarehouseState({ preserveSelection: false, notify: true });
+      setActiveView("dashboard");
+      setInboundSource("factory");
+      setInboundQty("1");
+      setInboundBarcodeInput("");
+      setInboundBarcodes([]);
+      setProductionDate("");
+      setOutboundType("transfer");
+      setOutboundBarcodeInput("");
+      setOutboundBarcodes([]);
+      setReturnBarcodeInput("");
+      setReturnBarcodes([]);
+      return;
+    }
+
     const resetState = cloneInitialState(initialState);
     setState(resetState);
     setActiveView("dashboard");
@@ -436,6 +409,7 @@ export default function WarehousePrototype() {
         inventoryItems: [...result.items, ...previous.inventoryItems],
         movements: [...result.movements, ...previous.movements]
       }));
+      await refreshWarehouseState({ preserveSelection: true });
       setInboundBarcodes([]);
       setInboundQty("1");
       setProductionDate("");
@@ -509,6 +483,7 @@ export default function WarehousePrototype() {
         inventoryItems: previous.inventoryItems.map((item) => updatedByBarcode.get(item.barcode) ?? item),
         movements: [...result.movements, ...previous.movements]
       }));
+      await refreshWarehouseState({ preserveSelection: true });
       setOutboundBarcodes([]);
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: outboundType === "transfer" ? "挪仓已写入数据库" : "销售出库已写入数据库" });
@@ -552,6 +527,7 @@ export default function WarehousePrototype() {
         inventoryItems: previous.inventoryItems.map((item) => updatedByBarcode.get(item.barcode) ?? item),
         movements: [...result.movements, ...previous.movements]
       }));
+      await refreshWarehouseState({ preserveSelection: true });
       setReturnBarcodes([]);
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: "销售退回已写入数据库，未修改生产日期或保质期" });
@@ -627,6 +603,17 @@ export default function WarehousePrototype() {
               <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
                 当前用户：仓库操作员
               </span>
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                数据来源：{masterDataSource === "database" ? "PostgreSQL" : "本地原型"}
+              </span>
+              <button
+                className="secondary-button"
+                onClick={() => void refreshWarehouseState({ preserveSelection: true, notify: true })}
+                disabled={refreshing}
+              >
+                <RotateCcw className="h-4 w-4" />
+                {refreshing ? "刷新中" : "刷新数据"}
+              </button>
               <button className="secondary-button" onClick={resetDemoData}>
                 <RotateCcw className="h-4 w-4" />
                 重置
@@ -758,6 +745,8 @@ export default function WarehousePrototype() {
               setSelectedBarcode={setSelectedBarcode}
               selectedItem={selectedItem}
               selectedMovements={selectedMovements}
+              refreshing={refreshing}
+              refreshData={() => void refreshWarehouseState({ preserveSelection: true, notify: true })}
             />
           ) : null}
         </div>
@@ -1659,12 +1648,20 @@ function InventoryView(props: {
   setSelectedBarcode: (barcode: string) => void;
   selectedItem?: InventoryItem;
   selectedMovements: StockMovement[];
+  refreshing: boolean;
+  refreshData: () => void;
 }) {
   return (
     <div className="grid gap-5 2xl:grid-cols-[1.4fr_0.6fr]">
       <section className="panel overflow-hidden">
         <div className="border-b border-slate-200 p-4">
-          <SectionHeader icon={Search} title="库存查询" compact />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <SectionHeader icon={Search} title="库存查询" compact />
+            <button className="secondary-button" onClick={props.refreshData} disabled={props.refreshing}>
+              <RotateCcw className="h-4 w-4" />
+              {props.refreshing ? "刷新中" : "刷新数据库库存"}
+            </button>
+          </div>
           <div className="mt-4 grid gap-3 md:grid-cols-4">
             <input
               className="field"
@@ -1741,6 +1738,11 @@ function InventoryView(props: {
               })}
             </tbody>
           </table>
+          {props.inventoryItems.length === 0 ? (
+            <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+              没有匹配的库存记录。
+            </div>
+          ) : null}
         </div>
       </section>
 
