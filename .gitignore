@@ -4,6 +4,8 @@
 # Environment and logs
 .env
 .env.*
+!.env.example
+!warehouse-web/.env.example
 *.log
 
 # Local dependency/bootstrap tooling
