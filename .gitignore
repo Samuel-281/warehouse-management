@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Environment and logs
+.env
+.env.*
+*.log
+
+# Local dependency/bootstrap tooling
+tools/
+
+# Generated outputs
+outputs/
+warehouse-web/screenshots/
+docs/*.docx
+
+# Next.js / Node
+warehouse-web/node_modules/
+warehouse-web/.next/
+warehouse-web/out/
+warehouse-web/dist/
+warehouse-web/tsconfig.tsbuildinfo
+
+# Package manager caches
+.npm/
+.yarn/
+.pnpm-store/
