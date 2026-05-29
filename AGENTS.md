@@ -2,7 +2,7 @@
 
 ## Project Background
 
-This workspace is for a warehouse goods management software project. The product is currently in the requirements and documentation stage; no production application code has been started yet.
+This workspace is for a warehouse goods management software project. The product has completed the initial requirements and documentation stage, and now includes a first interactive Next.js prototype for desktop web plus a low-fidelity PDA sketch.
 
 The software will help manage goods across a two-level warehouse structure:
 
@@ -22,7 +22,15 @@ Important project documents live in `docs/`:
 3. `docs/warehouse-management-user-manual.docx` - generated Word version of the user manual.
 4. `docs/warehouse-management-user-manual.pdf` - generated PDF version of the user manual.
 
-Generated presentation-related working files live under `outputs/`. Utility scripts live under `scripts/`.
+Generated presentation-related working files live under `outputs/`, but this directory is ignored by Git. Utility scripts live under `scripts/`.
+
+The interactive prototype lives in `warehouse-web/` and uses:
+
+1. Next.js App Router.
+2. TypeScript.
+3. Tailwind CSS.
+4. `lucide-react`.
+5. Local mock data and browser `localStorage` for prototype state.
 
 ## Confirmed Business Scope
 
@@ -170,9 +178,14 @@ When updating requirements or manuals:
 
 ## Development Guidance For Future Agents
 
-Before implementing application code, first confirm the intended technical stack if it has not already been selected. The current workspace mainly contains planning artifacts, not a working app.
+The first prototype application already exists in `warehouse-web/`. Before making changes, inspect the current app structure and preserve the existing prototype style unless the user asks for a redesign.
 
-When implementation begins, prefer a data model centered on item barcode records. A practical initial model should include:
+Run the local prototype from `warehouse-web/`:
+
+1. `npm install`
+2. `npm run dev`
+
+For the next production implementation stage, prefer a data model centered on item barcode records. A practical initial model should include:
 
 1. Goods master data.
 2. Warehouse master data.
