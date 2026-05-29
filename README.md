@@ -83,6 +83,7 @@ http://127.0.0.1:3000
 - PDF 文稿：`docs/warehouse-management-user-manual.pdf`
 - 技术架构：`docs/technical-architecture.md`
 - 数据库设计：`docs/database-schema.md`
+- 本地数据库启动：`docs/local-database-setup.md`
 - 后续协作背景：`AGENTS.md`
 
 ## 下一阶段建议

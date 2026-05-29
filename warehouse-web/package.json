@@ -10,6 +10,7 @@
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
+    "db:seed": "prisma db execute --file prisma/seed.sql --schema prisma/schema.prisma",
     "db:studio": "prisma studio"
   },
   "dependencies": {
