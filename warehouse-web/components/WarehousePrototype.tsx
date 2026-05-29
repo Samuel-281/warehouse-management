@@ -655,7 +655,9 @@ export default function WarehousePrototype() {
               setSelectedBarcode={setSelectedBarcode}
             />
           ) : null}
-          {activeView === "masters" ? <MastersView state={state} /> : null}
+          {activeView === "masters" ? (
+            <MastersView state={state} setState={setState} showToast={showToast} />
+          ) : null}
           {activeView === "inbound" ? (
             <InboundView
               state={state}
@@ -920,9 +922,311 @@ function MetricCard({ label, value, icon: Icon }: { label: string; value: number
   );
 }
 
-function MastersView({ state }: { state: WarehouseState }) {
+function MastersView({
+  state,
+  setState,
+  showToast
+}: {
+  state: WarehouseState;
+  setState: (updater: (previous: WarehouseState) => WarehouseState) => void;
+  showToast: (toast: Toast) => void;
+}) {
+  const [goodsDraft, setGoodsDraft] = useState({
+    code: "",
+    name: "",
+    category: "health_wine",
+    unit: "瓶",
+    spec: ""
+  });
+  const [warehouseDraft, setWarehouseDraft] = useState({ code: "", name: "", manager: "" });
+  const [salespersonDraft, setSalespersonDraft] = useState({
+    code: "",
+    name: "",
+    phone: "",
+    region: ""
+  });
+  const [storeDraft, setStoreDraft] = useState({ name: "", contact: "", phone: "", address: "" });
+
+  function addGoods() {
+    const code = goodsDraft.code.trim();
+    const name = goodsDraft.name.trim();
+    const unit = goodsDraft.unit.trim();
+    const spec = goodsDraft.spec.trim();
+    if (!code || !name || !unit || !spec) {
+      showToast({ tone: "error", message: "请完整填写货物资料" });
+      return;
+    }
+    if (state.goods.some((goods) => goods.code === code)) {
+      showToast({ tone: "error", message: "货物编码已存在" });
+      return;
+    }
+    setState((previous) => ({
+      ...previous,
+      goods: [
+        ...previous.goods,
+        {
+          id: makeId("goods"),
+          code,
+          name,
+          category: goodsDraft.category as "health_wine" | "baijiu",
+          unit,
+          spec,
+          status: "enabled"
+        }
+      ]
+    }));
+    setGoodsDraft({ code: "", name: "", category: goodsDraft.category, unit: "瓶", spec: "" });
+    showToast({ tone: "success", message: "货物资料已新增" });
+  }
+
+  function addWarehouse() {
+    const code = warehouseDraft.code.trim();
+    const name = warehouseDraft.name.trim();
+    const manager = warehouseDraft.manager.trim();
+    if (!code || !name || !manager) {
+      showToast({ tone: "error", message: "请完整填写分仓资料" });
+      return;
+    }
+    if (state.warehouses.some((warehouse) => warehouse.code === code)) {
+      showToast({ tone: "error", message: "仓库编码已存在" });
+      return;
+    }
+    const warehouseId = makeId("wh");
+    setState((previous) => ({
+      ...previous,
+      warehouses: [
+        ...previous.warehouses,
+        {
+          id: warehouseId,
+          code,
+          name,
+          type: "branch",
+          parentId: "wh-main",
+          manager,
+          status: "enabled"
+        }
+      ],
+      locations: [
+        ...previous.locations,
+        {
+          id: makeId("loc"),
+          warehouseId,
+          zone: "默认区",
+          code: `${code}-01`,
+          name: `${name}默认库位`,
+          status: "enabled"
+        }
+      ]
+    }));
+    setWarehouseDraft({ code: "", name: "", manager: "" });
+    showToast({ tone: "success", message: "分仓资料已新增，并已生成默认库位" });
+  }
+
+  function addSalesperson() {
+    const code = salespersonDraft.code.trim();
+    const name = salespersonDraft.name.trim();
+    const phone = salespersonDraft.phone.trim();
+    const region = salespersonDraft.region.trim();
+    if (!code || !name || !phone || !region) {
+      showToast({ tone: "error", message: "请完整填写销售人员资料" });
+      return;
+    }
+    if (state.salespeople.some((person) => person.code === code)) {
+      showToast({ tone: "error", message: "销售人员编码已存在" });
+      return;
+    }
+    setState((previous) => ({
+      ...previous,
+      salespeople: [
+        ...previous.salespeople,
+        {
+          id: makeId("sp"),
+          code,
+          name,
+          phone,
+          region,
+          status: "enabled"
+        }
+      ]
+    }));
+    setSalespersonDraft({ code: "", name: "", phone: "", region: "" });
+    showToast({ tone: "success", message: "销售人员已新增" });
+  }
+
+  function addTerminalStore() {
+    const name = storeDraft.name.trim();
+    const contact = storeDraft.contact.trim();
+    const phone = storeDraft.phone.trim();
+    const address = storeDraft.address.trim();
+    if (!name || !contact || !phone || !address) {
+      showToast({ tone: "error", message: "请完整填写终端店铺资料" });
+      return;
+    }
+    setState((previous) => ({
+      ...previous,
+      terminalStores: [
+        ...previous.terminalStores,
+        {
+          id: makeId("store"),
+          name,
+          contact,
+          phone,
+          address
+        }
+      ]
+    }));
+    setStoreDraft({ name: "", contact: "", phone: "", address: "" });
+    showToast({ tone: "success", message: "终端店铺已新增" });
+  }
+
   return (
-    <div className="grid gap-5 xl:grid-cols-2">
+    <div className="grid gap-5">
+      <div className="grid gap-5 xl:grid-cols-2">
+        <section className="panel p-5">
+          <SectionHeader icon={Boxes} title="新增货物" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField
+              label="货物编码"
+              value={goodsDraft.code}
+              onChange={(value) => setGoodsDraft({ ...goodsDraft, code: value })}
+              placeholder="如 HJ-003"
+            />
+            <TextField
+              label="货物名称"
+              value={goodsDraft.name}
+              onChange={(value) => setGoodsDraft({ ...goodsDraft, name: value })}
+              placeholder="如 山参保健酒"
+            />
+            <FieldSelect
+              label="货物大类"
+              value={goodsDraft.category}
+              onChange={(value) => setGoodsDraft({ ...goodsDraft, category: value })}
+              options={[
+                { value: "health_wine", label: "保健酒" },
+                { value: "baijiu", label: "白酒" }
+              ]}
+            />
+            <TextField
+              label="单位"
+              value={goodsDraft.unit}
+              onChange={(value) => setGoodsDraft({ ...goodsDraft, unit: value })}
+              placeholder="瓶"
+            />
+            <div className="md:col-span-2">
+              <TextField
+                label="规格"
+                value={goodsDraft.spec}
+                onChange={(value) => setGoodsDraft({ ...goodsDraft, spec: value })}
+                placeholder="如 500ml/瓶，12瓶/箱"
+              />
+            </div>
+          </div>
+          <button className="primary-button mt-5" onClick={addGoods}>
+            <Check className="h-4 w-4" />
+            新增货物
+          </button>
+        </section>
+
+        <section className="panel p-5">
+          <SectionHeader icon={Warehouse} title="新增分仓" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField
+              label="分仓编码"
+              value={warehouseDraft.code}
+              onChange={(value) => setWarehouseDraft({ ...warehouseDraft, code: value })}
+              placeholder="如 FC-303"
+            />
+            <TextField
+              label="分仓名称"
+              value={warehouseDraft.name}
+              onChange={(value) => setWarehouseDraft({ ...warehouseDraft, name: value })}
+              placeholder="如 西城区分仓"
+            />
+            <div className="md:col-span-2">
+              <TextField
+                label="负责人"
+                value={warehouseDraft.manager}
+                onChange={(value) => setWarehouseDraft({ ...warehouseDraft, manager: value })}
+                placeholder="如 张库管"
+              />
+            </div>
+          </div>
+          <button className="primary-button mt-5" onClick={addWarehouse}>
+            <Check className="h-4 w-4" />
+            新增分仓
+          </button>
+        </section>
+
+        <section className="panel p-5">
+          <SectionHeader icon={Users} title="新增销售人员" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField
+              label="人员编码"
+              value={salespersonDraft.code}
+              onChange={(value) => setSalespersonDraft({ ...salespersonDraft, code: value })}
+              placeholder="如 XS-004"
+            />
+            <TextField
+              label="姓名"
+              value={salespersonDraft.name}
+              onChange={(value) => setSalespersonDraft({ ...salespersonDraft, name: value })}
+              placeholder="如 陈阳"
+            />
+            <TextField
+              label="手机号"
+              value={salespersonDraft.phone}
+              onChange={(value) => setSalespersonDraft({ ...salespersonDraft, phone: value })}
+              placeholder="如 13800010004"
+            />
+            <TextField
+              label="区域"
+              value={salespersonDraft.region}
+              onChange={(value) => setSalespersonDraft({ ...salespersonDraft, region: value })}
+              placeholder="如 西城片区"
+            />
+          </div>
+          <button className="primary-button mt-5" onClick={addSalesperson}>
+            <Check className="h-4 w-4" />
+            新增销售人员
+          </button>
+        </section>
+
+        <section className="panel p-5">
+          <SectionHeader icon={Building2} title="新增终端店铺" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField
+              label="店铺名称"
+              value={storeDraft.name}
+              onChange={(value) => setStoreDraft({ ...storeDraft, name: value })}
+              placeholder="如 西城便利烟酒店"
+            />
+            <TextField
+              label="联系人"
+              value={storeDraft.contact}
+              onChange={(value) => setStoreDraft({ ...storeDraft, contact: value })}
+              placeholder="如 何店长"
+            />
+            <TextField
+              label="电话"
+              value={storeDraft.phone}
+              onChange={(value) => setStoreDraft({ ...storeDraft, phone: value })}
+              placeholder="如 13700020003"
+            />
+            <TextField
+              label="地址"
+              value={storeDraft.address}
+              onChange={(value) => setStoreDraft({ ...storeDraft, address: value })}
+              placeholder="如 西城区建设路 28 号"
+            />
+          </div>
+          <button className="primary-button mt-5" onClick={addTerminalStore}>
+            <Check className="h-4 w-4" />
+            新增店铺
+          </button>
+        </section>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
       <MasterTable
         title="货物资料"
         icon={Boxes}
@@ -964,6 +1268,31 @@ function MastersView({ state }: { state: WarehouseState }) {
         icon={Building2}
         headers={["店铺", "联系人", "电话", "地址"]}
         rows={state.terminalStores.map((item) => [item.name, item.contact, item.phone, item.address])}
+      />
+      </div>
+    </div>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="label">{label}</label>
+      <input
+        className="field"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
       />
     </div>
   );
