@@ -1,0 +1,228 @@
+import { getPrisma } from "@/lib/db";
+import { addYears } from "@/lib/warehouse-utils";
+import type { InboundSource, InventoryItem, MovementType, StockMovement } from "@/lib/types";
+
+type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
+type DbMovementType = "FACTORY_INBOUND" | "TERMINAL_RETURN_INBOUND";
+
+type DbInventoryItem = {
+  id: string;
+  barcode: string;
+  goodsId: string;
+  ownerType: "WAREHOUSE" | "SALESPERSON";
+  warehouseId: string | null;
+  locationId: string | null;
+  salespersonId: string | null;
+  status: "IN_STOCK" | "WITH_SALESPERSON";
+  productionDate: Date | null;
+  shelfLifeDate: Date | null;
+  inboundSource: DbInboundSource;
+  lastMovedAt: Date;
+};
+
+type DbStockMovement = {
+  id: string;
+  itemId: string;
+  barcode: string;
+  goodsId: string;
+  type: DbMovementType | "TRANSFER" | "SALES_OUTBOUND" | "SALES_RETURN";
+  fromLabel: string;
+  toLabel: string;
+  operatorName: string;
+  occurredAt: Date;
+  note: string;
+};
+
+export type SubmitInboundInput = {
+  source: InboundSource;
+  warehouseId: string;
+  locationId: string;
+  goodsId: string;
+  terminalStoreId?: string;
+  productionDate?: string;
+  barcodes: string[];
+  operatorName: string;
+};
+
+export async function submitInbound(input: SubmitInboundInput) {
+  const barcodes = Array.from(new Set(input.barcodes.map((barcode) => barcode.trim()).filter(Boolean)));
+
+  if (barcodes.length === 0) {
+    throw new Error("请先扫描或录入条码");
+  }
+  if (input.source === "terminal_return" && !input.productionDate) {
+    throw new Error("终端店铺退换货入库必须登记生产日期");
+  }
+
+  const prisma = getPrisma();
+  return prisma.$transaction(async (tx) => {
+    const [goods, warehouse, location] = await Promise.all([
+      tx.goods.findUnique({ where: { id: input.goodsId } }),
+      tx.warehouse.findUnique({ where: { id: input.warehouseId } }),
+      tx.storageLocation.findUnique({ where: { id: input.locationId } })
+    ]);
+
+    if (!goods) throw new Error("请选择有效的货物");
+    if (!warehouse) throw new Error("请选择有效的入库仓库");
+    if (!location || location.warehouseId !== warehouse.id) {
+      throw new Error("请选择有效的入库库位");
+    }
+
+    const duplicated = await tx.inventoryItem.findMany({
+      where: { barcode: { in: barcodes } },
+      select: { barcode: true }
+    });
+
+    if (duplicated.length > 0) {
+      throw new Error(`条码 ${duplicated[0].barcode} 已存在，单件条码不可重复`);
+    }
+
+    const terminalStore =
+      input.source === "terminal_return" && input.terminalStoreId
+        ? await tx.terminalStore.findUnique({ where: { id: input.terminalStoreId } })
+        : null;
+    const time = new Date();
+    const source = toDbInboundSource(input.source);
+    const movementType = toDbMovementType(input.source);
+    const productionDate =
+      input.source === "terminal_return" && input.productionDate ? new Date(input.productionDate) : null;
+    const shelfLifeDate =
+      input.source === "terminal_return" && goods.category === "HEALTH_WINE" && input.productionDate
+        ? new Date(addYears(input.productionDate, 3))
+        : null;
+    const fromLabel = input.source === "terminal_return" ? terminalStore?.name ?? "终端店铺" : "无库存";
+    const toLabel = `${warehouse.name} / ${location.name}`;
+    const order = await tx.inboundOrder.create({
+      data: {
+        orderNo: makeOrderNo("RK"),
+        source,
+        warehouseId: warehouse.id,
+        locationId: location.id,
+        terminalStoreId: terminalStore?.id,
+        operatorName: input.operatorName,
+        createdAt: time
+      }
+    });
+
+    const items: InventoryItem[] = [];
+    const movements: StockMovement[] = [];
+
+    for (const barcode of barcodes) {
+      const item = await tx.inventoryItem.create({
+        data: {
+          barcode,
+          goodsId: goods.id,
+          ownerType: "WAREHOUSE",
+          warehouseId: warehouse.id,
+          locationId: location.id,
+          status: "IN_STOCK",
+          productionDate,
+          shelfLifeDate,
+          inboundSource: source,
+          lastMovedAt: time
+        }
+      });
+      const movement = await tx.stockMovement.create({
+        data: {
+          itemId: item.id,
+          barcode: item.barcode,
+          goodsId: goods.id,
+          type: movementType,
+          fromLabel,
+          toLabel,
+          operatorName: input.operatorName,
+          occurredAt: time,
+          note:
+            input.source === "factory"
+              ? "厂家到货入库"
+              : `终端店铺退换货入库，生产日期 ${input.productionDate}`
+        }
+      });
+
+      await tx.inboundOrderItem.create({
+        data: {
+          orderId: order.id,
+          inventoryItemId: item.id,
+          barcode: item.barcode,
+          goodsId: goods.id,
+          productionDate,
+          shelfLifeDate
+        }
+      });
+
+      items.push(mapInventoryItem(item));
+      movements.push(mapStockMovement(movement));
+    }
+
+    return { orderId: order.id, items, movements };
+  });
+}
+
+function makeOrderNo(prefix: string) {
+  const random = Math.random().toString(16).slice(2, 8).toUpperCase();
+  return `${prefix}${Date.now()}${random}`;
+}
+
+function toDbInboundSource(source: InboundSource): DbInboundSource {
+  return source === "factory" ? "FACTORY" : "TERMINAL_RETURN";
+}
+
+function toDbMovementType(source: InboundSource): DbMovementType {
+  return source === "factory" ? "FACTORY_INBOUND" : "TERMINAL_RETURN_INBOUND";
+}
+
+function mapInboundSource(source: DbInboundSource): InboundSource {
+  return source === "FACTORY" ? "factory" : "terminal_return";
+}
+
+function mapMovementType(type: DbStockMovement["type"]): MovementType {
+  const movementTypes: Record<DbStockMovement["type"], MovementType> = {
+    FACTORY_INBOUND: "factory_inbound",
+    TERMINAL_RETURN_INBOUND: "terminal_return_inbound",
+    TRANSFER: "transfer",
+    SALES_OUTBOUND: "sales_outbound",
+    SALES_RETURN: "sales_return"
+  };
+
+  return movementTypes[type];
+}
+
+function formatDate(date: Date | null) {
+  return date ? date.toISOString().slice(0, 10) : undefined;
+}
+
+function formatDateTime(date: Date) {
+  return date.toISOString().slice(0, 16).replace("T", " ");
+}
+
+function mapInventoryItem(item: DbInventoryItem): InventoryItem {
+  return {
+    id: item.id,
+    barcode: item.barcode,
+    goodsId: item.goodsId,
+    ownerType: "warehouse",
+    warehouseId: item.warehouseId ?? undefined,
+    locationId: item.locationId ?? undefined,
+    salespersonId: item.salespersonId ?? undefined,
+    status: "in_stock",
+    productionDate: formatDate(item.productionDate),
+    shelfLifeDate: formatDate(item.shelfLifeDate),
+    inboundSource: mapInboundSource(item.inboundSource),
+    lastMovedAt: formatDateTime(item.lastMovedAt)
+  };
+}
+
+function mapStockMovement(movement: DbStockMovement): StockMovement {
+  return {
+    id: movement.id,
+    itemId: movement.itemId,
+    barcode: movement.barcode,
+    goodsId: movement.goodsId,
+    type: mapMovementType(movement.type),
+    fromLabel: movement.fromLabel,
+    toLabel: movement.toLabel,
+    operator: movement.operatorName,
+    occurredAt: formatDateTime(movement.occurredAt),
+    note: movement.note
+  };
+}

@@ -2,8 +2,12 @@ import { getPrisma } from "@/lib/db";
 import type {
   Goods,
   GoodsCategory,
+  InboundSource,
+  InventoryItem,
+  MovementType,
   Salesperson,
   StorageLocation,
+  StockMovement,
   TerminalStore,
   Warehouse,
   WarehouseState,
@@ -13,6 +17,15 @@ import type {
 type DbRecordStatus = "ENABLED" | "DISABLED";
 type DbGoodsCategory = "HEALTH_WINE" | "BAIJIU";
 type DbWarehouseType = "MAIN" | "BRANCH";
+type DbOwnerType = "WAREHOUSE" | "SALESPERSON";
+type DbItemStatus = "IN_STOCK" | "WITH_SALESPERSON";
+type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
+type DbMovementType =
+  | "FACTORY_INBOUND"
+  | "TERMINAL_RETURN_INBOUND"
+  | "TRANSFER"
+  | "SALES_OUTBOUND"
+  | "SALES_RETURN";
 
 type DbGoods = {
   id: string;
@@ -60,6 +73,34 @@ type DbTerminalStore = {
   address: string;
 };
 
+type DbInventoryItem = {
+  id: string;
+  barcode: string;
+  goodsId: string;
+  ownerType: DbOwnerType;
+  warehouseId: string | null;
+  locationId: string | null;
+  salespersonId: string | null;
+  status: DbItemStatus;
+  productionDate: Date | null;
+  shelfLifeDate: Date | null;
+  inboundSource: DbInboundSource;
+  lastMovedAt: Date;
+};
+
+type DbStockMovement = {
+  id: string;
+  itemId: string;
+  barcode: string;
+  goodsId: string;
+  type: DbMovementType;
+  fromLabel: string;
+  toLabel: string;
+  operatorName: string;
+  occurredAt: Date;
+  note: string;
+};
+
 export type CreateGoodsInput = {
   code: string;
   name: string;
@@ -88,16 +129,16 @@ export type CreateTerminalStoreInput = {
   address: string;
 };
 
-export async function listMasterData(): Promise<
-  Pick<WarehouseState, "goods" | "warehouses" | "locations" | "salespeople" | "terminalStores">
-> {
+export async function listMasterData(): Promise<WarehouseState> {
   const prisma = getPrisma();
-  const [goods, warehouses, locations, salespeople, terminalStores] = await Promise.all([
+  const [goods, warehouses, locations, salespeople, terminalStores, inventoryItems, movements] = await Promise.all([
     prisma.goods.findMany({ orderBy: { code: "asc" } }),
     prisma.warehouse.findMany({ orderBy: [{ type: "asc" }, { code: "asc" }] }),
     prisma.storageLocation.findMany({ orderBy: [{ warehouseId: "asc" }, { code: "asc" }] }),
     prisma.salesperson.findMany({ orderBy: { code: "asc" } }),
-    prisma.terminalStore.findMany({ orderBy: { name: "asc" } })
+    prisma.terminalStore.findMany({ orderBy: { name: "asc" } }),
+    prisma.inventoryItem.findMany({ orderBy: { lastMovedAt: "desc" } }),
+    prisma.stockMovement.findMany({ orderBy: { occurredAt: "desc" } })
   ]);
 
   return {
@@ -105,7 +146,9 @@ export async function listMasterData(): Promise<
     warehouses: warehouses.map(mapWarehouse),
     locations: locations.map(mapStorageLocation),
     salespeople: salespeople.map(mapSalesperson),
-    terminalStores: terminalStores.map(mapTerminalStore)
+    terminalStores: terminalStores.map(mapTerminalStore),
+    inventoryItems: inventoryItems.map(mapInventoryItem),
+    movements: movements.map(mapStockMovement)
   };
 }
 
@@ -238,6 +281,38 @@ function mapWarehouseType(type: DbWarehouseType): WarehouseType {
   return type === "MAIN" ? "main" : "branch";
 }
 
+function mapOwnerType(type: DbOwnerType) {
+  return type === "WAREHOUSE" ? "warehouse" : "salesperson";
+}
+
+function mapItemStatus(status: DbItemStatus) {
+  return status === "IN_STOCK" ? "in_stock" : "with_salesperson";
+}
+
+function mapInboundSource(source: DbInboundSource): InboundSource {
+  return source === "FACTORY" ? "factory" : "terminal_return";
+}
+
+function mapMovementType(type: DbMovementType): MovementType {
+  const movementTypes: Record<DbMovementType, MovementType> = {
+    FACTORY_INBOUND: "factory_inbound",
+    TERMINAL_RETURN_INBOUND: "terminal_return_inbound",
+    TRANSFER: "transfer",
+    SALES_OUTBOUND: "sales_outbound",
+    SALES_RETURN: "sales_return"
+  };
+
+  return movementTypes[type];
+}
+
+function formatDate(date: Date | null) {
+  return date ? date.toISOString().slice(0, 10) : undefined;
+}
+
+function formatDateTime(date: Date) {
+  return date.toISOString().slice(0, 16).replace("T", " ");
+}
+
 function mapGoods(goods: DbGoods): Goods {
   return {
     id: goods.id,
@@ -291,5 +366,37 @@ function mapTerminalStore(store: DbTerminalStore): TerminalStore {
     contact: store.contact,
     phone: store.phone,
     address: store.address
+  };
+}
+
+function mapInventoryItem(item: DbInventoryItem): InventoryItem {
+  return {
+    id: item.id,
+    barcode: item.barcode,
+    goodsId: item.goodsId,
+    ownerType: mapOwnerType(item.ownerType),
+    warehouseId: item.warehouseId ?? undefined,
+    locationId: item.locationId ?? undefined,
+    salespersonId: item.salespersonId ?? undefined,
+    status: mapItemStatus(item.status),
+    productionDate: formatDate(item.productionDate),
+    shelfLifeDate: formatDate(item.shelfLifeDate),
+    inboundSource: mapInboundSource(item.inboundSource),
+    lastMovedAt: formatDateTime(item.lastMovedAt)
+  };
+}
+
+function mapStockMovement(movement: DbStockMovement): StockMovement {
+  return {
+    id: movement.id,
+    itemId: movement.itemId,
+    barcode: movement.barcode,
+    goodsId: movement.goodsId,
+    type: mapMovementType(movement.type),
+    fromLabel: movement.fromLabel,
+    toLabel: movement.toLabel,
+    operator: movement.operatorName,
+    occurredAt: formatDateTime(movement.occurredAt),
+    note: movement.note
   };
 }

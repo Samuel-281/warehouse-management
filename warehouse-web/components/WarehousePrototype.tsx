@@ -47,12 +47,24 @@ import {
 
 type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "inventory";
 
-type MasterDataPayload = Pick<
-  WarehouseState,
-  "goods" | "warehouses" | "locations" | "salespeople" | "terminalStores"
->;
+type MasterDataPayload = WarehouseState;
 
 type ApiResponse<T> = { data: T } | { error: string };
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const payload = (await response.json()) as ApiResponse<T>;
+
+  if (!response.ok || !("data" in payload)) {
+    throw new Error("error" in payload ? payload.error : "操作失败");
+  }
+
+  return payload.data;
+}
 
 const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
   { key: "dashboard", label: "首页", icon: Home },
@@ -150,7 +162,9 @@ export default function WarehousePrototype() {
           warehouses: masterData.warehouses,
           locations: masterData.locations,
           salespeople: masterData.salespeople,
-          terminalStores: masterData.terminalStores
+          terminalStores: masterData.terminalStores,
+          inventoryItems: masterData.inventoryItems,
+          movements: masterData.movements
         }));
         setInboundGoodsId(masterData.goods[0]?.id ?? "");
         setInboundWarehouseId(mainWarehouse?.id ?? "");
@@ -371,7 +385,7 @@ export default function WarehousePrototype() {
     setInput("");
   }
 
-  function submitInbound() {
+  async function submitInbound() {
     const qty = Number(inboundQty);
     const barcodes = uniqueBarcodes(inboundBarcodes);
     const goods = state.goods.find((item) => item.id === inboundGoodsId);
@@ -379,6 +393,10 @@ export default function WarehousePrototype() {
 
     if (!goods || !warehouse) {
       showToast({ tone: "error", message: "请选择有效的货物和仓库" });
+      return;
+    }
+    if (!inboundLocationId) {
+      showToast({ tone: "error", message: "请选择有效的入库库位" });
       return;
     }
     if (!Number.isInteger(qty) || qty <= 0) {
@@ -401,60 +419,31 @@ export default function WarehousePrototype() {
       return;
     }
 
-    const time = nowText();
-    const shelfLifeDate =
-      inboundSource === "terminal_return" && goods.category === "health_wine"
-        ? addYears(productionDate, 3)
-        : undefined;
-    const fromLabel =
-      inboundSource === "terminal_return"
-        ? state.terminalStores.find((store) => store.id === terminalStoreId)?.name ?? "终端店铺"
-        : "无库存";
-    const toLabel = warehouseLabel(inboundWarehouseId, state.warehouses, inboundLocationId, state.locations);
-
-    const newItems: InventoryItem[] = barcodes.map((barcode) => {
-      const itemId = makeId("item");
-      return {
-        id: itemId,
-        barcode,
-        goodsId: goods.id,
-        ownerType: "warehouse",
+    try {
+      const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/inbound", {
+        source: inboundSource,
         warehouseId: inboundWarehouseId,
         locationId: inboundLocationId,
-        status: "in_stock",
+        goodsId: inboundGoodsId,
+        terminalStoreId: inboundSource === "terminal_return" ? terminalStoreId : undefined,
         productionDate: inboundSource === "terminal_return" ? productionDate : undefined,
-        shelfLifeDate,
-        inboundSource,
-        lastMovedAt: time
-      };
-    });
+        barcodes,
+        operatorName: operator
+      });
 
-    const newMovements: StockMovement[] = newItems.map((item) => ({
-      id: makeId("mv"),
-      itemId: item.id,
-      barcode: item.barcode,
-      goodsId: goods.id,
-      type: inboundSource === "factory" ? "factory_inbound" : "terminal_return_inbound",
-      fromLabel,
-      toLabel,
-      operator,
-      occurredAt: time,
-      note:
-        inboundSource === "factory"
-          ? "厂家到货入库"
-          : `终端店铺退换货入库，生产日期 ${productionDate}`
-    }));
-
-    setState((previous) => ({
-      ...previous,
-      inventoryItems: [...previous.inventoryItems, ...newItems],
-      movements: [...newMovements, ...previous.movements]
-    }));
-    setInboundBarcodes([]);
-    setInboundQty("1");
-    setProductionDate("");
-    setSelectedBarcode(newItems[0]?.barcode ?? selectedBarcode);
-    showToast({ tone: "success", message: "入库已模拟提交，库存已更新" });
+      setState((previous) => ({
+        ...previous,
+        inventoryItems: [...result.items, ...previous.inventoryItems],
+        movements: [...result.movements, ...previous.movements]
+      }));
+      setInboundBarcodes([]);
+      setInboundQty("1");
+      setProductionDate("");
+      setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
+      showToast({ tone: "success", message: "入库已写入数据库，库存已更新" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "入库提交失败" });
+    }
   }
 
   function submitOutbound() {
