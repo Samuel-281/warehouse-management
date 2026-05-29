@@ -446,7 +446,7 @@ export default function WarehousePrototype() {
     }
   }
 
-  function submitOutbound() {
+  async function submitOutbound() {
     const barcodes = uniqueBarcodes(outboundBarcodes);
     if (barcodes.length === 0) {
       showToast({ tone: "error", message: "请先扫描或录入条码" });
@@ -492,64 +492,32 @@ export default function WarehousePrototype() {
       return;
     }
 
-    const time = nowText();
-    const nextMovements: StockMovement[] = [];
-    const nextItems: InventoryItem[] = state.inventoryItems.map((item) => {
-      if (!barcodes.includes(item.barcode)) return item;
-
-      const fromLabel = warehouseLabel(item.warehouseId, state.warehouses, item.locationId, state.locations);
-      const nextItem: InventoryItem =
-        outboundType === "transfer"
-          ? {
-              ...item,
-              warehouseId: targetWarehouseId,
-              locationId: targetLocationId,
-              salespersonId: undefined,
-              ownerType: "warehouse",
-              status: "in_stock",
-              lastMovedAt: time
-            }
-          : {
-              ...item,
-              warehouseId: undefined,
-              locationId: undefined,
-              salespersonId,
-              ownerType: "salesperson",
-              status: "with_salesperson",
-              lastMovedAt: time
-            };
-      const toLabel =
-        outboundType === "transfer"
-          ? warehouseLabel(targetWarehouseId, state.warehouses, targetLocationId, state.locations)
-          : `销售人员：${salesperson?.name ?? "未知"}`;
-
-      nextMovements.push({
-        id: makeId("mv"),
-        itemId: item.id,
-        barcode: item.barcode,
-        goodsId: item.goodsId,
-        type: outboundType === "transfer" ? "transfer" : "sales_outbound",
-        fromLabel,
-        toLabel,
-        operator,
-        occurredAt: time,
-        note: outboundType === "transfer" ? "挪仓到分仓" : "销售出库"
+    try {
+      const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/outbound", {
+        type: outboundType,
+        sourceWarehouseId,
+        targetWarehouseId: outboundType === "transfer" ? targetWarehouseId : undefined,
+        targetLocationId: outboundType === "transfer" ? targetLocationId : undefined,
+        salespersonId: outboundType === "sales" ? salespersonId : undefined,
+        barcodes,
+        operatorName: operator
       });
 
-      return nextItem;
-    });
-
-    setState((previous) => ({
-      ...previous,
-      inventoryItems: nextItems,
-      movements: [...nextMovements, ...previous.movements]
-    }));
-    setOutboundBarcodes([]);
-    setSelectedBarcode(barcodes[0] ?? selectedBarcode);
-    showToast({ tone: "success", message: outboundType === "transfer" ? "挪仓已模拟提交" : "销售出库已模拟提交" });
+      const updatedByBarcode = new Map(result.items.map((item) => [item.barcode, item]));
+      setState((previous) => ({
+        ...previous,
+        inventoryItems: previous.inventoryItems.map((item) => updatedByBarcode.get(item.barcode) ?? item),
+        movements: [...result.movements, ...previous.movements]
+      }));
+      setOutboundBarcodes([]);
+      setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
+      showToast({ tone: "success", message: outboundType === "transfer" ? "挪仓已写入数据库" : "销售出库已写入数据库" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "出库提交失败" });
+    }
   }
 
-  function submitSalesReturn() {
+  async function submitSalesReturn() {
     const barcodes = uniqueBarcodes(returnBarcodes);
     if (barcodes.length === 0) {
       showToast({ tone: "error", message: "请先扫描或录入销售人员名下条码" });
@@ -570,45 +538,26 @@ export default function WarehousePrototype() {
       return;
     }
 
-    const time = nowText();
-    const nextMovements: StockMovement[] = [];
-    const nextItems: InventoryItem[] = state.inventoryItems.map((item) => {
-      if (!barcodes.includes(item.barcode)) return item;
-      const fromLabel = ownerLabel(item, state.warehouses, state.salespeople, state.locations);
-      const toLabel = warehouseLabel(returnWarehouseId, state.warehouses, returnLocationId, state.locations);
-
-      nextMovements.push({
-        id: makeId("mv"),
-        itemId: item.id,
-        barcode: item.barcode,
-        goodsId: item.goodsId,
-        type: "sales_return",
-        fromLabel,
-        toLabel,
-        operator,
-        occurredAt: time,
-        note: "销售退回，仅将条码回流仓库"
+    try {
+      const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/sales-return", {
+        returnWarehouseId,
+        returnLocationId,
+        barcodes,
+        operatorName: operator
       });
 
-      return {
-        ...item,
-        ownerType: "warehouse",
-        warehouseId: returnWarehouseId,
-        locationId: returnLocationId,
-        salespersonId: undefined,
-        status: "in_stock",
-        lastMovedAt: time
-      };
-    });
-
-    setState((previous) => ({
-      ...previous,
-      inventoryItems: nextItems,
-      movements: [...nextMovements, ...previous.movements]
-    }));
-    setReturnBarcodes([]);
-    setSelectedBarcode(barcodes[0] ?? selectedBarcode);
-    showToast({ tone: "success", message: "销售退回已模拟提交，未修改生产日期或保质期" });
+      const updatedByBarcode = new Map(result.items.map((item) => [item.barcode, item]));
+      setState((previous) => ({
+        ...previous,
+        inventoryItems: previous.inventoryItems.map((item) => updatedByBarcode.get(item.barcode) ?? item),
+        movements: [...result.movements, ...previous.movements]
+      }));
+      setReturnBarcodes([]);
+      setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
+      showToast({ tone: "success", message: "销售退回已写入数据库，未修改生产日期或保质期" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "销售退回提交失败" });
+    }
   }
 
   if (!hydrated) {
