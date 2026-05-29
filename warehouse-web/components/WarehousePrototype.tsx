@@ -84,6 +84,7 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
 ];
 
 const operator = "仓库操作员";
+const resetConfirmationText = "确定重置";
 
 export default function WarehousePrototype() {
   const [hydrated, setHydrated] = useState(false);
@@ -290,6 +291,17 @@ export default function WarehousePrototype() {
   }
 
   async function resetDemoData() {
+    const confirmation = window.prompt(
+      masterDataSource === "database"
+        ? `当前操作会清空页面临时状态，并从 PostgreSQL 重新加载演示数据。不会清空数据库。\n\n如确认继续，请输入「${resetConfirmationText}」。`
+        : `当前操作会重置本地浏览器里的演示数据。\n\n如确认继续，请输入「${resetConfirmationText}」。`
+    );
+
+    if (confirmation?.trim() !== resetConfirmationText) {
+      showToast({ tone: "info", message: "未输入正确确认文字，已取消重置" });
+      return;
+    }
+
     if (masterDataSource === "database") {
       window.localStorage.removeItem(STORAGE_KEY);
       await refreshWarehouseState({ preserveSelection: false, notify: true });
@@ -587,7 +599,7 @@ export default function WarehousePrototype() {
           </Link>
           <button className="secondary-button w-full" onClick={resetDemoData}>
             <RotateCcw className="h-4 w-4" />
-            重置演示数据
+            重置页面数据
           </button>
         </div>
       </aside>
@@ -616,7 +628,7 @@ export default function WarehousePrototype() {
               </button>
               <button className="secondary-button" onClick={resetDemoData}>
                 <RotateCcw className="h-4 w-4" />
-                重置
+                重置页面
               </button>
             </div>
           </div>
