@@ -1,0 +1,368 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GoodsCategory {
+  HEALTH_WINE
+  BAIJIU
+}
+
+enum WarehouseType {
+  MAIN
+  BRANCH
+}
+
+enum RecordStatus {
+  ENABLED
+  DISABLED
+}
+
+enum OwnerType {
+  WAREHOUSE
+  SALESPERSON
+}
+
+enum ItemStatus {
+  IN_STOCK
+  WITH_SALESPERSON
+}
+
+enum InboundSource {
+  FACTORY
+  TERMINAL_RETURN
+}
+
+enum OutboundType {
+  TRANSFER
+  SALES
+}
+
+enum MovementType {
+  FACTORY_INBOUND
+  TERMINAL_RETURN_INBOUND
+  TRANSFER
+  SALES_OUTBOUND
+  SALES_RETURN
+}
+
+model User {
+  id           String          @id @default(uuid()) @db.Uuid
+  username     String          @unique
+  displayName  String
+  passwordHash String
+  status       RecordStatus    @default(ENABLED)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  roles        UserRole[]
+
+  inboundOrders      InboundOrder[]
+  outboundOrders     OutboundOrder[]
+  salesReturnOrders  SalesReturnOrder[]
+  operatedMovements  StockMovement[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String       @id @default(uuid()) @db.Uuid
+  code        String       @unique
+  name        String
+  description String?
+  status      RecordStatus @default(ENABLED)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  roleId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+  role   Role   @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+model Goods {
+  id        String        @id @default(uuid()) @db.Uuid
+  code      String        @unique
+  name      String
+  category  GoodsCategory
+  unit      String
+  spec      String
+  status    RecordStatus  @default(ENABLED)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  inventoryItems        InventoryItem[]
+  stockMovements        StockMovement[]
+  inboundOrderItems     InboundOrderItem[]
+  outboundOrderItems    OutboundOrderItem[]
+  salesReturnOrderItems SalesReturnOrderItem[]
+
+  @@map("goods")
+}
+
+model Warehouse {
+  id        String        @id @default(uuid()) @db.Uuid
+  code      String        @unique
+  name      String
+  type      WarehouseType
+  parentId  String?       @db.Uuid
+  manager   String
+  status    RecordStatus  @default(ENABLED)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  parent              Warehouse?         @relation("WarehouseHierarchy", fields: [parentId], references: [id])
+  branches            Warehouse[]        @relation("WarehouseHierarchy")
+  locations           StorageLocation[]
+  inventoryItems      InventoryItem[]
+  inboundOrders       InboundOrder[]
+  sourceOutboundOrders OutboundOrder[]   @relation("SourceWarehouse")
+  targetOutboundOrders OutboundOrder[]   @relation("TargetWarehouse")
+  salesReturnOrders   SalesReturnOrder[]
+
+  @@index([parentId])
+  @@map("warehouses")
+}
+
+model StorageLocation {
+  id          String       @id @default(uuid()) @db.Uuid
+  warehouseId String       @db.Uuid
+  zone        String
+  code        String
+  name        String
+  status      RecordStatus @default(ENABLED)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  warehouse          Warehouse          @relation(fields: [warehouseId], references: [id])
+  inventoryItems     InventoryItem[]
+  inboundOrders      InboundOrder[]
+  targetOutboundOrders OutboundOrder[]
+  salesReturnOrders  SalesReturnOrder[]
+
+  @@unique([warehouseId, code])
+  @@index([warehouseId])
+  @@map("storage_locations")
+}
+
+model Salesperson {
+  id        String       @id @default(uuid()) @db.Uuid
+  code      String       @unique
+  name      String
+  phone     String
+  region    String
+  status    RecordStatus @default(ENABLED)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  inventoryItems        InventoryItem[]
+  outboundOrders        OutboundOrder[]
+  salesReturnOrderItems SalesReturnOrderItem[]
+
+  @@map("salespeople")
+}
+
+model TerminalStore {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String
+  contact   String
+  phone     String
+  address   String
+  status    RecordStatus @default(ENABLED)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  inboundOrders InboundOrder[]
+
+  @@map("terminal_stores")
+}
+
+model InventoryItem {
+  id             String        @id @default(uuid()) @db.Uuid
+  barcode        String        @unique
+  goodsId        String        @db.Uuid
+  ownerType      OwnerType
+  warehouseId    String?       @db.Uuid
+  locationId     String?       @db.Uuid
+  salespersonId  String?       @db.Uuid
+  status         ItemStatus
+  productionDate DateTime?     @db.Date
+  shelfLifeDate  DateTime?     @db.Date
+  inboundSource  InboundSource
+  lastMovedAt    DateTime
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  goods                 Goods                  @relation(fields: [goodsId], references: [id])
+  warehouse             Warehouse?             @relation(fields: [warehouseId], references: [id])
+  location              StorageLocation?       @relation(fields: [locationId], references: [id])
+  salesperson           Salesperson?           @relation(fields: [salespersonId], references: [id])
+  stockMovements        StockMovement[]
+  inboundOrderItems     InboundOrderItem[]
+  outboundOrderItems    OutboundOrderItem[]
+  salesReturnOrderItems SalesReturnOrderItem[]
+
+  @@index([goodsId])
+  @@index([warehouseId])
+  @@index([salespersonId])
+  @@index([lastMovedAt])
+  @@map("inventory_items")
+}
+
+model StockMovement {
+  id           String       @id @default(uuid()) @db.Uuid
+  itemId       String       @db.Uuid
+  barcode      String
+  goodsId      String       @db.Uuid
+  type         MovementType
+  fromLabel    String
+  toLabel      String
+  operatorId   String?      @db.Uuid
+  operatorName String
+  occurredAt   DateTime
+  note         String
+
+  item     InventoryItem @relation(fields: [itemId], references: [id])
+  goods    Goods         @relation(fields: [goodsId], references: [id])
+  operator User?         @relation(fields: [operatorId], references: [id])
+
+  @@index([barcode])
+  @@index([itemId])
+  @@index([goodsId])
+  @@index([occurredAt])
+  @@map("stock_movements")
+}
+
+model InboundOrder {
+  id              String        @id @default(uuid()) @db.Uuid
+  orderNo         String        @unique
+  source          InboundSource
+  warehouseId     String        @db.Uuid
+  locationId      String        @db.Uuid
+  terminalStoreId String?       @db.Uuid
+  operatorId      String?       @db.Uuid
+  operatorName    String
+  createdAt       DateTime      @default(now())
+
+  warehouse     Warehouse        @relation(fields: [warehouseId], references: [id])
+  location      StorageLocation  @relation(fields: [locationId], references: [id])
+  terminalStore TerminalStore?   @relation(fields: [terminalStoreId], references: [id])
+  operator      User?            @relation(fields: [operatorId], references: [id])
+  items         InboundOrderItem[]
+
+  @@index([source])
+  @@index([warehouseId])
+  @@index([createdAt])
+  @@map("inbound_orders")
+}
+
+model InboundOrderItem {
+  id              String    @id @default(uuid()) @db.Uuid
+  orderId         String    @db.Uuid
+  inventoryItemId String    @db.Uuid
+  barcode         String
+  goodsId         String    @db.Uuid
+  productionDate  DateTime? @db.Date
+  shelfLifeDate   DateTime? @db.Date
+
+  order         InboundOrder @relation(fields: [orderId], references: [id])
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  goods         Goods        @relation(fields: [goodsId], references: [id])
+
+  @@index([barcode])
+  @@index([goodsId])
+  @@map("inbound_order_items")
+}
+
+model OutboundOrder {
+  id                String       @id @default(uuid()) @db.Uuid
+  orderNo           String       @unique
+  type              OutboundType
+  sourceWarehouseId String       @db.Uuid
+  targetWarehouseId String?      @db.Uuid
+  targetLocationId  String?      @db.Uuid
+  salespersonId     String?      @db.Uuid
+  operatorId        String?      @db.Uuid
+  operatorName      String
+  createdAt         DateTime     @default(now())
+
+  sourceWarehouse Warehouse        @relation("SourceWarehouse", fields: [sourceWarehouseId], references: [id])
+  targetWarehouse Warehouse?       @relation("TargetWarehouse", fields: [targetWarehouseId], references: [id])
+  targetLocation  StorageLocation? @relation(fields: [targetLocationId], references: [id])
+  salesperson     Salesperson?     @relation(fields: [salespersonId], references: [id])
+  operator        User?            @relation(fields: [operatorId], references: [id])
+  items           OutboundOrderItem[]
+
+  @@index([type])
+  @@index([sourceWarehouseId])
+  @@index([targetWarehouseId])
+  @@index([salespersonId])
+  @@index([createdAt])
+  @@map("outbound_orders")
+}
+
+model OutboundOrderItem {
+  id              String @id @default(uuid()) @db.Uuid
+  orderId         String @db.Uuid
+  inventoryItemId String @db.Uuid
+  barcode         String
+  goodsId         String @db.Uuid
+
+  order         OutboundOrder @relation(fields: [orderId], references: [id])
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  goods         Goods         @relation(fields: [goodsId], references: [id])
+
+  @@index([barcode])
+  @@index([goodsId])
+  @@map("outbound_order_items")
+}
+
+model SalesReturnOrder {
+  id                String   @id @default(uuid()) @db.Uuid
+  orderNo           String   @unique
+  returnWarehouseId String   @db.Uuid
+  returnLocationId  String   @db.Uuid
+  operatorId        String?  @db.Uuid
+  operatorName      String
+  createdAt         DateTime @default(now())
+
+  returnWarehouse Warehouse        @relation(fields: [returnWarehouseId], references: [id])
+  returnLocation  StorageLocation @relation(fields: [returnLocationId], references: [id])
+  operator        User?           @relation(fields: [operatorId], references: [id])
+  items           SalesReturnOrderItem[]
+
+  @@index([returnWarehouseId])
+  @@index([createdAt])
+  @@map("sales_return_orders")
+}
+
+model SalesReturnOrderItem {
+  id                String @id @default(uuid()) @db.Uuid
+  orderId           String @db.Uuid
+  inventoryItemId   String @db.Uuid
+  barcode           String
+  goodsId           String @db.Uuid
+  fromSalespersonId String @db.Uuid
+
+  order           SalesReturnOrder @relation(fields: [orderId], references: [id])
+  inventoryItem   InventoryItem    @relation(fields: [inventoryItemId], references: [id])
+  goods           Goods            @relation(fields: [goodsId], references: [id])
+  fromSalesperson Salesperson      @relation(fields: [fromSalespersonId], references: [id])
+
+  @@index([barcode])
+  @@index([goodsId])
+  @@index([fromSalespersonId])
+  @@map("sales_return_order_items")
+}
