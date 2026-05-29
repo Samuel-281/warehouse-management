@@ -131,6 +131,19 @@ export default function WarehousePrototype() {
       })
       .then((masterData) => {
         if (cancelled) return;
+        const mainWarehouse =
+          masterData.warehouses.find((warehouse) => warehouse.type === "main" && warehouse.status === "enabled") ??
+          masterData.warehouses[0];
+        const branchWarehouse =
+          masterData.warehouses.find((warehouse) => warehouse.type === "branch" && warehouse.status === "enabled") ??
+          masterData.warehouses.find((warehouse) => warehouse.id !== mainWarehouse?.id);
+        const mainLocation = masterData.locations.find(
+          (location) => location.warehouseId === mainWarehouse?.id && location.status === "enabled"
+        );
+        const branchLocation = masterData.locations.find(
+          (location) => location.warehouseId === branchWarehouse?.id && location.status === "enabled"
+        );
+
         setState((previous) => ({
           ...previous,
           goods: masterData.goods,
@@ -139,6 +152,17 @@ export default function WarehousePrototype() {
           salespeople: masterData.salespeople,
           terminalStores: masterData.terminalStores
         }));
+        setInboundGoodsId(masterData.goods[0]?.id ?? "");
+        setInboundWarehouseId(mainWarehouse?.id ?? "");
+        setInboundLocationId(mainLocation?.id ?? "");
+        setTerminalStoreId(masterData.terminalStores[0]?.id ?? "");
+        setSourceWarehouseId(mainWarehouse?.id ?? "");
+        setTargetWarehouseId(branchWarehouse?.id ?? "");
+        setTargetLocationId(branchLocation?.id ?? "");
+        setSalespersonId(masterData.salespeople[0]?.id ?? "");
+        setReturnWarehouseId(mainWarehouse?.id ?? "");
+        setReturnLocationId(mainLocation?.id ?? "");
+        setInventoryFilters({ keyword: "", warehouseId: "all", salespersonId: "all", goodsId: "all" });
         setMasterDataSource("database");
       })
       .catch((error) => {
@@ -233,17 +257,17 @@ export default function WarehousePrototype() {
 
   useEffect(() => {
     const firstLocation = enabledLocationsForWarehouse(inboundWarehouseId, state.locations)[0];
-    if (firstLocation) setInboundLocationId(firstLocation.id);
+    setInboundLocationId(firstLocation?.id ?? "");
   }, [inboundWarehouseId, state.locations]);
 
   useEffect(() => {
     const firstLocation = enabledLocationsForWarehouse(targetWarehouseId, state.locations)[0];
-    if (firstLocation) setTargetLocationId(firstLocation.id);
+    setTargetLocationId(firstLocation?.id ?? "");
   }, [targetWarehouseId, state.locations]);
 
   useEffect(() => {
     const firstLocation = enabledLocationsForWarehouse(returnWarehouseId, state.locations)[0];
-    if (firstLocation) setReturnLocationId(firstLocation.id);
+    setReturnLocationId(firstLocation?.id ?? "");
   }, [returnWarehouseId, state.locations]);
 
   const selectedItem = useMemo(
@@ -282,10 +306,13 @@ export default function WarehousePrototype() {
   const stats = useMemo(() => {
     const inStock = state.inventoryItems.filter((item) => item.ownerType === "warehouse");
     const withSales = state.inventoryItems.filter((item) => item.ownerType === "salesperson");
-    const mainCount = inStock.filter((item) => item.warehouseId === "wh-main").length;
-    const branchCount = inStock.filter((item) => item.warehouseId && item.warehouseId !== "wh-main").length;
+    const mainWarehouseIds = new Set(
+      state.warehouses.filter((warehouse) => warehouse.type === "main").map((warehouse) => warehouse.id)
+    );
+    const mainCount = inStock.filter((item) => item.warehouseId && mainWarehouseIds.has(item.warehouseId)).length;
+    const branchCount = inStock.filter((item) => item.warehouseId && !mainWarehouseIds.has(item.warehouseId)).length;
     return { inStock: inStock.length, withSales: withSales.length, mainCount, branchCount };
-  }, [state.inventoryItems]);
+  }, [state.inventoryItems, state.warehouses]);
 
   function showToast(nextToast: Toast) {
     setToast(nextToast);
