@@ -27,6 +27,7 @@ import type {
   OutboundType,
   StockMovement,
   Toast,
+  Warehouse as WarehouseRecord,
   WarehouseState
 } from "@/lib/types";
 import {
@@ -46,6 +47,13 @@ import {
 
 type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "inventory";
 
+type MasterDataPayload = Pick<
+  WarehouseState,
+  "goods" | "warehouses" | "locations" | "salespeople" | "terminalStores"
+>;
+
+type ApiResponse<T> = { data: T } | { error: string };
+
 const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
   { key: "dashboard", label: "首页", icon: Home },
   { key: "masters", label: "基础资料", icon: Building2 },
@@ -64,6 +72,7 @@ export default function WarehousePrototype() {
   const [state, setState] = useState<WarehouseState>(() => cloneInitialState(initialState));
   const [toast, setToast] = useState<Toast | null>(null);
   const [selectedBarcode, setSelectedBarcode] = useState("HJ202605290001");
+  const [masterDataSource, setMasterDataSource] = useState<"local" | "database">("local");
 
   const [inboundSource, setInboundSource] = useState<InboundSource>("factory");
   const [inboundWarehouseId, setInboundWarehouseId] = useState("wh-main");
@@ -106,6 +115,42 @@ export default function WarehousePrototype() {
     }
     setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    let cancelled = false;
+
+    fetch("/api/master-data")
+      .then(async (response) => {
+        const payload = (await response.json()) as ApiResponse<MasterDataPayload>;
+        if (!response.ok || !("data" in payload)) {
+          throw new Error("error" in payload ? payload.error : "基础资料接口暂不可用");
+        }
+        return payload.data;
+      })
+      .then((masterData) => {
+        if (cancelled) return;
+        setState((previous) => ({
+          ...previous,
+          goods: masterData.goods,
+          warehouses: masterData.warehouses,
+          locations: masterData.locations,
+          salespeople: masterData.salespeople,
+          terminalStores: masterData.terminalStores
+        }));
+        setMasterDataSource("database");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setMasterDataSource("local");
+        console.info(error instanceof Error ? error.message : "基础资料接口暂不可用");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated]);
 
   useEffect(() => {
     if (hydrated) {
@@ -656,7 +701,12 @@ export default function WarehousePrototype() {
             />
           ) : null}
           {activeView === "masters" ? (
-            <MastersView state={state} setState={setState} showToast={showToast} />
+            <MastersView
+              state={state}
+              setState={setState}
+              showToast={showToast}
+              masterDataSource={masterDataSource}
+            />
           ) : null}
           {activeView === "inbound" ? (
             <InboundView
@@ -925,11 +975,13 @@ function MetricCard({ label, value, icon: Icon }: { label: string; value: number
 function MastersView({
   state,
   setState,
-  showToast
+  showToast,
+  masterDataSource
 }: {
   state: WarehouseState;
   setState: (updater: (previous: WarehouseState) => WarehouseState) => void;
   showToast: (toast: Toast) => void;
+  masterDataSource: "local" | "database";
 }) {
   const [goodsDraft, setGoodsDraft] = useState({
     code: "",
@@ -947,7 +999,22 @@ function MastersView({
   });
   const [storeDraft, setStoreDraft] = useState({ name: "", contact: "", phone: "", address: "" });
 
-  function addGoods() {
+  async function requestApi<T>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const payload = (await response.json()) as ApiResponse<T>;
+
+    if (!response.ok || !("data" in payload)) {
+      throw new Error("error" in payload ? payload.error : "操作失败");
+    }
+
+    return payload.data;
+  }
+
+  async function addGoods() {
     const code = goodsDraft.code.trim();
     const name = goodsDraft.name.trim();
     const unit = goodsDraft.unit.trim();
@@ -960,26 +1027,27 @@ function MastersView({
       showToast({ tone: "error", message: "货物编码已存在" });
       return;
     }
-    setState((previous) => ({
-      ...previous,
-      goods: [
-        ...previous.goods,
-        {
-          id: makeId("goods"),
-          code,
-          name,
-          category: goodsDraft.category as "health_wine" | "baijiu",
-          unit,
-          spec,
-          status: "enabled"
-        }
-      ]
-    }));
-    setGoodsDraft({ code: "", name: "", category: goodsDraft.category, unit: "瓶", spec: "" });
-    showToast({ tone: "success", message: "货物资料已新增" });
+
+    try {
+      const created = await requestApi<WarehouseState["goods"][number]>("/api/goods", {
+        code,
+        name,
+        category: goodsDraft.category,
+        unit,
+        spec
+      });
+      setState((previous) => ({
+        ...previous,
+        goods: [...previous.goods, created]
+      }));
+      setGoodsDraft({ code: "", name: "", category: goodsDraft.category, unit: "瓶", spec: "" });
+      showToast({ tone: "success", message: "货物资料已写入数据库" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "新增货物失败" });
+    }
   }
 
-  function addWarehouse() {
+  async function addWarehouse() {
     const code = warehouseDraft.code.trim();
     const name = warehouseDraft.name.trim();
     const manager = warehouseDraft.manager.trim();
@@ -991,38 +1059,25 @@ function MastersView({
       showToast({ tone: "error", message: "仓库编码已存在" });
       return;
     }
-    const warehouseId = makeId("wh");
-    setState((previous) => ({
-      ...previous,
-      warehouses: [
-        ...previous.warehouses,
-        {
-          id: warehouseId,
-          code,
-          name,
-          type: "branch",
-          parentId: "wh-main",
-          manager,
-          status: "enabled"
-        }
-      ],
-      locations: [
-        ...previous.locations,
-        {
-          id: makeId("loc"),
-          warehouseId,
-          zone: "默认区",
-          code: `${code}-01`,
-          name: `${name}默认库位`,
-          status: "enabled"
-        }
-      ]
-    }));
-    setWarehouseDraft({ code: "", name: "", manager: "" });
-    showToast({ tone: "success", message: "分仓资料已新增，并已生成默认库位" });
+
+    try {
+      const created = await requestApi<{
+        warehouse: WarehouseRecord;
+        location: WarehouseState["locations"][number];
+      }>("/api/warehouses", { code, name, manager });
+      setState((previous) => ({
+        ...previous,
+        warehouses: [...previous.warehouses, created.warehouse],
+        locations: [...previous.locations, created.location]
+      }));
+      setWarehouseDraft({ code: "", name: "", manager: "" });
+      showToast({ tone: "success", message: "分仓资料已写入数据库，并已生成默认库位" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "新增分仓失败" });
+    }
   }
 
-  function addSalesperson() {
+  async function addSalesperson() {
     const code = salespersonDraft.code.trim();
     const name = salespersonDraft.name.trim();
     const phone = salespersonDraft.phone.trim();
@@ -1035,25 +1090,26 @@ function MastersView({
       showToast({ tone: "error", message: "销售人员编码已存在" });
       return;
     }
-    setState((previous) => ({
-      ...previous,
-      salespeople: [
-        ...previous.salespeople,
-        {
-          id: makeId("sp"),
-          code,
-          name,
-          phone,
-          region,
-          status: "enabled"
-        }
-      ]
-    }));
-    setSalespersonDraft({ code: "", name: "", phone: "", region: "" });
-    showToast({ tone: "success", message: "销售人员已新增" });
+
+    try {
+      const created = await requestApi<WarehouseState["salespeople"][number]>("/api/salespeople", {
+        code,
+        name,
+        phone,
+        region
+      });
+      setState((previous) => ({
+        ...previous,
+        salespeople: [...previous.salespeople, created]
+      }));
+      setSalespersonDraft({ code: "", name: "", phone: "", region: "" });
+      showToast({ tone: "success", message: "销售人员已写入数据库" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "新增销售人员失败" });
+    }
   }
 
-  function addTerminalStore() {
+  async function addTerminalStore() {
     const name = storeDraft.name.trim();
     const contact = storeDraft.contact.trim();
     const phone = storeDraft.phone.trim();
@@ -1062,25 +1118,30 @@ function MastersView({
       showToast({ tone: "error", message: "请完整填写终端店铺资料" });
       return;
     }
-    setState((previous) => ({
-      ...previous,
-      terminalStores: [
-        ...previous.terminalStores,
-        {
-          id: makeId("store"),
-          name,
-          contact,
-          phone,
-          address
-        }
-      ]
-    }));
-    setStoreDraft({ name: "", contact: "", phone: "", address: "" });
-    showToast({ tone: "success", message: "终端店铺已新增" });
+
+    try {
+      const created = await requestApi<WarehouseState["terminalStores"][number]>("/api/terminal-stores", {
+        name,
+        contact,
+        phone,
+        address
+      });
+      setState((previous) => ({
+        ...previous,
+        terminalStores: [...previous.terminalStores, created]
+      }));
+      setStoreDraft({ name: "", contact: "", phone: "", address: "" });
+      showToast({ tone: "success", message: "终端店铺已写入数据库" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "新增终端店铺失败" });
+    }
   }
 
   return (
     <div className="grid gap-5">
+      <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+        基础资料来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地原型数据"}
+      </div>
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="panel p-5">
           <SectionHeader icon={Boxes} title="新增货物" compact />
