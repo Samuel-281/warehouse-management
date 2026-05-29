@@ -3,18 +3,23 @@
 
 INSERT INTO roles (id, code, name, description, status, "createdAt", "updatedAt")
 VALUES
-  ('10000000-0000-0000-0000-000000000001', 'ADMIN', '系统管理员', '管理账号、权限和系统配置', 'ENABLED', now(), now()),
-  ('10000000-0000-0000-0000-000000000002', 'WAREHOUSE_OPERATOR', '仓库操作员', '执行入库、出库、退回和库存查询', 'ENABLED', now(), now())
+  ('10000000-0000-0000-0000-000000000001', 'SUPER_ADMIN', '超级管理员', '拥有全部系统权限，可执行高危维护操作', 'ENABLED', now(), now()),
+  ('10000000-0000-0000-0000-000000000002', 'WAREHOUSE_ADMIN', '仓库管理员', '维护基础资料，执行入库、出库、退回和库存查询', 'ENABLED', now(), now()),
+  ('10000000-0000-0000-0000-000000000003', 'INVENTORY_VIEWER', '只读查询人员', '仅可查看库存和条码流转', 'ENABLED', now(), now())
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO users (id, username, "displayName", "passwordHash", status, "createdAt", "updatedAt")
 VALUES
-  ('11000000-0000-0000-0000-000000000001', 'warehouse_operator', '仓库操作员', 'demo-password-hash', 'ENABLED', now(), now())
+  ('11000000-0000-0000-0000-000000000001', 'super_admin', '超级管理员', 'demo123456', 'ENABLED', now(), now()),
+  ('11000000-0000-0000-0000-000000000002', 'warehouse_admin', '仓库管理员', 'demo123456', 'ENABLED', now(), now()),
+  ('11000000-0000-0000-0000-000000000003', 'inventory_viewer', '库存查询员', 'demo123456', 'ENABLED', now(), now())
 ON CONFLICT (username) DO NOTHING;
 
 INSERT INTO user_roles (id, "userId", "roleId")
 VALUES
-  ('12000000-0000-0000-0000-000000000001', '11000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000002')
+  ('12000000-0000-0000-0000-000000000001', '11000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001'),
+  ('12000000-0000-0000-0000-000000000002', '11000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002'),
+  ('12000000-0000-0000-0000-000000000003', '11000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000003')
 ON CONFLICT ("userId", "roleId") DO NOTHING;
 
 INSERT INTO goods (id, code, name, category, unit, spec, status, "createdAt", "updatedAt")

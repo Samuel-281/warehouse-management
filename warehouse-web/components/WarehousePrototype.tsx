@@ -20,13 +20,16 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { hasAnyRole, roleHeaderValue } from "@/lib/auth-permissions";
 import { initialState } from "@/lib/demo-data";
 import type {
+  CurrentUser,
   InboundSource,
   InventoryItem,
   OutboundType,
   StockMovement,
   Toast,
+  UserRoleCode,
   Warehouse as WarehouseRecord,
   WarehouseState
 } from "@/lib/types";
@@ -48,10 +51,13 @@ type MasterDataPayload = WarehouseState;
 
 type ApiResponse<T> = { data: T } | { error: string };
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+async function postJson<T>(path: string, body: unknown, roles: UserRoleCode[] = []): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(roles.length > 0 ? { "x-warehouse-roles": roleHeaderValue(roles) } : {})
+    },
     body: JSON.stringify(body)
   });
   const payload = (await response.json()) as ApiResponse<T>;
@@ -86,9 +92,16 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
 const operator = "仓库操作员";
 const resetConfirmationText = "确定重置";
 
+const roleLabels: Record<UserRoleCode, string> = {
+  SUPER_ADMIN: "超级管理员",
+  WAREHOUSE_ADMIN: "仓库管理员",
+  INVENTORY_VIEWER: "只读查询人员"
+};
+
 export default function WarehousePrototype() {
   const [hydrated, setHydrated] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
   const [state, setState] = useState<WarehouseState>(() => cloneInitialState(initialState));
   const [toast, setToast] = useState<Toast | null>(null);
@@ -125,6 +138,21 @@ export default function WarehousePrototype() {
     salespersonId: "all",
     goodsId: "all"
   });
+
+  const currentRoleCodes = useMemo(() => currentUser?.roles.map((role) => role.code) ?? [], [currentUser]);
+  const canManageMasterData = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
+  const canOperateWarehouse = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
+  const allowedNavItems = useMemo(
+    () =>
+      navItems.filter((item) => {
+        if (item.key === "masters") return canManageMasterData;
+        if (item.key === "inbound" || item.key === "outbound" || item.key === "return") {
+          return canOperateWarehouse;
+        }
+        return true;
+      }),
+    [canManageMasterData, canOperateWarehouse]
+  );
 
   const applyDatabaseState = useCallback((masterData: WarehouseState, options: { preserveSelection?: boolean } = {}) => {
     const mainWarehouse =
@@ -225,6 +253,12 @@ export default function WarehousePrototype() {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }
   }, [hydrated, masterDataSource, state]);
+
+  useEffect(() => {
+    if (!allowedNavItems.some((item) => item.key === activeView)) {
+      setActiveView("dashboard");
+    }
+  }, [activeView, allowedNavItems]);
 
   useEffect(() => {
     const firstLocation = enabledLocationsForWarehouse(inboundWarehouseId, state.locations)[0];
@@ -413,8 +447,8 @@ export default function WarehousePrototype() {
         terminalStoreId: inboundSource === "terminal_return" ? terminalStoreId : undefined,
         productionDate: inboundSource === "terminal_return" ? productionDate : undefined,
         barcodes,
-        operatorName: operator
-      });
+        operatorName: currentUser?.displayName ?? operator
+      }, currentRoleCodes);
 
       setState((previous) => ({
         ...previous,
@@ -486,8 +520,8 @@ export default function WarehousePrototype() {
         targetLocationId: outboundType === "transfer" ? targetLocationId : undefined,
         salespersonId: outboundType === "sales" ? salespersonId : undefined,
         barcodes,
-        operatorName: operator
-      });
+        operatorName: currentUser?.displayName ?? operator
+      }, currentRoleCodes);
 
       const updatedByBarcode = new Map(result.items.map((item) => [item.barcode, item]));
       setState((previous) => ({
@@ -530,8 +564,8 @@ export default function WarehousePrototype() {
         returnWarehouseId,
         returnLocationId,
         barcodes,
-        operatorName: operator
-      });
+        operatorName: currentUser?.displayName ?? operator
+      }, currentRoleCodes);
 
       const updatedByBarcode = new Map(result.items.map((item) => [item.barcode, item]));
       setState((previous) => ({
@@ -557,7 +591,15 @@ export default function WarehousePrototype() {
   }
 
   if (!loggedIn) {
-    return <LoginScreen onLogin={() => setLoggedIn(true)} />;
+    return (
+      <LoginScreen
+        onLogin={(user) => {
+          setCurrentUser(user);
+          setLoggedIn(true);
+          setActiveView("dashboard");
+        }}
+      />
+    );
   }
 
   return (
@@ -574,7 +616,7 @@ export default function WarehousePrototype() {
         </div>
 
         <nav className="space-y-1">
-          {navItems.map((item) => {
+          {allowedNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeView === item.key;
             return (
@@ -613,7 +655,10 @@ export default function WarehousePrototype() {
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
-                当前用户：仓库操作员
+                当前用户：{currentUser?.displayName ?? "仓库操作员"}
+              </span>
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                角色：{currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
               </span>
               <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
                 数据来源：{masterDataSource === "database" ? "PostgreSQL" : "本地原型"}
@@ -633,7 +678,7 @@ export default function WarehousePrototype() {
             </div>
           </div>
           <nav className="mt-4 grid grid-cols-3 gap-2 lg:hidden">
-            {navItems.map((item) => {
+            {allowedNavItems.map((item) => {
               const Icon = item.icon;
               const active = activeView === item.key;
               return (
@@ -662,6 +707,7 @@ export default function WarehousePrototype() {
               state={state}
               setActiveView={setActiveView}
               setSelectedBarcode={setSelectedBarcode}
+              canOperateWarehouse={canOperateWarehouse}
             />
           ) : null}
           {activeView === "masters" ? (
@@ -670,6 +716,7 @@ export default function WarehousePrototype() {
               setState={setState}
               showToast={showToast}
               masterDataSource={masterDataSource}
+              roleCodes={currentRoleCodes}
             />
           ) : null}
           {activeView === "inbound" ? (
@@ -779,7 +826,25 @@ function titleForView(view: ViewKey) {
   return titles[view];
 }
 
-function LoginScreen({ onLogin }: { onLogin: () => void }) {
+function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
+  const [username, setUsername] = useState("warehouse_admin");
+  const [password, setPassword] = useState("demo123456");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submitLogin() {
+    setSubmitting(true);
+    setError("");
+    try {
+      const user = await postJson<CurrentUser>("/api/auth/login", { username, password });
+      onLogin(user);
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : "登录失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <main className="grid min-h-screen grid-cols-1 bg-slate-100 lg:grid-cols-[1fr_440px]">
       <section className="hidden items-center justify-center bg-slate-900 p-10 text-white lg:flex">
@@ -796,9 +861,9 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
       <section className="flex items-center justify-center p-6">
         <form
           className="panel w-full max-w-md p-6"
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            onLogin();
+            await submitLogin();
           }}
         >
           <div className="mb-6">
@@ -808,14 +873,18 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
           <label className="label" htmlFor="username">
             账号
           </label>
-          <input className="field mb-4" id="username" defaultValue="warehouse_operator" />
+          <input className="field mb-4" id="username" value={username} onChange={(event) => setUsername(event.target.value)} />
           <label className="label" htmlFor="password">
             密码
           </label>
-          <input className="field mb-6" id="password" type="password" defaultValue="demo123456" />
-          <button className="primary-button w-full" type="submit">
+          <input className="field mb-4" id="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+          {error ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+          <div className="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+            可测试账号：`super_admin`、`warehouse_admin`、`inventory_viewer`，密码均为 `demo123456`。
+          </div>
+          <button className="primary-button w-full" type="submit" disabled={submitting}>
             <LogIn className="h-4 w-4" />
-            登录
+            {submitting ? "登录中" : "登录"}
           </button>
         </form>
       </section>
@@ -842,12 +911,14 @@ function DashboardView({
   stats,
   state,
   setActiveView,
-  setSelectedBarcode
+  setSelectedBarcode,
+  canOperateWarehouse
 }: {
   stats: { inStock: number; withSales: number; mainCount: number; branchCount: number };
   state: WarehouseState;
   setActiveView: (view: ViewKey) => void;
   setSelectedBarcode: (barcode: string) => void;
+  canOperateWarehouse: boolean;
 }) {
   const recentMovements = state.movements.slice(0, 6);
   return (
@@ -901,18 +972,22 @@ function DashboardView({
         <section className="panel p-4">
           <SectionHeader icon={PackageCheck} title="常用操作" compact />
           <div className="grid gap-3">
-            <button className="secondary-button justify-start" onClick={() => setActiveView("inbound")}>
-              <Truck className="h-4 w-4" />
-              厂家到货或终端退换货入库
-            </button>
-            <button className="secondary-button justify-start" onClick={() => setActiveView("outbound")}>
-              <ArrowLeftRight className="h-4 w-4" />
-              挪仓或销售出库
-            </button>
-            <button className="secondary-button justify-start" onClick={() => setActiveView("return")}>
-              <Undo2 className="h-4 w-4" />
-              销售人员未售完退回
-            </button>
+            {canOperateWarehouse ? (
+              <>
+                <button className="secondary-button justify-start" onClick={() => setActiveView("inbound")}>
+                  <Truck className="h-4 w-4" />
+                  厂家到货或终端退换货入库
+                </button>
+                <button className="secondary-button justify-start" onClick={() => setActiveView("outbound")}>
+                  <ArrowLeftRight className="h-4 w-4" />
+                  挪仓或销售出库
+                </button>
+                <button className="secondary-button justify-start" onClick={() => setActiveView("return")}>
+                  <Undo2 className="h-4 w-4" />
+                  销售人员未售完退回
+                </button>
+              </>
+            ) : null}
             <button className="secondary-button justify-start" onClick={() => setActiveView("inventory")}>
               <Search className="h-4 w-4" />
               查询库存与条码流转
@@ -942,12 +1017,14 @@ function MastersView({
   state,
   setState,
   showToast,
-  masterDataSource
+  masterDataSource,
+  roleCodes
 }: {
   state: WarehouseState;
   setState: (updater: (previous: WarehouseState) => WarehouseState) => void;
   showToast: (toast: Toast) => void;
   masterDataSource: "local" | "database";
+  roleCodes: UserRoleCode[];
 }) {
   const [goodsDraft, setGoodsDraft] = useState({
     code: "",
@@ -968,7 +1045,10 @@ function MastersView({
   async function requestApi<T>(path: string, body: unknown): Promise<T> {
     const response = await fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-warehouse-roles": roleHeaderValue(roleCodes)
+      },
       body: JSON.stringify(body)
     });
     const payload = (await response.json()) as ApiResponse<T>;

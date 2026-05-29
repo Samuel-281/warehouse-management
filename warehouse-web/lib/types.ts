@@ -11,6 +11,18 @@ export type MovementType =
   | "sales_outbound"
   | "sales_return";
 
+export type UserRoleCode = "SUPER_ADMIN" | "WAREHOUSE_ADMIN" | "INVENTORY_VIEWER";
+
+export type CurrentUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  roles: Array<{
+    code: UserRoleCode;
+    name: string;
+  }>;
+};
+
 export type Goods = {
   id: string;
   code: string;
