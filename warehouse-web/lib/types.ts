@@ -116,6 +116,22 @@ export type OperationLog = {
   createdAt: string;
 };
 
+export type OrderKind = "inbound" | "outbound" | "sales_return";
+
+export type OrderSummary = {
+  id: string;
+  orderNo: string;
+  kind: OrderKind;
+  businessType: string;
+  primaryTarget: string;
+  counterparty?: string;
+  operator: string;
+  createdAt: string;
+  itemCount: number;
+  goodsSummary: string;
+  barcodePreview: string;
+};
+
 export type WarehouseState = {
   goods: Goods[];
   warehouses: Warehouse[];

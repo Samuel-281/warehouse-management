@@ -32,6 +32,8 @@ import type {
   InventoryItem,
   ManagedUser,
   OperationLog,
+  OrderKind,
+  OrderSummary,
   OutboundType,
   StockMovement,
   Toast,
@@ -51,7 +53,7 @@ import {
   uniqueBarcodes
 } from "@/lib/warehouse-utils";
 
-type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "inventory" | "system";
+type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "orders" | "inventory" | "system";
 
 type MasterDataPayload = WarehouseState;
 
@@ -90,6 +92,7 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
   { key: "inbound", label: "入库", icon: Truck },
   { key: "outbound", label: "出库", icon: ArrowLeftRight },
   { key: "return", label: "销售退回", icon: Undo2 },
+  { key: "orders", label: "单据查询", icon: ClipboardList },
   { key: "inventory", label: "库存查询", icon: Search },
   { key: "system", label: "系统维护", icon: ShieldCheck }
 ];
@@ -143,6 +146,9 @@ export default function WarehousePrototype() {
     salespersonId: "all",
     goodsId: "all"
   });
+  const [orders, setOrders] = useState<OrderSummary[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [orderKindFilter, setOrderKindFilter] = useState<OrderKind | "all">("all");
 
   const currentRoleCodes = useMemo(() => currentUser?.roles.map((role) => role.code) ?? [], [currentUser]);
   const canManageMasterData = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
@@ -160,6 +166,11 @@ export default function WarehousePrototype() {
       }),
     [canMaintainSystem, canManageMasterData, canOperateWarehouse]
   );
+
+  const showToast = useCallback((nextToast: Toast) => {
+    setToast(nextToast);
+    window.setTimeout(() => setToast(null), 3200);
+  }, []);
 
   const applyDatabaseState = useCallback((masterData: WarehouseState, options: { preserveSelection?: boolean } = {}) => {
     const mainWarehouse =
@@ -219,7 +230,7 @@ export default function WarehousePrototype() {
         setRefreshing(false);
       }
     },
-    [applyDatabaseState]
+    [applyDatabaseState, showToast]
   );
 
   useEffect(() => {
@@ -326,6 +337,11 @@ export default function WarehousePrototype() {
     });
   }, [inventoryFilters, state.goods, state.inventoryItems]);
 
+  const filteredOrders = useMemo(() => {
+    if (orderKindFilter === "all") return orders;
+    return orders.filter((order) => order.kind === orderKindFilter);
+  }, [orderKindFilter, orders]);
+
   const stats = useMemo(() => {
     const inStock = state.inventoryItems.filter((item) => item.ownerType === "warehouse");
     const withSales = state.inventoryItems.filter((item) => item.ownerType === "salesperson");
@@ -337,10 +353,22 @@ export default function WarehousePrototype() {
     return { inStock: inStock.length, withSales: withSales.length, mainCount, branchCount };
   }, [state.inventoryItems, state.warehouses]);
 
-  function showToast(nextToast: Toast) {
-    setToast(nextToast);
-    window.setTimeout(() => setToast(null), 3200);
-  }
+  const loadOrders = useCallback(async () => {
+    setOrdersLoading(true);
+    try {
+      setOrders(await getJson<OrderSummary[]>("/api/orders"));
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "读取单据失败" });
+    } finally {
+      setOrdersLoading(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    if (activeView === "orders" && loggedIn) {
+      void loadOrders();
+    }
+  }, [activeView, loadOrders, loggedIn]);
 
   async function logout() {
     try {
@@ -756,6 +784,15 @@ export default function WarehousePrototype() {
               submitSalesReturn={submitSalesReturn}
             />
           ) : null}
+          {activeView === "orders" ? (
+            <OrdersView
+              orders={filteredOrders}
+              loading={ordersLoading}
+              kindFilter={orderKindFilter}
+              setKindFilter={setOrderKindFilter}
+              refreshOrders={loadOrders}
+            />
+          ) : null}
           {activeView === "inventory" ? (
             <InventoryView
               state={state}
@@ -793,6 +830,7 @@ function titleForView(view: ViewKey) {
     inbound: "入库管理",
     outbound: "出库管理",
     return: "销售退回",
+    orders: "单据查询",
     inventory: "库存查询",
     system: "系统维护"
   };
@@ -1893,6 +1931,86 @@ function SalesReturnView(props: {
         </button>
       </section>
     </div>
+  );
+}
+
+function OrdersView({
+  orders,
+  loading,
+  kindFilter,
+  setKindFilter,
+  refreshOrders
+}: {
+  orders: OrderSummary[];
+  loading: boolean;
+  kindFilter: OrderKind | "all";
+  setKindFilter: (value: OrderKind | "all") => void;
+  refreshOrders: () => void;
+}) {
+  return (
+    <section className="panel overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
+        <div className="flex flex-wrap items-center gap-2">
+          <SegmentedControl
+            value={kindFilter}
+            onChange={(value) => setKindFilter(value as OrderKind | "all")}
+            options={[
+              { value: "all", label: "全部" },
+              { value: "inbound", label: "入库" },
+              { value: "outbound", label: "出库" },
+              { value: "sales_return", label: "销售退回" }
+            ]}
+          />
+          <button className="secondary-button" onClick={refreshOrders} disabled={loading}>
+            <RotateCcw className="h-4 w-4" />
+            {loading ? "刷新中" : "刷新单据"}
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1080px]">
+          <thead className="table-head">
+            <tr>
+              <th className="px-4 py-3">单号</th>
+              <th className="px-4 py-3">业务类型</th>
+              <th className="px-4 py-3">来源/去向</th>
+              <th className="px-4 py-3">货物汇总</th>
+              <th className="px-4 py-3">条码预览</th>
+              <th className="px-4 py-3">件数</th>
+              <th className="px-4 py-3">操作人</th>
+              <th className="px-4 py-3">时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map((order) => (
+              <tr key={order.id} className="hover:bg-slate-50">
+                <td className="table-cell font-mono text-xs">{order.orderNo}</td>
+                <td className="table-cell">
+                  <StatusBadge label={order.businessType} />
+                </td>
+                <td className="table-cell">
+                  <div className="font-medium text-ink">{order.primaryTarget}</div>
+                  <div className="mt-1 text-xs text-slate-500">{order.counterparty ?? "-"}</div>
+                </td>
+                <td className="table-cell">{order.goodsSummary || "-"}</td>
+                <td className="table-cell font-mono text-xs">{order.barcodePreview || "-"}</td>
+                <td className="table-cell">{order.itemCount}</td>
+                <td className="table-cell">{order.operator}</td>
+                <td className="table-cell">{order.createdAt}</td>
+              </tr>
+            ))}
+            {orders.length === 0 ? (
+              <tr>
+                <td className="table-cell text-center text-slate-500" colSpan={8}>
+                  {loading ? "正在读取单据..." : "暂无符合条件的单据"}
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
