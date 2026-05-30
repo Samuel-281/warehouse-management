@@ -7,6 +7,7 @@ import {
   Building2,
   Check,
   ClipboardList,
+  Download,
   Home,
   Info,
   LogIn,
@@ -31,6 +32,7 @@ import type {
   InboundSource,
   InventoryItem,
   ManagedUser,
+  MovementType,
   OperationLog,
   OrderKind,
   OrderSummary,
@@ -54,6 +56,13 @@ import {
 } from "@/lib/warehouse-utils";
 
 type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "orders" | "inventory" | "system";
+
+type MovementFilters = {
+  keyword: string;
+  type: MovementType | "all";
+  startDate: string;
+  endDate: string;
+};
 
 type MasterDataPayload = WarehouseState;
 
@@ -145,6 +154,12 @@ export default function WarehousePrototype() {
     warehouseId: "all",
     salespersonId: "all",
     goodsId: "all"
+  });
+  const [movementFilters, setMovementFilters] = useState<MovementFilters>({
+    keyword: "",
+    type: "all",
+    startDate: "",
+    endDate: ""
   });
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -341,6 +356,27 @@ export default function WarehousePrototype() {
     if (orderKindFilter === "all") return orders;
     return orders.filter((order) => order.kind === orderKindFilter);
   }, [orderKindFilter, orders]);
+
+  const filteredMovements = useMemo(() => {
+    const keyword = movementFilters.keyword.trim().toLowerCase();
+    return state.movements.filter((movement) => {
+      const goods = state.goods.find((entry) => entry.id === movement.goodsId);
+      const keywordMatch =
+        !keyword ||
+        movement.barcode.toLowerCase().includes(keyword) ||
+        movement.fromLabel.toLowerCase().includes(keyword) ||
+        movement.toLabel.toLowerCase().includes(keyword) ||
+        movement.note.toLowerCase().includes(keyword) ||
+        goods?.name.toLowerCase().includes(keyword) ||
+        goods?.code.toLowerCase().includes(keyword);
+      const typeMatch = movementFilters.type === "all" || movement.type === movementFilters.type;
+      const date = movement.occurredAt.slice(0, 10);
+      const startMatch = !movementFilters.startDate || date >= movementFilters.startDate;
+      const endMatch = !movementFilters.endDate || date <= movementFilters.endDate;
+
+      return keywordMatch && typeMatch && startMatch && endMatch;
+    });
+  }, [movementFilters, state.goods, state.movements]);
 
   const stats = useMemo(() => {
     const inStock = state.inventoryItems.filter((item) => item.ownerType === "warehouse");
@@ -803,6 +839,9 @@ export default function WarehousePrototype() {
               setSelectedBarcode={setSelectedBarcode}
               selectedItem={selectedItem}
               selectedMovements={selectedMovements}
+              movementFilters={movementFilters}
+              setMovementFilters={setMovementFilters}
+              filteredMovements={filteredMovements}
               refreshing={refreshing}
               refreshData={() => void refreshWarehouseState({ preserveSelection: true, notify: true })}
             />
@@ -2014,6 +2053,23 @@ function OrdersView({
   );
 }
 
+function downloadCsv(filename: string, rows: string[][]) {
+  const csv = rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
+  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function escapeCsvCell(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 function SystemMaintenanceView({
   onResetComplete,
   showToast
@@ -2218,9 +2274,27 @@ function InventoryView(props: {
   setSelectedBarcode: (barcode: string) => void;
   selectedItem?: InventoryItem;
   selectedMovements: StockMovement[];
+  movementFilters: MovementFilters;
+  setMovementFilters: (value: MovementFilters) => void;
+  filteredMovements: StockMovement[];
   refreshing: boolean;
   refreshData: () => void;
 }) {
+  function exportMovements() {
+    const header = ["时间", "业务类型", "条码", "货物", "来源", "去向", "操作人", "说明"];
+    const rows = props.filteredMovements.map((movement) => [
+      movement.occurredAt,
+      formatMovementType(movement.type),
+      movement.barcode,
+      goodsLabel(movement.goodsId, props.state.goods),
+      movement.fromLabel,
+      movement.toLabel,
+      movement.operator,
+      movement.note
+    ]);
+    downloadCsv("库存流水.csv", [header, ...rows]);
+  }
+
   return (
     <div className="grid gap-5 2xl:grid-cols-[1.4fr_0.6fr]">
       <section className="panel overflow-hidden">
@@ -2353,6 +2427,109 @@ function InventoryView(props: {
             从左侧库存表选择一个条码查看流转。
           </p>
         )}
+      </section>
+
+      <section className="panel overflow-hidden 2xl:col-span-2">
+        <div className="border-b border-slate-200 p-4">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <SectionHeader icon={ClipboardList} title="库存流水查询" compact />
+            <button
+              className="secondary-button"
+              onClick={exportMovements}
+              disabled={props.filteredMovements.length === 0}
+            >
+              <Download className="h-4 w-4" />
+              导出流水 CSV
+            </button>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-5">
+            <input
+              className="field"
+              placeholder="条码、货物、来源、去向"
+              value={props.movementFilters.keyword}
+              onChange={(event) =>
+                props.setMovementFilters({ ...props.movementFilters, keyword: event.target.value })
+              }
+            />
+            <FieldSelect
+              label=""
+              value={props.movementFilters.type}
+              onChange={(value) =>
+                props.setMovementFilters({ ...props.movementFilters, type: value as MovementType | "all" })
+              }
+              options={[
+                { value: "all", label: "全部业务类型" },
+                { value: "factory_inbound", label: "厂家到货入库" },
+                { value: "terminal_return_inbound", label: "终端退换货入库" },
+                { value: "transfer", label: "挪仓" },
+                { value: "sales_outbound", label: "销售出库" },
+                { value: "sales_return", label: "销售退回" }
+              ]}
+            />
+            <input
+              className="field"
+              type="date"
+              value={props.movementFilters.startDate}
+              onChange={(event) =>
+                props.setMovementFilters({ ...props.movementFilters, startDate: event.target.value })
+              }
+            />
+            <input
+              className="field"
+              type="date"
+              value={props.movementFilters.endDate}
+              onChange={(event) =>
+                props.setMovementFilters({ ...props.movementFilters, endDate: event.target.value })
+              }
+            />
+            <button
+              className="secondary-button"
+              onClick={() =>
+                props.setMovementFilters({ keyword: "", type: "all", startDate: "", endDate: "" })
+              }
+            >
+              <RotateCcw className="h-4 w-4" />
+              清空筛选
+            </button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1100px]">
+            <thead className="table-head">
+              <tr>
+                <th className="px-4 py-3">时间</th>
+                <th className="px-4 py-3">业务类型</th>
+                <th className="px-4 py-3">条码</th>
+                <th className="px-4 py-3">货物</th>
+                <th className="px-4 py-3">来源</th>
+                <th className="px-4 py-3">去向</th>
+                <th className="px-4 py-3">操作人</th>
+                <th className="px-4 py-3">说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {props.filteredMovements.map((movement) => (
+                <tr key={movement.id} className="hover:bg-slate-50">
+                  <td className="table-cell">{movement.occurredAt}</td>
+                  <td className="table-cell">
+                    <StatusBadge label={formatMovementType(movement.type)} />
+                  </td>
+                  <td className="table-cell font-mono text-work">{movement.barcode}</td>
+                  <td className="table-cell">{goodsLabel(movement.goodsId, props.state.goods)}</td>
+                  <td className="table-cell">{movement.fromLabel}</td>
+                  <td className="table-cell">{movement.toLabel}</td>
+                  <td className="table-cell">{movement.operator}</td>
+                  <td className="table-cell text-slate-600">{movement.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {props.filteredMovements.length === 0 ? (
+            <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+              没有匹配的库存流水。
+            </div>
+          ) : null}
+        </div>
       </section>
     </div>
   );
