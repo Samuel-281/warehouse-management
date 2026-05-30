@@ -4,13 +4,18 @@ import {
   createTerminalStore,
   type CreateTerminalStoreInput
 } from "@/lib/services/master-data-service";
+import { logOperation } from "@/lib/services/operation-log-service";
 
 export async function POST(request: Request) {
+  let user = null;
   try {
-    await assertMasterDataAllowed(request);
+    user = await assertMasterDataAllowed(request);
     const input = (await request.json()) as CreateTerminalStoreInput;
-    return ok(await createTerminalStore(input), { status: 201 });
+    const result = await createTerminalStore(input);
+    await logOperation({ user, request, action: "MASTER_TERMINAL_STORE_CREATE", targetType: "TERMINAL_STORE", targetId: result.id, result: "SUCCESS" });
+    return ok(result, { status: 201 });
   } catch (error) {
+    await logOperation({ user, request, action: "MASTER_TERMINAL_STORE_CREATE", targetType: "TERMINAL_STORE", result: "FAILURE", detail: error instanceof Error ? error.message : undefined });
     return fail(error, 400);
   }
 }

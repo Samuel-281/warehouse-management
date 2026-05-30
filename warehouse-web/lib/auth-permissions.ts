@@ -5,9 +5,22 @@ import type { CurrentUser } from "@/lib/types";
 export const sessionCookieName = "warehouse_session";
 
 export async function currentUserFromRequest(request: Request): Promise<CurrentUser | null> {
-  const token = readCookie(request, sessionCookieName);
+  const token = sessionTokenFromRequest(request);
   if (!token) return null;
   return getCurrentUserBySessionToken(token);
+}
+
+export function sessionTokenFromRequest(request: Request) {
+  return readCookie(request, sessionCookieName);
+}
+
+export async function assertSuperAdminAllowed(request: Request): Promise<CurrentUser> {
+  const user = await requireCurrentUser(request);
+  if (!hasAnyRole(user.roles.map((role) => role.code), ["SUPER_ADMIN"])) {
+    throw new Error("当前账号无权执行系统维护操作");
+  }
+
+  return user;
 }
 
 export async function requireCurrentUser(request: Request): Promise<CurrentUser> {

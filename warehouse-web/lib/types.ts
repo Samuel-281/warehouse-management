@@ -97,6 +97,19 @@ export type StockMovement = {
   note: string;
 };
 
+export type OperationLog = {
+  id: string;
+  username: string;
+  action: string;
+  targetType: string;
+  targetId?: string;
+  result: "SUCCESS" | "FAILURE";
+  detail?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  createdAt: string;
+};
+
 export type WarehouseState = {
   goods: Goods[];
   warehouses: Warehouse[];

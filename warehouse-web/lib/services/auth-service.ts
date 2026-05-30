@@ -111,6 +111,11 @@ export async function getCurrentUserBySessionToken(token: string): Promise<Curre
   };
 }
 
+export async function deleteSession(token: string) {
+  const prisma = getPrisma();
+  await prisma.userSession.deleteMany({ where: { token } });
+}
+
 function isRoleCode(code: string): code is UserRoleCode {
   return code === "SUPER_ADMIN" || code === "WAREHOUSE_ADMIN" || code === "INVENTORY_VIEWER";
 }

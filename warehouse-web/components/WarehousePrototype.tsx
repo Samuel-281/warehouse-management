@@ -10,9 +10,11 @@ import {
   Home,
   Info,
   LogIn,
+  LogOut,
   PackageCheck,
   RotateCcw,
   Search,
+  ShieldCheck,
   Truck,
   Undo2,
   Users,
@@ -26,6 +28,7 @@ import type {
   CurrentUser,
   InboundSource,
   InventoryItem,
+  OperationLog,
   OutboundType,
   StockMovement,
   Toast,
@@ -45,7 +48,7 @@ import {
   uniqueBarcodes
 } from "@/lib/warehouse-utils";
 
-type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "inventory";
+type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "inventory" | "system";
 
 type MasterDataPayload = WarehouseState;
 
@@ -84,7 +87,8 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
   { key: "inbound", label: "入库", icon: Truck },
   { key: "outbound", label: "出库", icon: ArrowLeftRight },
   { key: "return", label: "销售退回", icon: Undo2 },
-  { key: "inventory", label: "库存查询", icon: Search }
+  { key: "inventory", label: "库存查询", icon: Search },
+  { key: "system", label: "系统维护", icon: ShieldCheck }
 ];
 
 const operator = "仓库操作员";
@@ -140,16 +144,18 @@ export default function WarehousePrototype() {
   const currentRoleCodes = useMemo(() => currentUser?.roles.map((role) => role.code) ?? [], [currentUser]);
   const canManageMasterData = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
   const canOperateWarehouse = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
+  const canMaintainSystem = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN"]);
   const allowedNavItems = useMemo(
     () =>
       navItems.filter((item) => {
         if (item.key === "masters") return canManageMasterData;
+        if (item.key === "system") return canMaintainSystem;
         if (item.key === "inbound" || item.key === "outbound" || item.key === "return") {
           return canOperateWarehouse;
         }
         return true;
       }),
-    [canManageMasterData, canOperateWarehouse]
+    [canMaintainSystem, canManageMasterData, canOperateWarehouse]
   );
 
   const applyDatabaseState = useCallback((masterData: WarehouseState, options: { preserveSelection?: boolean } = {}) => {
@@ -331,6 +337,18 @@ export default function WarehousePrototype() {
   function showToast(nextToast: Toast) {
     setToast(nextToast);
     window.setTimeout(() => setToast(null), 3200);
+  }
+
+  async function logout() {
+    try {
+      await postJson<{ loggedOut: boolean }>("/api/auth/logout", {});
+    } catch {
+      // Local state still needs to be cleared if the session has already expired.
+    }
+    setCurrentUser(null);
+    setLoggedIn(false);
+    setActiveView("dashboard");
+    showToast({ tone: "info", message: "已退出登录" });
   }
 
   async function resetDemoData() {
@@ -684,6 +702,10 @@ export default function WarehousePrototype() {
                 <RotateCcw className="h-4 w-4" />
                 重置页面
               </button>
+              <button className="secondary-button" onClick={logout}>
+                <LogOut className="h-4 w-4" />
+                退出
+              </button>
             </div>
           </div>
           <nav className="mt-4 grid grid-cols-3 gap-2 lg:hidden">
@@ -816,6 +838,16 @@ export default function WarehousePrototype() {
               refreshData={() => void refreshWarehouseState({ preserveSelection: true, notify: true })}
             />
           ) : null}
+          {activeView === "system" && canMaintainSystem ? (
+            <SystemMaintenanceView
+              onResetComplete={() => {
+                setCurrentUser(null);
+                setLoggedIn(false);
+                setActiveView("dashboard");
+              }}
+              showToast={showToast}
+            />
+          ) : null}
         </div>
       </section>
     </main>
@@ -829,7 +861,8 @@ function titleForView(view: ViewKey) {
     inbound: "入库管理",
     outbound: "出库管理",
     return: "销售退回",
-    inventory: "库存查询"
+    inventory: "库存查询",
+    system: "系统维护"
   };
   return titles[view];
 }
@@ -1730,6 +1763,102 @@ function SalesReturnView(props: {
           <Check className="h-4 w-4" />
           提交销售退回
         </button>
+      </section>
+    </div>
+  );
+}
+
+function SystemMaintenanceView({
+  onResetComplete,
+  showToast
+}: {
+  onResetComplete: () => void;
+  showToast: (toast: Toast) => void;
+}) {
+  const [confirmation, setConfirmation] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [logs, setLogs] = useState<OperationLog[]>([]);
+
+  useEffect(() => {
+    getJson<OperationLog[]>("/api/operation-logs")
+      .then(setLogs)
+      .catch(() => undefined);
+  }, []);
+
+  async function resetDemoDatabaseFromWeb() {
+    if (confirmation.trim() !== resetConfirmationText) {
+      showToast({ tone: "error", message: "请输入正确确认文字" });
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await postJson<{ reset: boolean }>("/api/system/reset-demo", { confirmation });
+      showToast({ tone: "success", message: "演示数据库已重置，请重新登录" });
+      onResetComplete();
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "重置演示数据库失败" });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
+      <section className="panel p-5">
+        <SectionHeader icon={ShieldCheck} title="高危维护" compact />
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
+          该操作会清空本地演示数据库并重新写入初始演示数据。执行后当前登录会话会失效，需要重新登录。
+        </div>
+        <label className="label mt-5" htmlFor="reset-confirmation">
+          输入确认文字
+        </label>
+        <input
+          className="field"
+          id="reset-confirmation"
+          placeholder={resetConfirmationText}
+          value={confirmation}
+          onChange={(event) => setConfirmation(event.target.value)}
+        />
+        <button className="primary-button mt-4 w-full" disabled={submitting} onClick={resetDemoDatabaseFromWeb}>
+          <RotateCcw className="h-4 w-4" />
+          {submitting ? "正在重置" : "重置演示数据库"}
+        </button>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <SectionHeader icon={ClipboardList} title="最近操作日志" />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px]">
+            <thead className="table-head">
+              <tr>
+                <th className="px-4 py-3">时间</th>
+                <th className="px-4 py-3">用户</th>
+                <th className="px-4 py-3">动作</th>
+                <th className="px-4 py-3">结果</th>
+                <th className="px-4 py-3">说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((log) => (
+                <tr key={log.id}>
+                  <td className="table-cell text-slate-600">{log.createdAt}</td>
+                  <td className="table-cell">{log.username}</td>
+                  <td className="table-cell font-semibold">{log.action}</td>
+                  <td className="table-cell">
+                    <StatusBadge label={log.result === "SUCCESS" ? "成功" : "失败"} />
+                  </td>
+                  <td className="table-cell text-slate-600">{log.detail ?? "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {logs.length === 0 ? (
+            <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+              暂无操作日志。
+            </div>
+          ) : null}
+        </div>
       </section>
     </div>
   );
