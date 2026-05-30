@@ -21,7 +21,8 @@ import {
   Truck,
   Undo2,
   Users,
-  Warehouse
+  Warehouse,
+  X
 } from "lucide-react";
 import Link from "next/link";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
@@ -63,6 +64,8 @@ type MovementFilters = {
   startDate: string;
   endDate: string;
 };
+
+type InventoryQueryMode = "inventory" | "movements";
 
 type MasterDataPayload = WarehouseState;
 
@@ -161,6 +164,7 @@ export default function WarehousePrototype() {
     startDate: "",
     endDate: ""
   });
+  const [inventoryQueryMode, setInventoryQueryMode] = useState<InventoryQueryMode>("inventory");
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orderKindFilter, setOrderKindFilter] = useState<OrderKind | "all">("all");
@@ -839,6 +843,8 @@ export default function WarehousePrototype() {
               setSelectedBarcode={setSelectedBarcode}
               selectedItem={selectedItem}
               selectedMovements={selectedMovements}
+              queryMode={inventoryQueryMode}
+              setQueryMode={setInventoryQueryMode}
               movementFilters={movementFilters}
               setMovementFilters={setMovementFilters}
               filteredMovements={filteredMovements}
@@ -1326,10 +1332,15 @@ function MastersView({
       <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
         基础资料来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地原型数据"}
       </div>
-      {editingGoods ? (
-        <section className="panel p-5">
-          <SectionHeader icon={Boxes} title="编辑货物资料" compact />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+      <MasterEditDialog
+        open={Boolean(editingGoods)}
+        title="编辑货物资料"
+        icon={Boxes}
+        onClose={() => setEditingGoods(null)}
+        onSave={saveGoods}
+      >
+        {editingGoods ? (
+          <div className="grid gap-4 md:grid-cols-2">
             <TextField label="货物编码" value={editingGoods.code} onChange={(code) => setEditingGoods({ ...editingGoods, code })} />
             <TextField label="货物名称" value={editingGoods.name} onChange={(name) => setEditingGoods({ ...editingGoods, name })} />
             <FieldSelect
@@ -1344,13 +1355,17 @@ function MastersView({
             <TextField label="单位" value={editingGoods.unit} onChange={(unit) => setEditingGoods({ ...editingGoods, unit })} />
             <TextField label="规格" value={editingGoods.spec} onChange={(spec) => setEditingGoods({ ...editingGoods, spec })} />
           </div>
-          <FormActions onCancel={() => setEditingGoods(null)} onSave={saveGoods} />
-        </section>
-      ) : null}
-      {editingWarehouse ? (
-        <section className="panel p-5">
-          <SectionHeader icon={Warehouse} title="编辑仓库资料" compact />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+        ) : null}
+      </MasterEditDialog>
+      <MasterEditDialog
+        open={Boolean(editingWarehouse)}
+        title="编辑仓库资料"
+        icon={Warehouse}
+        onClose={() => setEditingWarehouse(null)}
+        onSave={saveWarehouse}
+      >
+        {editingWarehouse ? (
+          <div className="grid gap-4 md:grid-cols-2">
             <TextField label="仓库编码" value={editingWarehouse.code} onChange={(code) => setEditingWarehouse({ ...editingWarehouse, code })} />
             <TextField label="仓库名称" value={editingWarehouse.name} onChange={(name) => setEditingWarehouse({ ...editingWarehouse, name })} />
             <TextField label="负责人" value={editingWarehouse.manager} onChange={(manager) => setEditingWarehouse({ ...editingWarehouse, manager })} />
@@ -1359,33 +1374,40 @@ function MastersView({
               <div className="field bg-slate-50 text-slate-500">{editingWarehouse.type === "main" ? "总仓" : "分仓"}</div>
             </div>
           </div>
-          <FormActions onCancel={() => setEditingWarehouse(null)} onSave={saveWarehouse} />
-        </section>
-      ) : null}
-      {editingSalesperson ? (
-        <section className="panel p-5">
-          <SectionHeader icon={Users} title="编辑销售人员" compact />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+        ) : null}
+      </MasterEditDialog>
+      <MasterEditDialog
+        open={Boolean(editingSalesperson)}
+        title="编辑销售人员"
+        icon={Users}
+        onClose={() => setEditingSalesperson(null)}
+        onSave={saveSalesperson}
+      >
+        {editingSalesperson ? (
+          <div className="grid gap-4 md:grid-cols-2">
             <TextField label="人员编码" value={editingSalesperson.code} onChange={(code) => setEditingSalesperson({ ...editingSalesperson, code })} />
             <TextField label="姓名" value={editingSalesperson.name} onChange={(name) => setEditingSalesperson({ ...editingSalesperson, name })} />
             <TextField label="手机号" value={editingSalesperson.phone} onChange={(phone) => setEditingSalesperson({ ...editingSalesperson, phone })} />
             <TextField label="区域" value={editingSalesperson.region} onChange={(region) => setEditingSalesperson({ ...editingSalesperson, region })} />
           </div>
-          <FormActions onCancel={() => setEditingSalesperson(null)} onSave={saveSalesperson} />
-        </section>
-      ) : null}
-      {editingStore ? (
-        <section className="panel p-5">
-          <SectionHeader icon={Building2} title="编辑终端店铺" compact />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+        ) : null}
+      </MasterEditDialog>
+      <MasterEditDialog
+        open={Boolean(editingStore)}
+        title="编辑终端店铺"
+        icon={Building2}
+        onClose={() => setEditingStore(null)}
+        onSave={saveStore}
+      >
+        {editingStore ? (
+          <div className="grid gap-4 md:grid-cols-2">
             <TextField label="店铺名称" value={editingStore.name} onChange={(name) => setEditingStore({ ...editingStore, name })} />
             <TextField label="联系人" value={editingStore.contact} onChange={(contact) => setEditingStore({ ...editingStore, contact })} />
             <TextField label="电话" value={editingStore.phone} onChange={(phone) => setEditingStore({ ...editingStore, phone })} />
             <TextField label="地址" value={editingStore.address} onChange={(address) => setEditingStore({ ...editingStore, address })} />
           </div>
-          <FormActions onCancel={() => setEditingStore(null)} onSave={saveStore} />
-        </section>
-      ) : null}
+        ) : null}
+      </MasterEditDialog>
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="panel p-5">
           <SectionHeader icon={Boxes} title="新增货物" compact />
@@ -1698,16 +1720,55 @@ function MasterActions({
   );
 }
 
-function FormActions({ onCancel, onSave }: { onCancel: () => void; onSave: () => void }) {
+function MasterEditDialog({
+  open,
+  title,
+  icon: Icon,
+  children,
+  onClose,
+  onSave
+}: {
+  open: boolean;
+  title: string;
+  icon: typeof Home;
+  children: ReactNode;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  if (!open) return null;
+
   return (
-    <div className="mt-5 flex flex-wrap gap-3">
-      <button className="primary-button" onClick={onSave}>
-        <Check className="h-4 w-4" />
-        保存修改
-      </button>
-      <button className="secondary-button" onClick={onCancel}>
-        取消
-      </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+      <section
+        className="panel max-h-[90vh] w-full max-w-3xl overflow-y-auto p-5 shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-4">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-50 text-work">
+              <Icon className="h-4 w-4" />
+            </div>
+            <h2 className="text-base font-semibold text-ink">{title}</h2>
+          </div>
+          <button className="secondary-button px-3 py-2" onClick={onClose}>
+            <X className="h-4 w-4" />
+            关闭
+          </button>
+        </div>
+        <div className="mt-5">{children}</div>
+        <div className="mt-5 flex flex-wrap justify-end gap-3">
+          <button className="secondary-button" onClick={onClose}>
+            <X className="h-4 w-4" />
+            取消
+          </button>
+          <button className="primary-button" onClick={onSave}>
+            <Check className="h-4 w-4" />
+            保存修改
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2274,6 +2335,8 @@ function InventoryView(props: {
   setSelectedBarcode: (barcode: string) => void;
   selectedItem?: InventoryItem;
   selectedMovements: StockMovement[];
+  queryMode: InventoryQueryMode;
+  setQueryMode: (value: InventoryQueryMode) => void;
   movementFilters: MovementFilters;
   setMovementFilters: (value: MovementFilters) => void;
   filteredMovements: StockMovement[];
@@ -2295,98 +2358,226 @@ function InventoryView(props: {
     downloadCsv("库存流水.csv", [header, ...rows]);
   }
 
+  function clearInventoryFilters() {
+    props.setFilters({ keyword: "", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+  }
+
+  function clearMovementFilters() {
+    props.setMovementFilters({ keyword: "", type: "all", startDate: "", endDate: "" });
+  }
+
   return (
-    <div className="grid gap-5 2xl:grid-cols-[1.4fr_0.6fr]">
+    <div className="grid gap-5">
       <section className="panel overflow-hidden">
         <div className="border-b border-slate-200 p-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <SectionHeader icon={Search} title="库存查询" compact />
-            <button className="secondary-button" onClick={props.refreshData} disabled={props.refreshing}>
-              <RotateCcw className="h-4 w-4" />
-              {props.refreshing ? "刷新中" : "刷新数据库库存"}
-            </button>
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <SectionHeader icon={Search} title="库存与流水查询" compact />
+            <div className="flex flex-wrap items-center gap-2">
+              <SegmentedControl
+                value={props.queryMode}
+                onChange={(value) => props.setQueryMode(value as InventoryQueryMode)}
+                options={[
+                  { value: "inventory", label: "库存记录" },
+                  { value: "movements", label: "流水记录" }
+                ]}
+              />
+              {props.queryMode === "movements" ? (
+                <button
+                  className="secondary-button"
+                  onClick={exportMovements}
+                  disabled={props.filteredMovements.length === 0}
+                >
+                  <Download className="h-4 w-4" />
+                  导出 CSV
+                </button>
+              ) : null}
+              <button className="secondary-button" onClick={props.refreshData} disabled={props.refreshing}>
+                <RotateCcw className="h-4 w-4" />
+                {props.refreshing ? "刷新中" : "刷新数据"}
+              </button>
+            </div>
           </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-4">
-            <input
-              className="field"
-              placeholder="货物名称、编码或条码"
-              value={props.filters.keyword}
-              onChange={(event) => props.setFilters({ ...props.filters, keyword: event.target.value })}
-            />
-            <FieldSelect
-              label=""
-              value={props.filters.warehouseId}
-              onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value })}
-              options={[
-                { value: "all", label: "全部仓库" },
-                ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
-              ]}
-            />
-            <FieldSelect
-              label=""
-              value={props.filters.salespersonId}
-              onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
-              options={[
-                { value: "all", label: "全部销售人员" },
-                ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
-              ]}
-            />
-            <FieldSelect
-              label=""
-              value={props.filters.goodsId}
-              onChange={(value) => props.setFilters({ ...props.filters, goodsId: value })}
-              options={[
-                { value: "all", label: "全部货物" },
-                ...props.state.goods.map((goods) => ({ value: goods.id, label: goods.name }))
-              ]}
-            />
-          </div>
+          {props.queryMode === "inventory" ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-5">
+              <input
+                className="field"
+                placeholder="货物名称、编码或条码"
+                value={props.filters.keyword}
+                onChange={(event) => props.setFilters({ ...props.filters, keyword: event.target.value })}
+              />
+              <FieldSelect
+                label=""
+                value={props.filters.warehouseId}
+                onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value })}
+                options={[
+                  { value: "all", label: "全部仓库" },
+                  ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
+                ]}
+              />
+              <FieldSelect
+                label=""
+                value={props.filters.salespersonId}
+                onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
+                options={[
+                  { value: "all", label: "全部销售人员" },
+                  ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
+                ]}
+              />
+              <FieldSelect
+                label=""
+                value={props.filters.goodsId}
+                onChange={(value) => props.setFilters({ ...props.filters, goodsId: value })}
+                options={[
+                  { value: "all", label: "全部货物" },
+                  ...props.state.goods.map((goods) => ({ value: goods.id, label: goods.name }))
+                ]}
+              />
+              <button className="secondary-button" onClick={clearInventoryFilters}>
+                <RotateCcw className="h-4 w-4" />
+                清空筛选
+              </button>
+            </div>
+          ) : (
+            <div className="mt-4 grid gap-3 md:grid-cols-5">
+              <input
+                className="field"
+                placeholder="条码、货物、来源、去向"
+                value={props.movementFilters.keyword}
+                onChange={(event) =>
+                  props.setMovementFilters({ ...props.movementFilters, keyword: event.target.value })
+                }
+              />
+              <FieldSelect
+                label=""
+                value={props.movementFilters.type}
+                onChange={(value) =>
+                  props.setMovementFilters({ ...props.movementFilters, type: value as MovementType | "all" })
+                }
+                options={[
+                  { value: "all", label: "全部业务类型" },
+                  { value: "factory_inbound", label: "厂家到货入库" },
+                  { value: "terminal_return_inbound", label: "终端退换货入库" },
+                  { value: "transfer", label: "挪仓" },
+                  { value: "sales_outbound", label: "销售出库" },
+                  { value: "sales_return", label: "销售退回" }
+                ]}
+              />
+              <input
+                className="field"
+                type="date"
+                value={props.movementFilters.startDate}
+                onChange={(event) =>
+                  props.setMovementFilters({ ...props.movementFilters, startDate: event.target.value })
+                }
+              />
+              <input
+                className="field"
+                type="date"
+                value={props.movementFilters.endDate}
+                onChange={(event) =>
+                  props.setMovementFilters({ ...props.movementFilters, endDate: event.target.value })
+                }
+              />
+              <button className="secondary-button" onClick={clearMovementFilters}>
+                <RotateCcw className="h-4 w-4" />
+                清空筛选
+              </button>
+            </div>
+          )}
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px]">
-            <thead className="table-head">
-              <tr>
-                <th className="px-4 py-3">条码</th>
-                <th className="px-4 py-3">货物</th>
-                <th className="px-4 py-3">大类</th>
-                <th className="px-4 py-3">当前归属</th>
-                <th className="px-4 py-3">生产日期</th>
-                <th className="px-4 py-3">保质期</th>
-                <th className="px-4 py-3">状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {props.inventoryItems.map((item) => {
-                const goods = props.state.goods.find((entry) => entry.id === item.goodsId);
-                return (
-                  <tr
-                    key={item.id}
-                    className={`cursor-pointer hover:bg-slate-50 ${
-                      props.selectedBarcode === item.barcode ? "bg-emerald-50" : ""
-                    }`}
-                    onClick={() => props.setSelectedBarcode(item.barcode)}
-                  >
-                    <td className="table-cell font-mono text-work">{item.barcode}</td>
-                    <td className="table-cell">{goods?.name ?? "未知货物"}</td>
-                    <td className="table-cell">{goods ? formatCategory(goods.category) : "-"}</td>
-                    <td className="table-cell text-slate-600">
-                      {ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)}
-                    </td>
-                    <td className="table-cell">{item.productionDate ?? "-"}</td>
-                    <td className="table-cell">{item.shelfLifeDate ?? "无"}</td>
-                    <td className="table-cell">
-                      <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
-                    </td>
+          {props.queryMode === "inventory" ? (
+            <>
+              <table className="w-full min-w-[980px]">
+                <thead className="table-head">
+                  <tr>
+                    <th className="px-4 py-3">条码</th>
+                    <th className="px-4 py-3">货物</th>
+                    <th className="px-4 py-3">大类</th>
+                    <th className="px-4 py-3">当前归属</th>
+                    <th className="px-4 py-3">生产日期</th>
+                    <th className="px-4 py-3">保质期</th>
+                    <th className="px-4 py-3">状态</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {props.inventoryItems.length === 0 ? (
-            <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-              没有匹配的库存记录。
-            </div>
-          ) : null}
+                </thead>
+                <tbody>
+                  {props.inventoryItems.map((item) => {
+                    const goods = props.state.goods.find((entry) => entry.id === item.goodsId);
+                    return (
+                      <tr
+                        key={item.id}
+                        className={`cursor-pointer hover:bg-slate-50 ${
+                          props.selectedBarcode === item.barcode ? "bg-emerald-50" : ""
+                        }`}
+                        onClick={() => props.setSelectedBarcode(item.barcode)}
+                      >
+                        <td className="table-cell font-mono text-work">{item.barcode}</td>
+                        <td className="table-cell">{goods?.name ?? "未知货物"}</td>
+                        <td className="table-cell">{goods ? formatCategory(goods.category) : "-"}</td>
+                        <td className="table-cell text-slate-600">
+                          {ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)}
+                        </td>
+                        <td className="table-cell">{item.productionDate ?? "-"}</td>
+                        <td className="table-cell">{item.shelfLifeDate ?? "无"}</td>
+                        <td className="table-cell">
+                          <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {props.inventoryItems.length === 0 ? (
+                <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+                  没有匹配的库存记录。
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <table className="w-full min-w-[1100px]">
+                <thead className="table-head">
+                  <tr>
+                    <th className="px-4 py-3">时间</th>
+                    <th className="px-4 py-3">业务类型</th>
+                    <th className="px-4 py-3">条码</th>
+                    <th className="px-4 py-3">货物</th>
+                    <th className="px-4 py-3">来源</th>
+                    <th className="px-4 py-3">去向</th>
+                    <th className="px-4 py-3">操作人</th>
+                    <th className="px-4 py-3">说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {props.filteredMovements.map((movement) => (
+                    <tr
+                      key={movement.id}
+                      className={`cursor-pointer hover:bg-slate-50 ${
+                        props.selectedBarcode === movement.barcode ? "bg-emerald-50" : ""
+                      }`}
+                      onClick={() => props.setSelectedBarcode(movement.barcode)}
+                    >
+                      <td className="table-cell">{movement.occurredAt}</td>
+                      <td className="table-cell">
+                        <StatusBadge label={formatMovementType(movement.type)} />
+                      </td>
+                      <td className="table-cell font-mono text-work">{movement.barcode}</td>
+                      <td className="table-cell">{goodsLabel(movement.goodsId, props.state.goods)}</td>
+                      <td className="table-cell">{movement.fromLabel}</td>
+                      <td className="table-cell">{movement.toLabel}</td>
+                      <td className="table-cell">{movement.operator}</td>
+                      <td className="table-cell text-slate-600">{movement.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {props.filteredMovements.length === 0 ? (
+                <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+                  没有匹配的库存流水。
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
       </section>
 
@@ -2427,109 +2618,6 @@ function InventoryView(props: {
             从左侧库存表选择一个条码查看流转。
           </p>
         )}
-      </section>
-
-      <section className="panel overflow-hidden 2xl:col-span-2">
-        <div className="border-b border-slate-200 p-4">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <SectionHeader icon={ClipboardList} title="库存流水查询" compact />
-            <button
-              className="secondary-button"
-              onClick={exportMovements}
-              disabled={props.filteredMovements.length === 0}
-            >
-              <Download className="h-4 w-4" />
-              导出流水 CSV
-            </button>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-5">
-            <input
-              className="field"
-              placeholder="条码、货物、来源、去向"
-              value={props.movementFilters.keyword}
-              onChange={(event) =>
-                props.setMovementFilters({ ...props.movementFilters, keyword: event.target.value })
-              }
-            />
-            <FieldSelect
-              label=""
-              value={props.movementFilters.type}
-              onChange={(value) =>
-                props.setMovementFilters({ ...props.movementFilters, type: value as MovementType | "all" })
-              }
-              options={[
-                { value: "all", label: "全部业务类型" },
-                { value: "factory_inbound", label: "厂家到货入库" },
-                { value: "terminal_return_inbound", label: "终端退换货入库" },
-                { value: "transfer", label: "挪仓" },
-                { value: "sales_outbound", label: "销售出库" },
-                { value: "sales_return", label: "销售退回" }
-              ]}
-            />
-            <input
-              className="field"
-              type="date"
-              value={props.movementFilters.startDate}
-              onChange={(event) =>
-                props.setMovementFilters({ ...props.movementFilters, startDate: event.target.value })
-              }
-            />
-            <input
-              className="field"
-              type="date"
-              value={props.movementFilters.endDate}
-              onChange={(event) =>
-                props.setMovementFilters({ ...props.movementFilters, endDate: event.target.value })
-              }
-            />
-            <button
-              className="secondary-button"
-              onClick={() =>
-                props.setMovementFilters({ keyword: "", type: "all", startDate: "", endDate: "" })
-              }
-            >
-              <RotateCcw className="h-4 w-4" />
-              清空筛选
-            </button>
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px]">
-            <thead className="table-head">
-              <tr>
-                <th className="px-4 py-3">时间</th>
-                <th className="px-4 py-3">业务类型</th>
-                <th className="px-4 py-3">条码</th>
-                <th className="px-4 py-3">货物</th>
-                <th className="px-4 py-3">来源</th>
-                <th className="px-4 py-3">去向</th>
-                <th className="px-4 py-3">操作人</th>
-                <th className="px-4 py-3">说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {props.filteredMovements.map((movement) => (
-                <tr key={movement.id} className="hover:bg-slate-50">
-                  <td className="table-cell">{movement.occurredAt}</td>
-                  <td className="table-cell">
-                    <StatusBadge label={formatMovementType(movement.type)} />
-                  </td>
-                  <td className="table-cell font-mono text-work">{movement.barcode}</td>
-                  <td className="table-cell">{goodsLabel(movement.goodsId, props.state.goods)}</td>
-                  <td className="table-cell">{movement.fromLabel}</td>
-                  <td className="table-cell">{movement.toLabel}</td>
-                  <td className="table-cell">{movement.operator}</td>
-                  <td className="table-cell text-slate-600">{movement.note}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {props.filteredMovements.length === 0 ? (
-            <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-              没有匹配的库存流水。
-            </div>
-          ) : null}
-        </div>
       </section>
     </div>
   );
