@@ -4,9 +4,9 @@ import { submitOutbound, type SubmitOutboundInput } from "@/lib/services/outboun
 
 export async function POST(request: Request) {
   try {
-    assertWarehouseOperationAllowed(request);
+    const user = await assertWarehouseOperationAllowed(request);
     const input = (await request.json()) as SubmitOutboundInput;
-    return ok(await submitOutbound(input), { status: 201 });
+    return ok(await submitOutbound({ ...input, operatorName: user.displayName }), { status: 201 });
   } catch (error) {
     return fail(error, 400);
   }

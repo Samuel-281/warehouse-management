@@ -4,9 +4,9 @@ import { submitSalesReturn, type SubmitSalesReturnInput } from "@/lib/services/s
 
 export async function POST(request: Request) {
   try {
-    assertWarehouseOperationAllowed(request);
+    const user = await assertWarehouseOperationAllowed(request);
     const input = (await request.json()) as SubmitSalesReturnInput;
-    return ok(await submitSalesReturn(input), { status: 201 });
+    return ok(await submitSalesReturn({ ...input, operatorName: user.displayName }), { status: 201 });
   } catch (error) {
     return fail(error, 400);
   }

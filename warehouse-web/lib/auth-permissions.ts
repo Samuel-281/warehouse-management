@@ -1,37 +1,51 @@
-import type { UserRoleCode } from "@/lib/types";
+import { getCurrentUserBySessionToken } from "@/lib/services/auth-service";
+import { hasAnyRole } from "@/lib/role-utils";
+import type { CurrentUser } from "@/lib/types";
 
-const roleHeader = "x-warehouse-roles";
+export const sessionCookieName = "warehouse_session";
 
-export function roleHeaderValue(roles: UserRoleCode[]) {
-  return roles.join(",");
+export async function currentUserFromRequest(request: Request): Promise<CurrentUser | null> {
+  const token = readCookie(request, sessionCookieName);
+  if (!token) return null;
+  return getCurrentUserBySessionToken(token);
 }
 
-export function rolesFromRequest(request: Request): UserRoleCode[] {
-  return request.headers
-    .get(roleHeader)
-    ?.split(",")
-    .map((role) => role.trim())
-    .filter(isRoleCode) ?? [];
+export async function requireCurrentUser(request: Request): Promise<CurrentUser> {
+  const user = await currentUserFromRequest(request);
+  if (!user) {
+    throw new Error("请先登录");
+  }
+
+  return user;
 }
 
-export function assertWarehouseOperationAllowed(request: Request) {
-  const roles = rolesFromRequest(request);
-  if (!hasAnyRole(roles, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"])) {
+export async function assertWarehouseOperationAllowed(request: Request): Promise<CurrentUser> {
+  const user = await requireCurrentUser(request);
+  if (!hasAnyRole(user.roles.map((role) => role.code), ["SUPER_ADMIN", "WAREHOUSE_ADMIN"])) {
     throw new Error("当前账号无权执行仓库业务操作");
   }
+
+  return user;
 }
 
-export function assertMasterDataAllowed(request: Request) {
-  const roles = rolesFromRequest(request);
-  if (!hasAnyRole(roles, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"])) {
+export async function assertMasterDataAllowed(request: Request): Promise<CurrentUser> {
+  const user = await requireCurrentUser(request);
+  if (!hasAnyRole(user.roles.map((role) => role.code), ["SUPER_ADMIN", "WAREHOUSE_ADMIN"])) {
     throw new Error("当前账号无权维护基础资料");
   }
+
+  return user;
 }
 
-export function hasAnyRole(current: UserRoleCode[], allowed: UserRoleCode[]) {
-  return current.some((role) => allowed.includes(role));
-}
+function readCookie(request: Request, name: string) {
+  const cookies = request.headers.get("cookie");
+  if (!cookies) return null;
 
-function isRoleCode(code: string): code is UserRoleCode {
-  return code === "SUPER_ADMIN" || code === "WAREHOUSE_ADMIN" || code === "INVENTORY_VIEWER";
+  return (
+    cookies
+      .split(";")
+      .map((cookie) => cookie.trim())
+      .find((cookie) => cookie.startsWith(`${name}=`))
+      ?.slice(name.length + 1) ?? null
+  );
 }

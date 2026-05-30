@@ -7,7 +7,7 @@ import {
 
 export async function POST(request: Request) {
   try {
-    assertMasterDataAllowed(request);
+    await assertMasterDataAllowed(request);
     const input = (await request.json()) as CreateTerminalStoreInput;
     return ok(await createTerminalStore(input), { status: 201 });
   } catch (error) {

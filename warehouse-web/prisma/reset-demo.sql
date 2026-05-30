@@ -16,6 +16,7 @@ TRUNCATE TABLE
   warehouses,
   goods,
   user_roles,
+  user_sessions,
   users,
   roles
 RESTART IDENTITY CASCADE;

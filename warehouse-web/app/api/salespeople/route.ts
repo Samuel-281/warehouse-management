@@ -7,7 +7,7 @@ import {
 
 export async function POST(request: Request) {
   try {
-    assertMasterDataAllowed(request);
+    await assertMasterDataAllowed(request);
     const input = (await request.json()) as CreateSalespersonInput;
     return ok(await createSalesperson(input), { status: 201 });
   } catch (error) {

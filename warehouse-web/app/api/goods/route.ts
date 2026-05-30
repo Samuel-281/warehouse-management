@@ -4,7 +4,7 @@ import { createGoods, type CreateGoodsInput } from "@/lib/services/master-data-s
 
 export async function POST(request: Request) {
   try {
-    assertMasterDataAllowed(request);
+    await assertMasterDataAllowed(request);
     const input = (await request.json()) as CreateGoodsInput;
     return ok(await createGoods(input), { status: 201 });
   } catch (error) {

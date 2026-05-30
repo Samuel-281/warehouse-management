@@ -20,8 +20,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { hasAnyRole, roleHeaderValue } from "@/lib/auth-permissions";
 import { initialState } from "@/lib/demo-data";
+import { hasAnyRole } from "@/lib/role-utils";
 import type {
   CurrentUser,
   InboundSource,
@@ -51,13 +51,11 @@ type MasterDataPayload = WarehouseState;
 
 type ApiResponse<T> = { data: T } | { error: string };
 
-async function postJson<T>(path: string, body: unknown, roles: UserRoleCode[] = []): Promise<T> {
+async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(roles.length > 0 ? { "x-warehouse-roles": roleHeaderValue(roles) } : {})
-    },
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     body: JSON.stringify(body)
   });
   const payload = (await response.json()) as ApiResponse<T>;
@@ -70,7 +68,7 @@ async function postJson<T>(path: string, body: unknown, roles: UserRoleCode[] = 
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+  const response = await fetch(path, { credentials: "same-origin" });
   const payload = (await response.json()) as ApiResponse<T>;
 
   if (!response.ok || !("data" in payload)) {
@@ -228,7 +226,18 @@ export default function WarehousePrototype() {
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || loggedIn) return;
+
+    getJson<CurrentUser>("/api/auth/me")
+      .then((user) => {
+        setCurrentUser(user);
+        setLoggedIn(true);
+      })
+      .catch(() => undefined);
+  }, [hydrated, loggedIn]);
+
+  useEffect(() => {
+    if (!hydrated || !loggedIn) return;
 
     let cancelled = false;
 
@@ -246,7 +255,7 @@ export default function WarehousePrototype() {
     return () => {
       cancelled = true;
     };
-  }, [applyDatabaseState, hydrated]);
+  }, [applyDatabaseState, hydrated, loggedIn]);
 
   useEffect(() => {
     if (hydrated && masterDataSource === "local") {
@@ -448,7 +457,7 @@ export default function WarehousePrototype() {
         productionDate: inboundSource === "terminal_return" ? productionDate : undefined,
         barcodes,
         operatorName: currentUser?.displayName ?? operator
-      }, currentRoleCodes);
+      });
 
       setState((previous) => ({
         ...previous,
@@ -521,7 +530,7 @@ export default function WarehousePrototype() {
         salespersonId: outboundType === "sales" ? salespersonId : undefined,
         barcodes,
         operatorName: currentUser?.displayName ?? operator
-      }, currentRoleCodes);
+      });
 
       const updatedByBarcode = new Map(result.items.map((item) => [item.barcode, item]));
       setState((previous) => ({
@@ -565,7 +574,7 @@ export default function WarehousePrototype() {
         returnLocationId,
         barcodes,
         operatorName: currentUser?.displayName ?? operator
-      }, currentRoleCodes);
+      });
 
       const updatedByBarcode = new Map(result.items.map((item) => [item.barcode, item]));
       setState((previous) => ({
@@ -716,7 +725,6 @@ export default function WarehousePrototype() {
               setState={setState}
               showToast={showToast}
               masterDataSource={masterDataSource}
-              roleCodes={currentRoleCodes}
             />
           ) : null}
           {activeView === "inbound" ? (
@@ -1017,14 +1025,12 @@ function MastersView({
   state,
   setState,
   showToast,
-  masterDataSource,
-  roleCodes
+  masterDataSource
 }: {
   state: WarehouseState;
   setState: (updater: (previous: WarehouseState) => WarehouseState) => void;
   showToast: (toast: Toast) => void;
   masterDataSource: "local" | "database";
-  roleCodes: UserRoleCode[];
 }) {
   const [goodsDraft, setGoodsDraft] = useState({
     code: "",
@@ -1045,10 +1051,8 @@ function MastersView({
   async function requestApi<T>(path: string, body: unknown): Promise<T> {
     const response = await fetch(path, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-warehouse-roles": roleHeaderValue(roleCodes)
-      },
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       body: JSON.stringify(body)
     });
     const payload = (await response.json()) as ApiResponse<T>;
