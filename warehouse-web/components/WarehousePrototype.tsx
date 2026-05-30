@@ -88,6 +88,13 @@ async function getJson<T>(path: string): Promise<T> {
   return payload.data;
 }
 
+function mergeInventoryItems(currentItems: InventoryItem[], updatedItems: InventoryItem[]) {
+  const updatedByBarcode = new Map(updatedItems.map((item) => [item.barcode, item]));
+  const merged = currentItems.map((item) => updatedByBarcode.get(item.barcode) ?? item);
+  const existingBarcodes = new Set(currentItems.map((item) => item.barcode));
+  return [...updatedItems.filter((item) => !existingBarcodes.has(item.barcode)), ...merged];
+}
+
 const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
   { key: "dashboard", label: "首页", icon: Home },
   { key: "masters", label: "基础资料", icon: Building2 },
@@ -302,6 +309,14 @@ export default function WarehousePrototype() {
   }, [targetWarehouseId, state.locations]);
 
   useEffect(() => {
+    if (outboundType !== "transfer" || targetWarehouseId !== sourceWarehouseId) return;
+    const nextTarget = state.warehouses.find(
+      (warehouse) => warehouse.status === "enabled" && warehouse.id !== sourceWarehouseId
+    );
+    setTargetWarehouseId(nextTarget?.id ?? "");
+  }, [outboundType, sourceWarehouseId, state.warehouses, targetWarehouseId]);
+
+  useEffect(() => {
     const firstLocation = enabledLocationsForWarehouse(returnWarehouseId, state.locations)[0];
     setReturnLocationId(firstLocation?.id ?? "");
   }, [returnWarehouseId, state.locations]);
@@ -436,9 +451,19 @@ export default function WarehousePrototype() {
     const duplicated = barcodes.find((barcode) =>
       state.inventoryItems.some((item) => item.barcode === barcode)
     );
-    if (duplicated) {
+    if (inboundSource === "factory" && duplicated) {
       showToast({ tone: "error", message: `条码 ${duplicated} 已存在` });
       return;
+    }
+    if (inboundSource === "terminal_return") {
+      const invalid = barcodes.find((barcode) => {
+        const item = state.inventoryItems.find((entry) => entry.barcode === barcode);
+        return item && item.ownerType !== "salesperson";
+      });
+      if (invalid) {
+        showToast({ tone: "error", message: `条码 ${invalid} 已在仓库库存中，不能作为终端店铺退换货入库` });
+        return;
+      }
     }
 
     try {
@@ -455,7 +480,7 @@ export default function WarehousePrototype() {
 
       setState((previous) => ({
         ...previous,
-        inventoryItems: [...result.items, ...previous.inventoryItems],
+        inventoryItems: mergeInventoryItems(previous.inventoryItems, result.items),
         movements: [...result.movements, ...previous.movements]
       }));
       await refreshWarehouseState({ preserveSelection: true });
@@ -485,12 +510,12 @@ export default function WarehousePrototype() {
       return;
     }
     if (outboundType === "transfer") {
-      if (sourceWarehouse.type !== "main") {
-        showToast({ tone: "error", message: "挪仓只能从总仓发起" });
+      if (!targetWarehouse) {
+        showToast({ tone: "error", message: "请选择有效的目标仓库" });
         return;
       }
-      if (!targetWarehouse || targetWarehouse.type !== "branch") {
-        showToast({ tone: "error", message: "挪仓目标必须是分仓" });
+      if (targetWarehouse.id === sourceWarehouse.id) {
+        showToast({ tone: "error", message: "目标仓库不能与出库仓库相同" });
         return;
       }
     }
@@ -738,7 +763,7 @@ export default function WarehousePrototype() {
               setTerminalStoreId={setTerminalStoreId}
               addBarcode={(input) =>
                 addBarcode(input, inboundBarcodes, setInboundBarcodeInput, setInboundBarcodes, {
-                  mustBeNew: true,
+                  mustBeNew: inboundSource === "factory",
                   onAfterAdd: (nextList) => {
                     const currentQty = Number(inboundQty);
                     if (!Number.isFinite(currentQty) || nextList.length > currentQty) {
@@ -1877,7 +1902,7 @@ function OutboundView(props: {
   submitOutbound: () => void;
 }) {
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
-  const branchWarehouses = enabledWarehouses.filter((warehouse) => warehouse.type === "branch");
+  const transferTargetWarehouses = enabledWarehouses.filter((warehouse) => warehouse.id !== props.sourceWarehouseId);
   const enabledSalespeople = props.state.salespeople.filter((person) => person.status === "enabled");
   return (
     <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
@@ -1900,10 +1925,10 @@ function OutboundView(props: {
           />
           {props.outboundType === "transfer" ? (
             <FieldSelect
-              label="目标分仓"
+              label="目标仓库"
               value={props.targetWarehouseId}
               onChange={props.setTargetWarehouseId}
-              options={branchWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+              options={transferTargetWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
             />
           ) : (
             <FieldSelect
@@ -1919,7 +1944,7 @@ function OutboundView(props: {
         </div>
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
           {props.outboundType === "transfer"
-            ? "挪仓规则：只能从总仓转移到分仓，提交后直接进入目标分仓库存。"
+            ? "挪仓规则：总仓和分仓可以互相挪动，提交后直接进入目标仓库库存。"
             : "销售出库规则：总仓和分仓都可以出库，只分配到销售人员名下。"}
         </div>
       </section>

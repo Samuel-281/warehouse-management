@@ -71,8 +71,8 @@ export async function submitOutbound(input: SubmitOutboundInput) {
         : null;
 
     if (input.type === "transfer") {
-      if (sourceWarehouse.type !== "MAIN") throw new Error("挪仓只能从总仓发起");
-      if (!targetWarehouse || targetWarehouse.type !== "BRANCH") throw new Error("挪仓目标必须是分仓");
+      if (!targetWarehouse) throw new Error("挪仓必须选择目标仓库");
+      if (targetWarehouse.id === sourceWarehouse.id) throw new Error("目标仓库不能与出库仓库相同");
       if (!targetLocation || targetLocation.warehouseId !== targetWarehouse.id) throw new Error("请选择有效的目标库位");
     }
 
@@ -115,7 +115,7 @@ export async function submitOutbound(input: SubmitOutboundInput) {
       const fromLabel = await warehouseLabel(tx, item.warehouseId, item.locationId);
       const toLabel =
         input.type === "transfer"
-          ? `${targetWarehouse?.name ?? "目标分仓"} / ${targetLocation?.name ?? "目标库位"}`
+          ? `${targetWarehouse?.name ?? "目标仓库"} / ${targetLocation?.name ?? "默认库位"}`
           : `销售人员：${salesperson?.name ?? "未知"}`;
 
       const updated = await tx.inventoryItem.update({
@@ -150,7 +150,7 @@ export async function submitOutbound(input: SubmitOutboundInput) {
           toLabel,
           operatorName: input.operatorName,
           occurredAt: time,
-          note: input.type === "transfer" ? "挪仓到分仓" : "销售出库"
+          note: input.type === "transfer" ? "仓库之间挪仓" : "销售出库"
         }
       });
 

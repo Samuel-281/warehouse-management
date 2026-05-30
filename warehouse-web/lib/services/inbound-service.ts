@@ -68,13 +68,20 @@ export async function submitInbound(input: SubmitInboundInput) {
       throw new Error("请选择有效的入库库位");
     }
 
-    const duplicated = await tx.inventoryItem.findMany({
+    const existingItems = await tx.inventoryItem.findMany({
       where: { barcode: { in: barcodes } },
-      select: { barcode: true }
+      orderBy: { barcode: "asc" }
     });
 
-    if (duplicated.length > 0) {
-      throw new Error(`条码 ${duplicated[0].barcode} 已存在，单件条码不可重复`);
+    if (input.source === "factory" && existingItems.length > 0) {
+      throw new Error(`条码 ${existingItems[0].barcode} 已存在，厂家到货条码不可重复入库`);
+    }
+
+    if (input.source === "terminal_return") {
+      const invalid = existingItems.find((item) => item.ownerType !== "SALESPERSON" || !item.salespersonId);
+      if (invalid) {
+        throw new Error(`条码 ${invalid.barcode} 已在系统库存中，不能作为终端店铺退换货重复入库`);
+      }
     }
 
     const terminalStore =
@@ -106,22 +113,43 @@ export async function submitInbound(input: SubmitInboundInput) {
 
     const items: InventoryItem[] = [];
     const movements: StockMovement[] = [];
+    const existingItemByBarcode = new Map(existingItems.map((item) => [item.barcode, item]));
 
     for (const barcode of barcodes) {
-      const item = await tx.inventoryItem.create({
-        data: {
-          barcode,
-          goodsId: goods.id,
-          ownerType: "WAREHOUSE",
-          warehouseId: warehouse.id,
-          locationId: location.id,
-          status: "IN_STOCK",
-          productionDate,
-          shelfLifeDate,
-          inboundSource: source,
-          lastMovedAt: time
-        }
-      });
+      const existingItem = existingItemByBarcode.get(barcode);
+      if (existingItem && existingItem.goodsId !== goods.id) {
+        throw new Error(`条码 ${barcode} 已绑定其他货物，不能按当前货物入库`);
+      }
+
+      const item = existingItem
+        ? await tx.inventoryItem.update({
+            where: { id: existingItem.id },
+            data: {
+              ownerType: "WAREHOUSE",
+              warehouseId: warehouse.id,
+              locationId: location.id,
+              salespersonId: null,
+              status: "IN_STOCK",
+              productionDate,
+              shelfLifeDate,
+              inboundSource: source,
+              lastMovedAt: time
+            }
+          })
+        : await tx.inventoryItem.create({
+            data: {
+              barcode,
+              goodsId: goods.id,
+              ownerType: "WAREHOUSE",
+              warehouseId: warehouse.id,
+              locationId: location.id,
+              status: "IN_STOCK",
+              productionDate,
+              shelfLifeDate,
+              inboundSource: source,
+              lastMovedAt: time
+            }
+          });
       const movement = await tx.stockMovement.create({
         data: {
           itemId: item.id,
