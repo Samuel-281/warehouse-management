@@ -23,6 +23,11 @@ export type CurrentUser = {
   }>;
 };
 
+export type ManagedUser = CurrentUser & {
+  status: "enabled" | "disabled";
+  createdAt: string;
+};
+
 export type Goods = {
   id: string;
   code: string;

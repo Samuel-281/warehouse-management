@@ -206,8 +206,8 @@ export async function createBranchWarehouse(input: CreateWarehouseInput) {
       data: {
         warehouseId: warehouse.id,
         zone: "默认区",
-        code: `${code}-01`,
-        name: `${name}默认库位`,
+        code: "DEFAULT",
+        name: "默认库位",
         status: "ENABLED"
       }
     });

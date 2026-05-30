@@ -28,6 +28,7 @@ import type {
   CurrentUser,
   InboundSource,
   InventoryItem,
+  ManagedUser,
   OperationLog,
   OutboundType,
   StockMovement,
@@ -351,63 +352,6 @@ export default function WarehousePrototype() {
     showToast({ tone: "info", message: "已退出登录" });
   }
 
-  async function resetDemoData() {
-    const confirmation = window.prompt(
-      masterDataSource === "database"
-        ? `当前操作会清空页面临时状态，并从 PostgreSQL 重新加载演示数据。不会清空数据库。\n\n如确认继续，请输入「${resetConfirmationText}」。`
-        : `当前操作会重置本地浏览器里的演示数据。\n\n如确认继续，请输入「${resetConfirmationText}」。`
-    );
-
-    if (confirmation?.trim() !== resetConfirmationText) {
-      showToast({ tone: "info", message: "未输入正确确认文字，已取消重置" });
-      return;
-    }
-
-    if (masterDataSource === "database") {
-      window.localStorage.removeItem(STORAGE_KEY);
-      await refreshWarehouseState({ preserveSelection: false, notify: true });
-      setActiveView("dashboard");
-      setInboundSource("factory");
-      setInboundQty("1");
-      setInboundBarcodeInput("");
-      setInboundBarcodes([]);
-      setProductionDate("");
-      setOutboundType("transfer");
-      setOutboundBarcodeInput("");
-      setOutboundBarcodes([]);
-      setReturnBarcodeInput("");
-      setReturnBarcodes([]);
-      return;
-    }
-
-    const resetState = cloneInitialState(initialState);
-    setState(resetState);
-    setActiveView("dashboard");
-    setInboundSource("factory");
-    setInboundWarehouseId("wh-main");
-    setInboundLocationId("loc-main-a1");
-    setInboundGoodsId("goods-hj-001");
-    setInboundQty("1");
-    setInboundBarcodeInput("");
-    setInboundBarcodes([]);
-    setProductionDate("");
-    setTerminalStoreId("store-001");
-    setOutboundType("transfer");
-    setSourceWarehouseId("wh-main");
-    setTargetWarehouseId("wh-county-a");
-    setTargetLocationId("loc-county-a1");
-    setSalespersonId("sp-001");
-    setOutboundBarcodeInput("");
-    setOutboundBarcodes([]);
-    setReturnWarehouseId("wh-main");
-    setReturnLocationId("loc-main-a1");
-    setReturnBarcodeInput("");
-    setReturnBarcodes([]);
-    setInventoryFilters({ keyword: "", warehouseId: "all", salespersonId: "all", goodsId: "all" });
-    setSelectedBarcode("HJ202605290001");
-    showToast({ tone: "info", message: "演示数据已重置" });
-  }
-
   function addBarcode(
     input: string,
     currentList: string[],
@@ -666,10 +610,6 @@ export default function WarehousePrototype() {
             <Barcode className="h-4 w-4" />
             PDA 草图
           </Link>
-          <button className="secondary-button w-full" onClick={resetDemoData}>
-            <RotateCcw className="h-4 w-4" />
-            重置页面数据
-          </button>
         </div>
       </aside>
 
@@ -697,10 +637,6 @@ export default function WarehousePrototype() {
               >
                 <RotateCcw className="h-4 w-4" />
                 {refreshing ? "刷新中" : "刷新数据"}
-              </button>
-              <button className="secondary-button" onClick={resetDemoData}>
-                <RotateCcw className="h-4 w-4" />
-                重置页面
               </button>
               <button className="secondary-button" onClick={logout}>
                 <LogOut className="h-4 w-4" />
@@ -756,8 +692,6 @@ export default function WarehousePrototype() {
               setInboundSource={setInboundSource}
               inboundWarehouseId={inboundWarehouseId}
               setInboundWarehouseId={setInboundWarehouseId}
-              inboundLocationId={inboundLocationId}
-              setInboundLocationId={setInboundLocationId}
               inboundGoodsId={inboundGoodsId}
               setInboundGoodsId={setInboundGoodsId}
               inboundQty={inboundQty}
@@ -793,8 +727,6 @@ export default function WarehousePrototype() {
               setSourceWarehouseId={setSourceWarehouseId}
               targetWarehouseId={targetWarehouseId}
               setTargetWarehouseId={setTargetWarehouseId}
-              targetLocationId={targetLocationId}
-              setTargetLocationId={setTargetLocationId}
               salespersonId={salespersonId}
               setSalespersonId={setSalespersonId}
               outboundBarcodeInput={outboundBarcodeInput}
@@ -812,8 +744,6 @@ export default function WarehousePrototype() {
               state={state}
               returnWarehouseId={returnWarehouseId}
               setReturnWarehouseId={setReturnWarehouseId}
-              returnLocationId={returnLocationId}
-              setReturnLocationId={setReturnLocationId}
               returnBarcodeInput={returnBarcodeInput}
               setReturnBarcodeInput={setReturnBarcodeInput}
               returnBarcodes={returnBarcodes}
@@ -1490,8 +1420,6 @@ function InboundView(props: {
   setInboundSource: (value: InboundSource) => void;
   inboundWarehouseId: string;
   setInboundWarehouseId: (value: string) => void;
-  inboundLocationId: string;
-  setInboundLocationId: (value: string) => void;
   inboundGoodsId: string;
   setInboundGoodsId: (value: string) => void;
   inboundQty: string;
@@ -1508,7 +1436,6 @@ function InboundView(props: {
   submitInbound: () => void;
 }) {
   const selectedGoods = props.state.goods.find((goods) => goods.id === props.inboundGoodsId);
-  const inboundLocations = enabledLocationsForWarehouse(props.inboundWarehouseId, props.state.locations);
   const shelfLifePreview =
     props.inboundSource === "terminal_return" &&
     selectedGoods?.category === "health_wine" &&
@@ -1535,12 +1462,6 @@ function InboundView(props: {
             value={props.inboundWarehouseId}
             onChange={props.setInboundWarehouseId}
             options={props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
-          />
-          <FieldSelect
-            label="库位"
-            value={props.inboundLocationId}
-            onChange={props.setInboundLocationId}
-            options={inboundLocations.map((location) => ({ value: location.id, label: location.name }))}
           />
           <FieldSelect
             label="货物"
@@ -1627,8 +1548,6 @@ function OutboundView(props: {
   setSourceWarehouseId: (value: string) => void;
   targetWarehouseId: string;
   setTargetWarehouseId: (value: string) => void;
-  targetLocationId: string;
-  setTargetLocationId: (value: string) => void;
   salespersonId: string;
   setSalespersonId: (value: string) => void;
   outboundBarcodeInput: string;
@@ -1639,7 +1558,6 @@ function OutboundView(props: {
   submitOutbound: () => void;
 }) {
   const branchWarehouses = props.state.warehouses.filter((warehouse) => warehouse.type === "branch");
-  const targetLocations = enabledLocationsForWarehouse(props.targetWarehouseId, props.state.locations);
   return (
     <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
       <section className="panel p-5">
@@ -1660,20 +1578,12 @@ function OutboundView(props: {
             options={props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
           />
           {props.outboundType === "transfer" ? (
-            <>
-              <FieldSelect
-                label="目标分仓"
-                value={props.targetWarehouseId}
-                onChange={props.setTargetWarehouseId}
-                options={branchWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
-              />
-              <FieldSelect
-                label="目标库位"
-                value={props.targetLocationId}
-                onChange={props.setTargetLocationId}
-                options={targetLocations.map((location) => ({ value: location.id, label: location.name }))}
-              />
-            </>
+            <FieldSelect
+              label="目标分仓"
+              value={props.targetWarehouseId}
+              onChange={props.setTargetWarehouseId}
+              options={branchWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+            />
           ) : (
             <FieldSelect
               label="销售人员"
@@ -1716,8 +1626,6 @@ function SalesReturnView(props: {
   state: WarehouseState;
   returnWarehouseId: string;
   setReturnWarehouseId: (value: string) => void;
-  returnLocationId: string;
-  setReturnLocationId: (value: string) => void;
   returnBarcodeInput: string;
   setReturnBarcodeInput: (value: string) => void;
   returnBarcodes: string[];
@@ -1725,23 +1633,16 @@ function SalesReturnView(props: {
   addBarcode: (input: string) => void;
   submitSalesReturn: () => void;
 }) {
-  const returnLocations = enabledLocationsForWarehouse(props.returnWarehouseId, props.state.locations);
   return (
     <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
       <section className="panel p-5">
         <SectionHeader icon={Undo2} title="销售退回设置" compact />
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4">
           <FieldSelect
             label="回流仓库"
             value={props.returnWarehouseId}
             onChange={props.setReturnWarehouseId}
             options={props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
-          />
-          <FieldSelect
-            label="回流库位"
-            value={props.returnLocationId}
-            onChange={props.setReturnLocationId}
-            options={returnLocations.map((location) => ({ value: location.id, label: location.name }))}
           />
         </div>
         <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
@@ -1778,12 +1679,47 @@ function SystemMaintenanceView({
   const [confirmation, setConfirmation] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [logs, setLogs] = useState<OperationLog[]>([]);
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [userDraft, setUserDraft] = useState({
+    username: "",
+    displayName: "",
+    password: "demo123456",
+    roleCode: "WAREHOUSE_ADMIN" as UserRoleCode
+  });
 
   useEffect(() => {
     getJson<OperationLog[]>("/api/operation-logs")
       .then(setLogs)
       .catch(() => undefined);
+    getJson<ManagedUser[]>("/api/users")
+      .then(setUsers)
+      .catch(() => undefined);
   }, []);
+
+  async function createManagedUser() {
+    const username = userDraft.username.trim();
+    const displayName = userDraft.displayName.trim();
+    const password = userDraft.password.trim();
+    if (!username || !displayName || !password) {
+      showToast({ tone: "error", message: "请完整填写账号、姓名和密码" });
+      return;
+    }
+
+    try {
+      const created = await postJson<ManagedUser>("/api/users", {
+        username,
+        displayName,
+        password,
+        roleCode: userDraft.roleCode
+      });
+      setUsers((previous) => [created, ...previous]);
+      setUserDraft({ username: "", displayName: "", password: "demo123456", roleCode: "WAREHOUSE_ADMIN" });
+      showToast({ tone: "success", message: "账号已创建" });
+      setLogs(await getJson<OperationLog[]>("/api/operation-logs"));
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "创建账号失败" });
+    }
+  }
 
   async function resetDemoDatabaseFromWeb() {
     if (confirmation.trim() !== resetConfirmationText) {
@@ -1804,27 +1740,91 @@ function SystemMaintenanceView({
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
-      <section className="panel p-5">
-        <SectionHeader icon={ShieldCheck} title="高危维护" compact />
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
-          该操作会清空本地演示数据库并重新写入初始演示数据。执行后当前登录会话会失效，需要重新登录。
-        </div>
-        <label className="label mt-5" htmlFor="reset-confirmation">
-          输入确认文字
-        </label>
-        <input
-          className="field"
-          id="reset-confirmation"
-          placeholder={resetConfirmationText}
-          value={confirmation}
-          onChange={(event) => setConfirmation(event.target.value)}
-        />
-        <button className="primary-button mt-4 w-full" disabled={submitting} onClick={resetDemoDatabaseFromWeb}>
-          <RotateCcw className="h-4 w-4" />
-          {submitting ? "正在重置" : "重置演示数据库"}
-        </button>
-      </section>
+    <div className="grid gap-5">
+      <div className="grid gap-5 xl:grid-cols-2">
+        <section className="panel p-5">
+          <SectionHeader icon={Users} title="账号管理" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField
+              label="登录账号"
+              value={userDraft.username}
+              onChange={(value) => setUserDraft({ ...userDraft, username: value })}
+              placeholder="如 zhangsan"
+            />
+            <TextField
+              label="显示姓名"
+              value={userDraft.displayName}
+              onChange={(value) => setUserDraft({ ...userDraft, displayName: value })}
+              placeholder="如 张三"
+            />
+            <TextField
+              label="初始密码"
+              value={userDraft.password}
+              onChange={(value) => setUserDraft({ ...userDraft, password: value })}
+              placeholder="初始密码"
+            />
+            <FieldSelect
+              label="角色"
+              value={userDraft.roleCode}
+              onChange={(value) => setUserDraft({ ...userDraft, roleCode: value as UserRoleCode })}
+              options={[
+                { value: "WAREHOUSE_ADMIN", label: roleLabels.WAREHOUSE_ADMIN },
+                { value: "INVENTORY_VIEWER", label: roleLabels.INVENTORY_VIEWER },
+                { value: "SUPER_ADMIN", label: roleLabels.SUPER_ADMIN }
+              ]}
+            />
+          </div>
+          <button className="primary-button mt-4 w-full" onClick={createManagedUser}>
+            <Check className="h-4 w-4" />
+            新增账号
+          </button>
+          <div className="mt-5 overflow-x-auto">
+            <table className="w-full min-w-[560px]">
+              <thead className="table-head">
+                <tr>
+                  <th className="px-4 py-3">账号</th>
+                  <th className="px-4 py-3">姓名</th>
+                  <th className="px-4 py-3">角色</th>
+                  <th className="px-4 py-3">状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id}>
+                    <td className="table-cell font-mono text-work">{user.username}</td>
+                    <td className="table-cell">{user.displayName}</td>
+                    <td className="table-cell">{user.roles.map((role) => roleLabels[role.code]).join("、")}</td>
+                    <td className="table-cell">
+                      <StatusBadge label={user.status === "enabled" ? "启用" : "停用"} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel p-5">
+          <SectionHeader icon={ShieldCheck} title="高危维护" compact />
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
+            该操作会清空本地演示数据库并重新写入初始演示数据。执行后当前登录会话会失效，需要重新登录。
+          </div>
+          <label className="label mt-5" htmlFor="reset-confirmation">
+            输入确认文字
+          </label>
+          <input
+            className="field"
+            id="reset-confirmation"
+            placeholder={resetConfirmationText}
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+          />
+          <button className="primary-button mt-4 w-full" disabled={submitting} onClick={resetDemoDatabaseFromWeb}>
+            <RotateCcw className="h-4 w-4" />
+            {submitting ? "正在重置" : "重置演示数据库"}
+          </button>
+        </section>
+      </div>
 
       <section className="panel overflow-hidden">
         <SectionHeader icon={ClipboardList} title="最近操作日志" />
