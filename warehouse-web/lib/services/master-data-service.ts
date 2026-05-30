@@ -71,6 +71,7 @@ type DbTerminalStore = {
   contact: string;
   phone: string;
   address: string;
+  status: DbRecordStatus;
 };
 
 type DbInventoryItem = {
@@ -129,6 +130,22 @@ export type CreateTerminalStoreInput = {
   address: string;
 };
 
+export type UpdateGoodsInput = Partial<CreateGoodsInput> & {
+  status?: Goods["status"];
+};
+
+export type UpdateWarehouseInput = Partial<CreateWarehouseInput> & {
+  status?: Warehouse["status"];
+};
+
+export type UpdateSalespersonInput = Partial<CreateSalespersonInput> & {
+  status?: Salesperson["status"];
+};
+
+export type UpdateTerminalStoreInput = Partial<CreateTerminalStoreInput> & {
+  status?: TerminalStore["status"];
+};
+
 export async function listMasterData(): Promise<WarehouseState> {
   const prisma = getPrisma();
   const [goods, warehouses, locations, salespeople, terminalStores, inventoryItems, movements] = await Promise.all([
@@ -171,6 +188,41 @@ export async function createGoods(input: CreateGoodsInput) {
   });
 
   return mapGoods(created);
+}
+
+export async function updateGoods(id: string, input: UpdateGoodsInput) {
+  assertRequired(id, "货物");
+  const data: {
+    code?: string;
+    name?: string;
+    category?: DbGoodsCategory;
+    unit?: string;
+    spec?: string;
+    status?: DbRecordStatus;
+  } = {};
+
+  if (input.code !== undefined) {
+    assertRequired(input.code, "货物编码");
+    data.code = input.code.trim();
+  }
+  if (input.name !== undefined) {
+    assertRequired(input.name, "货物名称");
+    data.name = input.name.trim();
+  }
+  if (input.category !== undefined) data.category = toDbGoodsCategory(input.category);
+  if (input.unit !== undefined) {
+    assertRequired(input.unit, "单位");
+    data.unit = input.unit.trim();
+  }
+  if (input.spec !== undefined) {
+    assertRequired(input.spec, "规格");
+    data.spec = input.spec.trim();
+  }
+  if (input.status !== undefined) data.status = toDbRecordStatus(input.status);
+
+  const prisma = getPrisma();
+  const updated = await prisma.goods.update({ where: { id }, data });
+  return mapGoods(updated);
 }
 
 export async function createBranchWarehouse(input: CreateWarehouseInput) {
@@ -219,6 +271,34 @@ export async function createBranchWarehouse(input: CreateWarehouseInput) {
   });
 }
 
+export async function updateWarehouse(id: string, input: UpdateWarehouseInput) {
+  assertRequired(id, "仓库");
+  const data: {
+    code?: string;
+    name?: string;
+    manager?: string;
+    status?: DbRecordStatus;
+  } = {};
+
+  if (input.code !== undefined) {
+    assertRequired(input.code, "仓库编码");
+    data.code = input.code.trim();
+  }
+  if (input.name !== undefined) {
+    assertRequired(input.name, "仓库名称");
+    data.name = input.name.trim();
+  }
+  if (input.manager !== undefined) {
+    assertRequired(input.manager, "负责人");
+    data.manager = input.manager.trim();
+  }
+  if (input.status !== undefined) data.status = toDbRecordStatus(input.status);
+
+  const prisma = getPrisma();
+  const updated = await prisma.warehouse.update({ where: { id }, data });
+  return mapWarehouse(updated);
+}
+
 export async function createSalesperson(input: CreateSalespersonInput) {
   assertRequired(input.code, "销售人员编码");
   assertRequired(input.name, "销售人员姓名");
@@ -237,6 +317,39 @@ export async function createSalesperson(input: CreateSalespersonInput) {
   });
 
   return mapSalesperson(created);
+}
+
+export async function updateSalesperson(id: string, input: UpdateSalespersonInput) {
+  assertRequired(id, "销售人员");
+  const data: {
+    code?: string;
+    name?: string;
+    phone?: string;
+    region?: string;
+    status?: DbRecordStatus;
+  } = {};
+
+  if (input.code !== undefined) {
+    assertRequired(input.code, "销售人员编码");
+    data.code = input.code.trim();
+  }
+  if (input.name !== undefined) {
+    assertRequired(input.name, "销售人员姓名");
+    data.name = input.name.trim();
+  }
+  if (input.phone !== undefined) {
+    assertRequired(input.phone, "手机号");
+    data.phone = input.phone.trim();
+  }
+  if (input.region !== undefined) {
+    assertRequired(input.region, "区域");
+    data.region = input.region.trim();
+  }
+  if (input.status !== undefined) data.status = toDbRecordStatus(input.status);
+
+  const prisma = getPrisma();
+  const updated = await prisma.salesperson.update({ where: { id }, data });
+  return mapSalesperson(updated);
 }
 
 export async function createTerminalStore(input: CreateTerminalStoreInput) {
@@ -259,6 +372,39 @@ export async function createTerminalStore(input: CreateTerminalStoreInput) {
   return mapTerminalStore(created);
 }
 
+export async function updateTerminalStore(id: string, input: UpdateTerminalStoreInput) {
+  assertRequired(id, "终端店铺");
+  const data: {
+    name?: string;
+    contact?: string;
+    phone?: string;
+    address?: string;
+    status?: DbRecordStatus;
+  } = {};
+
+  if (input.name !== undefined) {
+    assertRequired(input.name, "店铺名称");
+    data.name = input.name.trim();
+  }
+  if (input.contact !== undefined) {
+    assertRequired(input.contact, "联系人");
+    data.contact = input.contact.trim();
+  }
+  if (input.phone !== undefined) {
+    assertRequired(input.phone, "电话");
+    data.phone = input.phone.trim();
+  }
+  if (input.address !== undefined) {
+    assertRequired(input.address, "地址");
+    data.address = input.address.trim();
+  }
+  if (input.status !== undefined) data.status = toDbRecordStatus(input.status);
+
+  const prisma = getPrisma();
+  const updated = await prisma.terminalStore.update({ where: { id }, data });
+  return mapTerminalStore(updated);
+}
+
 function assertRequired(value: string, label: string) {
   if (!value?.trim()) {
     throw new Error(`${label}不能为空`);
@@ -267,6 +413,10 @@ function assertRequired(value: string, label: string) {
 
 function mapStatus(status: DbRecordStatus) {
   return status === "ENABLED" ? "enabled" : "disabled";
+}
+
+function toDbRecordStatus(status: "enabled" | "disabled"): DbRecordStatus {
+  return status === "enabled" ? "ENABLED" : "DISABLED";
 }
 
 function mapGoodsCategory(category: DbGoodsCategory): GoodsCategory {
@@ -365,7 +515,8 @@ function mapTerminalStore(store: DbTerminalStore): TerminalStore {
     name: store.name,
     contact: store.contact,
     phone: store.phone,
-    address: store.address
+    address: store.address,
+    status: mapStatus(store.status)
   };
 }
 

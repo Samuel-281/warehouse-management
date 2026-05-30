@@ -72,6 +72,7 @@ export type TerminalStore = {
   contact: string;
   phone: string;
   address: string;
+  status: "enabled" | "disabled";
 };
 
 export type InventoryItem = {

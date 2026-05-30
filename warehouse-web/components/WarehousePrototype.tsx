@@ -12,6 +12,8 @@ import {
   LogIn,
   LogOut,
   PackageCheck,
+  Pencil,
+  Power,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -21,7 +23,7 @@ import {
   Warehouse
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { initialState } from "@/lib/demo-data";
 import { hasAnyRole } from "@/lib/role-utils";
 import type {
@@ -1010,10 +1012,14 @@ function MastersView({
     region: ""
   });
   const [storeDraft, setStoreDraft] = useState({ name: "", contact: "", phone: "", address: "" });
+  const [editingGoods, setEditingGoods] = useState<WarehouseState["goods"][number] | null>(null);
+  const [editingWarehouse, setEditingWarehouse] = useState<WarehouseState["warehouses"][number] | null>(null);
+  const [editingSalesperson, setEditingSalesperson] = useState<WarehouseState["salespeople"][number] | null>(null);
+  const [editingStore, setEditingStore] = useState<WarehouseState["terminalStores"][number] | null>(null);
 
-  async function requestApi<T>(path: string, body: unknown): Promise<T> {
+  async function requestApi<T>(path: string, body: unknown, method = "POST"): Promise<T> {
     const response = await fetch(path, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       body: JSON.stringify(body)
@@ -1025,6 +1031,16 @@ function MastersView({
     }
 
     return payload.data;
+  }
+
+  function replaceRecord<K extends "goods" | "warehouses" | "salespeople" | "terminalStores">(
+    key: K,
+    record: WarehouseState[K][number]
+  ) {
+    setState((previous) => ({
+      ...previous,
+      [key]: previous[key].map((item) => (item.id === record.id ? record : item))
+    }));
   }
 
   async function addGoods() {
@@ -1150,11 +1166,149 @@ function MastersView({
     }
   }
 
+  async function saveGoods() {
+    if (!editingGoods) return;
+    try {
+      const updated = await requestApi<WarehouseState["goods"][number]>(
+        `/api/goods/${editingGoods.id}`,
+        editingGoods,
+        "PATCH"
+      );
+      replaceRecord("goods", updated);
+      setEditingGoods(null);
+      showToast({ tone: "success", message: "货物资料已更新" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "更新货物失败" });
+    }
+  }
+
+  async function saveWarehouse() {
+    if (!editingWarehouse) return;
+    try {
+      const updated = await requestApi<WarehouseState["warehouses"][number]>(
+        `/api/warehouses/${editingWarehouse.id}`,
+        editingWarehouse,
+        "PATCH"
+      );
+      replaceRecord("warehouses", updated);
+      setEditingWarehouse(null);
+      showToast({ tone: "success", message: "仓库资料已更新" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "更新仓库失败" });
+    }
+  }
+
+  async function saveSalesperson() {
+    if (!editingSalesperson) return;
+    try {
+      const updated = await requestApi<WarehouseState["salespeople"][number]>(
+        `/api/salespeople/${editingSalesperson.id}`,
+        editingSalesperson,
+        "PATCH"
+      );
+      replaceRecord("salespeople", updated);
+      setEditingSalesperson(null);
+      showToast({ tone: "success", message: "销售人员资料已更新" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "更新销售人员失败" });
+    }
+  }
+
+  async function saveStore() {
+    if (!editingStore) return;
+    try {
+      const updated = await requestApi<WarehouseState["terminalStores"][number]>(
+        `/api/terminal-stores/${editingStore.id}`,
+        editingStore,
+        "PATCH"
+      );
+      replaceRecord("terminalStores", updated);
+      setEditingStore(null);
+      showToast({ tone: "success", message: "终端店铺资料已更新" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "更新终端店铺失败" });
+    }
+  }
+
+  async function toggleMasterStatus<
+    K extends "goods" | "warehouses" | "salespeople" | "terminalStores",
+    T extends WarehouseState[K][number] & { status: "enabled" | "disabled" }
+  >(key: K, apiPath: string, item: T) {
+    const status = item.status === "enabled" ? "disabled" : "enabled";
+    try {
+      const updated = await requestApi<T>(`${apiPath}/${item.id}`, { status }, "PATCH");
+      replaceRecord(key, updated);
+      showToast({ tone: "success", message: status === "enabled" ? "资料已启用" : "资料已停用" });
+    } catch (error) {
+      showToast({ tone: "error", message: error instanceof Error ? error.message : "状态更新失败" });
+    }
+  }
+
   return (
     <div className="grid gap-5">
       <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
         基础资料来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地原型数据"}
       </div>
+      {editingGoods ? (
+        <section className="panel p-5">
+          <SectionHeader icon={Boxes} title="编辑货物资料" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField label="货物编码" value={editingGoods.code} onChange={(code) => setEditingGoods({ ...editingGoods, code })} />
+            <TextField label="货物名称" value={editingGoods.name} onChange={(name) => setEditingGoods({ ...editingGoods, name })} />
+            <FieldSelect
+              label="货物大类"
+              value={editingGoods.category}
+              onChange={(category) => setEditingGoods({ ...editingGoods, category: category as WarehouseState["goods"][number]["category"] })}
+              options={[
+                { value: "health_wine", label: "保健酒" },
+                { value: "baijiu", label: "白酒" }
+              ]}
+            />
+            <TextField label="单位" value={editingGoods.unit} onChange={(unit) => setEditingGoods({ ...editingGoods, unit })} />
+            <TextField label="规格" value={editingGoods.spec} onChange={(spec) => setEditingGoods({ ...editingGoods, spec })} />
+          </div>
+          <FormActions onCancel={() => setEditingGoods(null)} onSave={saveGoods} />
+        </section>
+      ) : null}
+      {editingWarehouse ? (
+        <section className="panel p-5">
+          <SectionHeader icon={Warehouse} title="编辑仓库资料" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField label="仓库编码" value={editingWarehouse.code} onChange={(code) => setEditingWarehouse({ ...editingWarehouse, code })} />
+            <TextField label="仓库名称" value={editingWarehouse.name} onChange={(name) => setEditingWarehouse({ ...editingWarehouse, name })} />
+            <TextField label="负责人" value={editingWarehouse.manager} onChange={(manager) => setEditingWarehouse({ ...editingWarehouse, manager })} />
+            <div>
+              <label className="label">仓库类型</label>
+              <div className="field bg-slate-50 text-slate-500">{editingWarehouse.type === "main" ? "总仓" : "分仓"}</div>
+            </div>
+          </div>
+          <FormActions onCancel={() => setEditingWarehouse(null)} onSave={saveWarehouse} />
+        </section>
+      ) : null}
+      {editingSalesperson ? (
+        <section className="panel p-5">
+          <SectionHeader icon={Users} title="编辑销售人员" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField label="人员编码" value={editingSalesperson.code} onChange={(code) => setEditingSalesperson({ ...editingSalesperson, code })} />
+            <TextField label="姓名" value={editingSalesperson.name} onChange={(name) => setEditingSalesperson({ ...editingSalesperson, name })} />
+            <TextField label="手机号" value={editingSalesperson.phone} onChange={(phone) => setEditingSalesperson({ ...editingSalesperson, phone })} />
+            <TextField label="区域" value={editingSalesperson.region} onChange={(region) => setEditingSalesperson({ ...editingSalesperson, region })} />
+          </div>
+          <FormActions onCancel={() => setEditingSalesperson(null)} onSave={saveSalesperson} />
+        </section>
+      ) : null}
+      {editingStore ? (
+        <section className="panel p-5">
+          <SectionHeader icon={Building2} title="编辑终端店铺" compact />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <TextField label="店铺名称" value={editingStore.name} onChange={(name) => setEditingStore({ ...editingStore, name })} />
+            <TextField label="联系人" value={editingStore.contact} onChange={(contact) => setEditingStore({ ...editingStore, contact })} />
+            <TextField label="电话" value={editingStore.phone} onChange={(phone) => setEditingStore({ ...editingStore, phone })} />
+            <TextField label="地址" value={editingStore.address} onChange={(address) => setEditingStore({ ...editingStore, address })} />
+          </div>
+          <FormActions onCancel={() => setEditingStore(null)} onSave={saveStore} />
+        </section>
+      ) : null}
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="panel p-5">
           <SectionHeader icon={Boxes} title="新增货物" compact />
@@ -1304,44 +1458,74 @@ function MastersView({
       <MasterTable
         title="货物资料"
         icon={Boxes}
-        headers={["编码", "名称", "大类", "规格", "状态"]}
+        headers={["编码", "名称", "大类", "规格", "状态", "操作"]}
         rows={state.goods.map((item) => [
           item.code,
           item.name,
           formatCategory(item.category),
           item.spec,
-          item.status === "enabled" ? "启用" : "停用"
+          <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
+          <MasterActions
+            key={`${item.id}-actions`}
+            status={item.status}
+            onEdit={() => setEditingGoods(item)}
+            onToggle={() => toggleMasterStatus("goods", "/api/goods", item)}
+          />
         ])}
       />
       <MasterTable
         title="仓库资料"
         icon={Warehouse}
-        headers={["编码", "名称", "类型", "负责人", "状态"]}
+        headers={["编码", "名称", "类型", "负责人", "状态", "操作"]}
         rows={state.warehouses.map((item) => [
           item.code,
           item.name,
           item.type === "main" ? "总仓" : "分仓",
           item.manager,
-          item.status === "enabled" ? "启用" : "停用"
+          <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
+          <MasterActions
+            key={`${item.id}-actions`}
+            status={item.status}
+            onEdit={() => setEditingWarehouse(item)}
+            onToggle={() => toggleMasterStatus("warehouses", "/api/warehouses", item)}
+          />
         ])}
       />
       <MasterTable
         title="销售人员"
         icon={Users}
-        headers={["编码", "姓名", "手机号", "区域", "状态"]}
+        headers={["编码", "姓名", "手机号", "区域", "状态", "操作"]}
         rows={state.salespeople.map((item) => [
           item.code,
           item.name,
           item.phone,
           item.region,
-          item.status === "enabled" ? "启用" : "停用"
+          <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
+          <MasterActions
+            key={`${item.id}-actions`}
+            status={item.status}
+            onEdit={() => setEditingSalesperson(item)}
+            onToggle={() => toggleMasterStatus("salespeople", "/api/salespeople", item)}
+          />
         ])}
       />
       <MasterTable
         title="终端店铺"
         icon={Building2}
-        headers={["店铺", "联系人", "电话", "地址"]}
-        rows={state.terminalStores.map((item) => [item.name, item.contact, item.phone, item.address])}
+        headers={["店铺", "联系人", "电话", "地址", "状态", "操作"]}
+        rows={state.terminalStores.map((item) => [
+          item.name,
+          item.contact,
+          item.phone,
+          item.address,
+          <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
+          <MasterActions
+            key={`${item.id}-actions`}
+            status={item.status}
+            onEdit={() => setEditingStore(item)}
+            onToggle={() => toggleMasterStatus("terminalStores", "/api/terminal-stores", item)}
+          />
+        ])}
       />
       </div>
     </div>
@@ -1381,7 +1565,7 @@ function MasterTable({
   title: string;
   icon: typeof Home;
   headers: string[];
-  rows: string[][];
+  rows: ReactNode[][];
 }) {
   return (
     <section className="panel overflow-hidden">
@@ -1398,10 +1582,10 @@ function MasterTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.join("-")} className="hover:bg-slate-50">
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex} className="hover:bg-slate-50">
                 {row.map((cell, index) => (
-                  <td className="table-cell" key={`${row[0]}-${cell}-${index}`}>
+                  <td className="table-cell" key={`${rowIndex}-${index}`}>
                     {cell}
                   </td>
                 ))}
@@ -1411,6 +1595,43 @@ function MasterTable({
         </table>
       </div>
     </section>
+  );
+}
+
+function MasterActions({
+  status,
+  onEdit,
+  onToggle
+}: {
+  status: "enabled" | "disabled";
+  onEdit: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      <button className="secondary-button px-3 py-2 text-xs" onClick={onEdit}>
+        <Pencil className="h-3.5 w-3.5" />
+        编辑
+      </button>
+      <button className="secondary-button px-3 py-2 text-xs" onClick={onToggle}>
+        <Power className="h-3.5 w-3.5" />
+        {status === "enabled" ? "停用" : "启用"}
+      </button>
+    </div>
+  );
+}
+
+function FormActions({ onCancel, onSave }: { onCancel: () => void; onSave: () => void }) {
+  return (
+    <div className="mt-5 flex flex-wrap gap-3">
+      <button className="primary-button" onClick={onSave}>
+        <Check className="h-4 w-4" />
+        保存修改
+      </button>
+      <button className="secondary-button" onClick={onCancel}>
+        取消
+      </button>
+    </div>
   );
 }
 
@@ -1436,6 +1657,9 @@ function InboundView(props: {
   submitInbound: () => void;
 }) {
   const selectedGoods = props.state.goods.find((goods) => goods.id === props.inboundGoodsId);
+  const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
+  const enabledGoods = props.state.goods.filter((goods) => goods.status === "enabled");
+  const enabledStores = props.state.terminalStores.filter((store) => store.status === "enabled");
   const shelfLifePreview =
     props.inboundSource === "terminal_return" &&
     selectedGoods?.category === "health_wine" &&
@@ -1461,13 +1685,13 @@ function InboundView(props: {
             label="入库仓库"
             value={props.inboundWarehouseId}
             onChange={props.setInboundWarehouseId}
-            options={props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+            options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
           />
           <FieldSelect
             label="货物"
             value={props.inboundGoodsId}
             onChange={props.setInboundGoodsId}
-            options={props.state.goods.map((goods) => ({
+            options={enabledGoods.map((goods) => ({
               value: goods.id,
               label: `${goods.name} / ${formatCategory(goods.category)}`
             }))}
@@ -1491,7 +1715,7 @@ function InboundView(props: {
                 label="终端店铺"
                 value={props.terminalStoreId}
                 onChange={props.setTerminalStoreId}
-                options={props.state.terminalStores.map((store) => ({ value: store.id, label: store.name }))}
+                options={enabledStores.map((store) => ({ value: store.id, label: store.name }))}
               />
               <div>
                 <label className="label" htmlFor="productionDate">
@@ -1557,7 +1781,9 @@ function OutboundView(props: {
   addBarcode: (input: string) => void;
   submitOutbound: () => void;
 }) {
-  const branchWarehouses = props.state.warehouses.filter((warehouse) => warehouse.type === "branch");
+  const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
+  const branchWarehouses = enabledWarehouses.filter((warehouse) => warehouse.type === "branch");
+  const enabledSalespeople = props.state.salespeople.filter((person) => person.status === "enabled");
   return (
     <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
       <section className="panel p-5">
@@ -1575,7 +1801,7 @@ function OutboundView(props: {
             label="出库仓库"
             value={props.sourceWarehouseId}
             onChange={props.setSourceWarehouseId}
-            options={props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+            options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
           />
           {props.outboundType === "transfer" ? (
             <FieldSelect
@@ -1589,7 +1815,7 @@ function OutboundView(props: {
               label="销售人员"
               value={props.salespersonId}
               onChange={props.setSalespersonId}
-              options={props.state.salespeople.map((person) => ({
+              options={enabledSalespeople.map((person) => ({
                 value: person.id,
                 label: `${person.name} / ${person.region}`
               }))}
@@ -1633,6 +1859,7 @@ function SalesReturnView(props: {
   addBarcode: (input: string) => void;
   submitSalesReturn: () => void;
 }) {
+  const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
   return (
     <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
       <section className="panel p-5">
@@ -1642,7 +1869,7 @@ function SalesReturnView(props: {
             label="回流仓库"
             value={props.returnWarehouseId}
             onChange={props.setReturnWarehouseId}
-            options={props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+            options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
           />
         </div>
         <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">

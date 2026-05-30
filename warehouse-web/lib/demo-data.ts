@@ -136,14 +136,16 @@ export const terminalStores: TerminalStore[] = [
     name: "东山惠民烟酒店",
     contact: "孙店长",
     phone: "13700020001",
-    address: "东山县人民路 18 号"
+    address: "东山县人民路 18 号",
+    status: "enabled"
   },
   {
     id: "store-002",
     name: "南河镇便民超市",
     contact: "马经理",
     phone: "13700020002",
-    address: "南河镇中心街 6 号"
+    address: "南河镇中心街 6 号",
+    status: "enabled"
   }
 ];
 
