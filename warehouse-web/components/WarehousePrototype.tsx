@@ -2437,33 +2437,25 @@ function OrdersView({
 
   return (
     <div className="space-y-5">
-      <OperationPageHeader
-        icon={ClipboardList}
-        eyebrow="单据查询"
-        title="业务单据历史"
-        summary={[
-          { label: "全部单据", value: `${orders.length} 张` },
-          { label: "入库 / 出库", value: `${inboundCount} / ${outboundCount} 张` },
-          { label: "销售退回", value: `${returnCount} 张` }
-        ]}
-      />
-
       <section className="panel p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <SectionHeader icon={Search} title="筛选条件" compact />
-            <p className="mt-2 text-xs text-muted">按业务类型查看入库、出库和销售退回单据。</p>
+            <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
+            <p className="mt-2 text-xs text-muted">
+              全部 {orders.length} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
+            </p>
           </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="min-w-[320px]">
-              <SegmentedControl
+          <div className="grid gap-3 sm:grid-cols-[220px_auto] sm:items-end">
+            <div>
+              <FieldSelect
+                label="业务类型"
                 value={kindFilter}
                 onChange={(value) => setKindFilter(value as OrderKind | "all")}
                 options={[
-                  { value: "all", label: "全部" },
-                  { value: "inbound", label: "入库" },
-                  { value: "outbound", label: "出库" },
-                  { value: "sales_return", label: "销售退回" }
+                  { value: "all", label: "全部单据" },
+                  { value: "inbound", label: "入库单" },
+                  { value: "outbound", label: "出库单" },
+                  { value: "sales_return", label: "销售退回单" }
                 ]}
               />
             </div>
@@ -2478,7 +2470,7 @@ function OrdersView({
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <SectionHeader icon={ClipboardList} title="单据列表" compact />
-          <p className="text-xs text-muted">当前筛选 {orders.length} 张单据</p>
+          <p className="text-xs text-muted">当前 {formatOrderFilterLabel(kindFilter)} · {orders.length} 张</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[920px]">
@@ -2539,6 +2531,11 @@ function formatOrderKind(kind: OrderKind) {
     sales_return: "销售退回单"
   };
   return labels[kind];
+}
+
+function formatOrderFilterLabel(kind: OrderKind | "all") {
+  if (kind === "all") return "全部单据";
+  return formatOrderKind(kind);
 }
 
 function downloadCsv(filename: string, rows: string[][]) {
