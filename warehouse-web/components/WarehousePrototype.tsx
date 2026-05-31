@@ -2431,71 +2431,114 @@ function OrdersView({
   setKindFilter: (value: OrderKind | "all") => void;
   refreshOrders: () => void;
 }) {
+  const inboundCount = orders.filter((order) => order.kind === "inbound").length;
+  const outboundCount = orders.filter((order) => order.kind === "outbound").length;
+  const returnCount = orders.filter((order) => order.kind === "sales_return").length;
+
   return (
-    <section className="panel overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-        <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
-        <div className="flex flex-wrap items-center gap-2">
-          <SegmentedControl
-            value={kindFilter}
-            onChange={(value) => setKindFilter(value as OrderKind | "all")}
-            options={[
-              { value: "all", label: "全部" },
-              { value: "inbound", label: "入库" },
-              { value: "outbound", label: "出库" },
-              { value: "sales_return", label: "销售退回" }
-            ]}
-          />
-          <button className="secondary-button" onClick={refreshOrders} disabled={loading}>
-            <RotateCcw className="h-4 w-4" />
-            {loading ? "刷新中" : "刷新单据"}
-          </button>
+    <div className="space-y-5">
+      <OperationPageHeader
+        icon={ClipboardList}
+        eyebrow="单据查询"
+        title="业务单据历史"
+        summary={[
+          { label: "全部单据", value: `${orders.length} 张` },
+          { label: "入库 / 出库", value: `${inboundCount} / ${outboundCount} 张` },
+          { label: "销售退回", value: `${returnCount} 张` }
+        ]}
+      />
+
+      <section className="panel p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <SectionHeader icon={Search} title="筛选条件" compact />
+            <p className="mt-2 text-xs text-muted">按业务类型查看入库、出库和销售退回单据。</p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="min-w-[320px]">
+              <SegmentedControl
+                value={kindFilter}
+                onChange={(value) => setKindFilter(value as OrderKind | "all")}
+                options={[
+                  { value: "all", label: "全部" },
+                  { value: "inbound", label: "入库" },
+                  { value: "outbound", label: "出库" },
+                  { value: "sales_return", label: "销售退回" }
+                ]}
+              />
+            </div>
+            <button className="secondary-button" onClick={refreshOrders} disabled={loading}>
+              <RotateCcw className="h-4 w-4" />
+              {loading ? "刷新中" : "刷新单据"}
+            </button>
+          </div>
         </div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[1080px]">
-          <thead className="table-head">
-            <tr>
-              <th className="px-4 py-3">单号</th>
-              <th className="px-4 py-3">业务类型</th>
-              <th className="px-4 py-3">来源/去向</th>
-              <th className="px-4 py-3">货物汇总</th>
-              <th className="px-4 py-3">条码预览</th>
-              <th className="px-4 py-3">件数</th>
-              <th className="px-4 py-3">操作人</th>
-              <th className="px-4 py-3">时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orders.map((order) => (
-              <tr key={order.id} className="hover:bg-slate-50">
-                <td className="table-cell font-mono text-xs">{order.orderNo}</td>
-                <td className="table-cell">
-                  <StatusBadge label={order.businessType} />
-                </td>
-                <td className="table-cell">
-                  <div className="font-medium text-ink">{order.primaryTarget}</div>
-                  <div className="mt-1 text-xs text-slate-500">{order.counterparty ?? "-"}</div>
-                </td>
-                <td className="table-cell">{order.goodsSummary || "-"}</td>
-                <td className="table-cell font-mono text-xs">{order.barcodePreview || "-"}</td>
-                <td className="table-cell">{order.itemCount}</td>
-                <td className="table-cell">{order.operator}</td>
-                <td className="table-cell">{order.createdAt}</td>
-              </tr>
-            ))}
-            {orders.length === 0 ? (
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <SectionHeader icon={ClipboardList} title="单据列表" compact />
+          <p className="text-xs text-muted">当前筛选 {orders.length} 张单据</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[920px]">
+            <thead className="table-head">
               <tr>
-                <td className="table-cell text-center text-slate-500" colSpan={8}>
-                  {loading ? "正在读取单据..." : "暂无符合条件的单据"}
-                </td>
+                <th className="px-4 py-3">单据</th>
+                <th className="px-4 py-3">业务</th>
+                <th className="px-4 py-3">来源 / 去向</th>
+                <th className="px-4 py-3">数量与条码</th>
+                <th className="px-4 py-3">操作信息</th>
               </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    </section>
+            </thead>
+            <tbody>
+              {orders.map((order) => (
+                <tr key={order.id} className="hover:bg-slate-50">
+                  <td className="table-cell">
+                    <div className="font-mono text-sm font-semibold text-work">{order.orderNo}</div>
+                    <div className="mt-1 text-xs text-slate-500">{order.createdAt}</div>
+                  </td>
+                  <td className="table-cell">
+                    <StatusBadge label={order.businessType} />
+                    <div className="mt-2 text-xs text-slate-500">{formatOrderKind(order.kind)}</div>
+                  </td>
+                  <td className="table-cell">
+                    <div className="font-medium text-ink">{order.primaryTarget}</div>
+                    <div className="mt-1 text-xs text-slate-500">{order.counterparty ?? "-"}</div>
+                  </td>
+                  <td className="table-cell">
+                    <div className="text-sm font-semibold text-ink">{order.itemCount} 件</div>
+                    <div className="mt-1 text-xs text-slate-500">{order.goodsSummary || "-"}</div>
+                    <div className="mt-2 font-mono text-xs text-slate-500">{order.barcodePreview || "-"}</div>
+                  </td>
+                  <td className="table-cell">
+                    <div className="font-medium text-ink">{order.operator}</div>
+                    <div className="mt-1 text-xs text-slate-500">已写入库存流水</div>
+                  </td>
+                </tr>
+              ))}
+              {orders.length === 0 ? (
+                <tr>
+                  <td className="table-cell text-center text-slate-500" colSpan={5}>
+                    {loading ? "正在读取单据..." : "暂无符合条件的单据"}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
   );
+}
+
+function formatOrderKind(kind: OrderKind) {
+  const labels: Record<OrderKind, string> = {
+    inbound: "入库单",
+    outbound: "出库单",
+    sales_return: "销售退回单"
+  };
+  return labels[kind];
 }
 
 function downloadCsv(filename: string, rows: string[][]) {
