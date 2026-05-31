@@ -69,6 +69,7 @@ type InventoryFilters = {
   salespersonId: string;
   goodsId: string;
 };
+type MasterCreateKey = "goods" | "warehouse" | "salesperson" | "store";
 
 type ApiResponse<T> = { data: T } | { error: string };
 
@@ -1369,6 +1370,7 @@ function MastersView({
   const [editingWarehouse, setEditingWarehouse] = useState<WarehouseState["warehouses"][number] | null>(null);
   const [editingSalesperson, setEditingSalesperson] = useState<WarehouseState["salespeople"][number] | null>(null);
   const [editingStore, setEditingStore] = useState<WarehouseState["terminalStores"][number] | null>(null);
+  const [creatingMaster, setCreatingMaster] = useState<MasterCreateKey | null>(null);
 
   async function requestApi<T>(path: string, body: unknown, method = "POST"): Promise<T> {
     const response = await fetch(path, {
@@ -1423,6 +1425,7 @@ function MastersView({
         goods: [...previous.goods, created]
       }));
       setGoodsDraft({ code: "", name: "", category: goodsDraft.category, unit: "瓶", spec: "" });
+      setCreatingMaster(null);
       showToast({ tone: "success", message: "货物资料已写入数据库" });
     } catch (error) {
       showToast({ tone: "error", message: error instanceof Error ? error.message : "新增货物失败" });
@@ -1453,6 +1456,7 @@ function MastersView({
         locations: [...previous.locations, created.location]
       }));
       setWarehouseDraft({ code: "", name: "", manager: "" });
+      setCreatingMaster(null);
       showToast({ tone: "success", message: "分仓资料已写入数据库，并已生成默认库位" });
     } catch (error) {
       showToast({ tone: "error", message: error instanceof Error ? error.message : "新增分仓失败" });
@@ -1485,6 +1489,7 @@ function MastersView({
         salespeople: [...previous.salespeople, created]
       }));
       setSalespersonDraft({ code: "", name: "", phone: "", region: "" });
+      setCreatingMaster(null);
       showToast({ tone: "success", message: "销售人员已写入数据库" });
     } catch (error) {
       showToast({ tone: "error", message: error instanceof Error ? error.message : "新增销售人员失败" });
@@ -1513,6 +1518,7 @@ function MastersView({
         terminalStores: [...previous.terminalStores, created]
       }));
       setStoreDraft({ name: "", contact: "", phone: "", address: "" });
+      setCreatingMaster(null);
       showToast({ tone: "success", message: "终端店铺已写入数据库" });
     } catch (error) {
       showToast({ tone: "error", message: error instanceof Error ? error.message : "新增终端店铺失败" });
@@ -1599,9 +1605,43 @@ function MastersView({
 
   return (
     <div className="grid gap-5">
-      <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-        基础资料来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
-      </div>
+      <section className="panel p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <SectionHeader icon={Building2} title="基础资料维护" compact />
+            <p className="mt-2 text-xs text-muted">
+              数据来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <DashboardAction
+              icon={Boxes}
+              title="新增货物"
+              description="编码、名称、大类、规格"
+              onClick={() => setCreatingMaster("goods")}
+            />
+            <DashboardAction
+              icon={Warehouse}
+              title="新增分仓"
+              description="分仓资料与默认库位"
+              onClick={() => setCreatingMaster("warehouse")}
+            />
+            <DashboardAction
+              icon={Users}
+              title="新增销售人员"
+              description="人员编码、区域、电话"
+              onClick={() => setCreatingMaster("salesperson")}
+            />
+            <DashboardAction
+              icon={Building2}
+              title="新增终端店铺"
+              description="退换货来源店铺"
+              onClick={() => setCreatingMaster("store")}
+            />
+          </div>
+        </div>
+      </section>
+
       <MasterEditDialog
         open={Boolean(editingGoods)}
         title="编辑货物资料"
@@ -1678,224 +1718,226 @@ function MastersView({
           </div>
         ) : null}
       </MasterEditDialog>
-      <div className="grid gap-5 xl:grid-cols-2">
-        <section className="panel p-5">
-          <SectionHeader icon={Boxes} title="新增货物" compact />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <TextField
-              label="货物编码"
-              value={goodsDraft.code}
-              onChange={(value) => setGoodsDraft({ ...goodsDraft, code: value })}
-              placeholder="如 HJ-003"
-            />
-            <TextField
-              label="货物名称"
-              value={goodsDraft.name}
-              onChange={(value) => setGoodsDraft({ ...goodsDraft, name: value })}
-              placeholder="如 山参保健酒"
-            />
-            <FieldSelect
-              label="货物大类"
-              value={goodsDraft.category}
-              onChange={(value) => setGoodsDraft({ ...goodsDraft, category: value })}
-              options={[
-                { value: "health_wine", label: "保健酒" },
-                { value: "baijiu", label: "白酒" }
-              ]}
-            />
-            <TextField
-              label="单位"
-              value={goodsDraft.unit}
-              onChange={(value) => setGoodsDraft({ ...goodsDraft, unit: value })}
-              placeholder="瓶"
-            />
-            <div className="md:col-span-2">
-              <TextField
-                label="规格"
-                value={goodsDraft.spec}
-                onChange={(value) => setGoodsDraft({ ...goodsDraft, spec: value })}
-                placeholder="如 500ml/瓶，12瓶/箱"
-              />
-            </div>
-          </div>
-          <button className="primary-button mt-5" onClick={addGoods}>
-            <Check className="h-4 w-4" />
-            新增货物
-          </button>
-        </section>
-
-        <section className="panel p-5">
-          <SectionHeader icon={Warehouse} title="新增分仓" compact />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <TextField
-              label="分仓编码"
-              value={warehouseDraft.code}
-              onChange={(value) => setWarehouseDraft({ ...warehouseDraft, code: value })}
-              placeholder="如 FC-303"
-            />
-            <TextField
-              label="分仓名称"
-              value={warehouseDraft.name}
-              onChange={(value) => setWarehouseDraft({ ...warehouseDraft, name: value })}
-              placeholder="如 西城区分仓"
-            />
-            <div className="md:col-span-2">
-              <TextField
-                label="负责人"
-                value={warehouseDraft.manager}
-                onChange={(value) => setWarehouseDraft({ ...warehouseDraft, manager: value })}
-                placeholder="如 张库管"
-              />
-            </div>
-          </div>
-          <button className="primary-button mt-5" onClick={addWarehouse}>
-            <Check className="h-4 w-4" />
-            新增分仓
-          </button>
-        </section>
-
-        <section className="panel p-5">
-          <SectionHeader icon={Users} title="新增销售人员" compact />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <TextField
-              label="人员编码"
-              value={salespersonDraft.code}
-              onChange={(value) => setSalespersonDraft({ ...salespersonDraft, code: value })}
-              placeholder="如 XS-004"
-            />
-            <TextField
-              label="姓名"
-              value={salespersonDraft.name}
-              onChange={(value) => setSalespersonDraft({ ...salespersonDraft, name: value })}
-              placeholder="如 陈阳"
-            />
-            <TextField
-              label="手机号"
-              value={salespersonDraft.phone}
-              onChange={(value) => setSalespersonDraft({ ...salespersonDraft, phone: value })}
-              placeholder="如 13800010004"
-            />
-            <TextField
-              label="区域"
-              value={salespersonDraft.region}
-              onChange={(value) => setSalespersonDraft({ ...salespersonDraft, region: value })}
-              placeholder="如 西城片区"
-            />
-          </div>
-          <button className="primary-button mt-5" onClick={addSalesperson}>
-            <Check className="h-4 w-4" />
-            新增销售人员
-          </button>
-        </section>
-
-        <section className="panel p-5">
-          <SectionHeader icon={Building2} title="新增终端店铺" compact />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <TextField
-              label="店铺名称"
-              value={storeDraft.name}
-              onChange={(value) => setStoreDraft({ ...storeDraft, name: value })}
-              placeholder="如 西城便利烟酒店"
-            />
-            <TextField
-              label="联系人"
-              value={storeDraft.contact}
-              onChange={(value) => setStoreDraft({ ...storeDraft, contact: value })}
-              placeholder="如 何店长"
-            />
-            <TextField
-              label="电话"
-              value={storeDraft.phone}
-              onChange={(value) => setStoreDraft({ ...storeDraft, phone: value })}
-              placeholder="如 13700020003"
-            />
-            <TextField
-              label="地址"
-              value={storeDraft.address}
-              onChange={(value) => setStoreDraft({ ...storeDraft, address: value })}
-              placeholder="如 西城区建设路 28 号"
-            />
-          </div>
-          <button className="primary-button mt-5" onClick={addTerminalStore}>
-            <Check className="h-4 w-4" />
-            新增店铺
-          </button>
-        </section>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-2">
-      <MasterTable
-        title="货物资料"
+      <MasterEditDialog
+        open={creatingMaster === "goods"}
+        title="新增货物资料"
         icon={Boxes}
-        headers={["编码", "名称", "大类", "规格", "状态", "操作"]}
-        rows={state.goods.map((item) => [
-          item.code,
-          item.name,
-          formatCategory(item.category),
-          item.spec,
-          <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
-          <MasterActions
-            key={`${item.id}-actions`}
-            status={item.status}
-            onEdit={() => setEditingGoods(item)}
-            onToggle={() => toggleMasterStatus("goods", "/api/goods", item)}
+        onClose={() => setCreatingMaster(null)}
+        onSave={addGoods}
+        saveLabel="新增货物"
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <TextField
+            label="货物编码"
+            value={goodsDraft.code}
+            onChange={(value) => setGoodsDraft({ ...goodsDraft, code: value })}
+            placeholder="如 HJ-003"
           />
-        ])}
-      />
-      <MasterTable
-        title="仓库资料"
+          <TextField
+            label="货物名称"
+            value={goodsDraft.name}
+            onChange={(value) => setGoodsDraft({ ...goodsDraft, name: value })}
+            placeholder="如 山参保健酒"
+          />
+          <FieldSelect
+            label="货物大类"
+            value={goodsDraft.category}
+            onChange={(value) => setGoodsDraft({ ...goodsDraft, category: value })}
+            options={[
+              { value: "health_wine", label: "保健酒" },
+              { value: "baijiu", label: "白酒" }
+            ]}
+          />
+          <TextField
+            label="单位"
+            value={goodsDraft.unit}
+            onChange={(value) => setGoodsDraft({ ...goodsDraft, unit: value })}
+            placeholder="瓶"
+          />
+          <div className="md:col-span-2">
+            <TextField
+              label="规格"
+              value={goodsDraft.spec}
+              onChange={(value) => setGoodsDraft({ ...goodsDraft, spec: value })}
+              placeholder="如 500ml/瓶，12瓶/箱"
+            />
+          </div>
+        </div>
+      </MasterEditDialog>
+      <MasterEditDialog
+        open={creatingMaster === "warehouse"}
+        title="新增分仓资料"
         icon={Warehouse}
-        headers={["编码", "名称", "类型", "负责人", "状态", "操作"]}
-        rows={state.warehouses.map((item) => [
-          item.code,
-          item.name,
-          item.type === "main" ? "总仓" : "分仓",
-          item.manager,
-          <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
-          <MasterActions
-            key={`${item.id}-actions`}
-            status={item.status}
-            onEdit={() => setEditingWarehouse(item)}
-            onToggle={() => toggleMasterStatus("warehouses", "/api/warehouses", item)}
+        onClose={() => setCreatingMaster(null)}
+        onSave={addWarehouse}
+        saveLabel="新增分仓"
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <TextField
+            label="分仓编码"
+            value={warehouseDraft.code}
+            onChange={(value) => setWarehouseDraft({ ...warehouseDraft, code: value })}
+            placeholder="如 FC-303"
           />
-        ])}
-      />
-      <MasterTable
-        title="销售人员"
+          <TextField
+            label="分仓名称"
+            value={warehouseDraft.name}
+            onChange={(value) => setWarehouseDraft({ ...warehouseDraft, name: value })}
+            placeholder="如 西城区分仓"
+          />
+          <div className="md:col-span-2">
+            <TextField
+              label="负责人"
+              value={warehouseDraft.manager}
+              onChange={(value) => setWarehouseDraft({ ...warehouseDraft, manager: value })}
+              placeholder="如 张库管"
+            />
+          </div>
+        </div>
+      </MasterEditDialog>
+      <MasterEditDialog
+        open={creatingMaster === "salesperson"}
+        title="新增销售人员"
         icon={Users}
-        headers={["编码", "姓名", "手机号", "区域", "状态", "操作"]}
-        rows={state.salespeople.map((item) => [
-          item.code,
-          item.name,
-          item.phone,
-          item.region,
-          <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
-          <MasterActions
-            key={`${item.id}-actions`}
-            status={item.status}
-            onEdit={() => setEditingSalesperson(item)}
-            onToggle={() => toggleMasterStatus("salespeople", "/api/salespeople", item)}
+        onClose={() => setCreatingMaster(null)}
+        onSave={addSalesperson}
+        saveLabel="新增销售人员"
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <TextField
+            label="人员编码"
+            value={salespersonDraft.code}
+            onChange={(value) => setSalespersonDraft({ ...salespersonDraft, code: value })}
+            placeholder="如 XS-004"
           />
-        ])}
-      />
-      <MasterTable
-        title="终端店铺"
+          <TextField
+            label="姓名"
+            value={salespersonDraft.name}
+            onChange={(value) => setSalespersonDraft({ ...salespersonDraft, name: value })}
+            placeholder="如 陈阳"
+          />
+          <TextField
+            label="手机号"
+            value={salespersonDraft.phone}
+            onChange={(value) => setSalespersonDraft({ ...salespersonDraft, phone: value })}
+            placeholder="如 13800010004"
+          />
+          <TextField
+            label="区域"
+            value={salespersonDraft.region}
+            onChange={(value) => setSalespersonDraft({ ...salespersonDraft, region: value })}
+            placeholder="如 西城片区"
+          />
+        </div>
+      </MasterEditDialog>
+      <MasterEditDialog
+        open={creatingMaster === "store"}
+        title="新增终端店铺"
         icon={Building2}
-        headers={["店铺", "联系人", "电话", "地址", "状态", "操作"]}
-        rows={state.terminalStores.map((item) => [
-          item.name,
-          item.contact,
-          item.phone,
-          item.address,
-          <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
-          <MasterActions
-            key={`${item.id}-actions`}
-            status={item.status}
-            onEdit={() => setEditingStore(item)}
-            onToggle={() => toggleMasterStatus("terminalStores", "/api/terminal-stores", item)}
+        onClose={() => setCreatingMaster(null)}
+        onSave={addTerminalStore}
+        saveLabel="新增店铺"
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <TextField
+            label="店铺名称"
+            value={storeDraft.name}
+            onChange={(value) => setStoreDraft({ ...storeDraft, name: value })}
+            placeholder="如 西城便利烟酒店"
           />
-        ])}
-      />
+          <TextField
+            label="联系人"
+            value={storeDraft.contact}
+            onChange={(value) => setStoreDraft({ ...storeDraft, contact: value })}
+            placeholder="如 何店长"
+          />
+          <TextField
+            label="电话"
+            value={storeDraft.phone}
+            onChange={(value) => setStoreDraft({ ...storeDraft, phone: value })}
+            placeholder="如 13700020003"
+          />
+          <TextField
+            label="地址"
+            value={storeDraft.address}
+            onChange={(value) => setStoreDraft({ ...storeDraft, address: value })}
+            placeholder="如 西城区建设路 28 号"
+          />
+        </div>
+      </MasterEditDialog>
+      <div className="grid gap-5 xl:grid-cols-2">
+        <MasterTable
+          title="货物资料"
+          icon={Boxes}
+          headers={["编码", "名称", "大类", "规格", "状态", "操作"]}
+          rows={state.goods.map((item) => [
+            item.code,
+            item.name,
+            formatCategory(item.category),
+            item.spec,
+            <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
+            <MasterActions
+              key={`${item.id}-actions`}
+              status={item.status}
+              onEdit={() => setEditingGoods(item)}
+              onToggle={() => toggleMasterStatus("goods", "/api/goods", item)}
+            />
+          ])}
+        />
+        <MasterTable
+          title="仓库资料"
+          icon={Warehouse}
+          headers={["编码", "名称", "类型", "负责人", "状态", "操作"]}
+          rows={state.warehouses.map((item) => [
+            item.code,
+            item.name,
+            item.type === "main" ? "总仓" : "分仓",
+            item.manager,
+            <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
+            <MasterActions
+              key={`${item.id}-actions`}
+              status={item.status}
+              onEdit={() => setEditingWarehouse(item)}
+              onToggle={() => toggleMasterStatus("warehouses", "/api/warehouses", item)}
+            />
+          ])}
+        />
+        <MasterTable
+          title="销售人员"
+          icon={Users}
+          headers={["编码", "姓名", "手机号", "区域", "状态", "操作"]}
+          rows={state.salespeople.map((item) => [
+            item.code,
+            item.name,
+            item.phone,
+            item.region,
+            <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
+            <MasterActions
+              key={`${item.id}-actions`}
+              status={item.status}
+              onEdit={() => setEditingSalesperson(item)}
+              onToggle={() => toggleMasterStatus("salespeople", "/api/salespeople", item)}
+            />
+          ])}
+        />
+        <MasterTable
+          title="终端店铺"
+          icon={Building2}
+          headers={["店铺", "联系人", "电话", "地址", "状态", "操作"]}
+          rows={state.terminalStores.map((item) => [
+            item.name,
+            item.contact,
+            item.phone,
+            item.address,
+            <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
+            <MasterActions
+              key={`${item.id}-actions`}
+              status={item.status}
+              onEdit={() => setEditingStore(item)}
+              onToggle={() => toggleMasterStatus("terminalStores", "/api/terminal-stores", item)}
+            />
+          ])}
+        />
       </div>
     </div>
   );
@@ -1994,6 +2036,7 @@ function MasterEditDialog({
   open,
   title,
   icon: Icon,
+  saveLabel = "保存修改",
   children,
   onClose,
   onSave
@@ -2001,6 +2044,7 @@ function MasterEditDialog({
   open: boolean;
   title: string;
   icon: typeof Home;
+  saveLabel?: string;
   children: ReactNode;
   onClose: () => void;
   onSave: () => void;
@@ -2035,7 +2079,7 @@ function MasterEditDialog({
           </button>
           <button className="primary-button" onClick={onSave}>
             <Check className="h-4 w-4" />
-            保存修改
+            {saveLabel}
           </button>
         </div>
       </section>
