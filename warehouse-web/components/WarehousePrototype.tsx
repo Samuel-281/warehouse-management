@@ -70,6 +70,12 @@ type InventoryFilters = {
   goodsId: string;
 };
 type MasterCreateKey = "goods" | "warehouse" | "salesperson" | "store";
+type BarcodeReviewTone = "success" | "warning" | "error" | "neutral";
+type BarcodeReview = {
+  tone: BarcodeReviewTone;
+  label: string;
+  detail?: string;
+};
 
 type ApiResponse<T> = { data: T } | { error: string };
 
@@ -105,6 +111,15 @@ function mergeInventoryItems(currentItems: InventoryItem[], updatedItems: Invent
   const merged = currentItems.map((item) => updatedByBarcode.get(item.barcode) ?? item);
   const existingBarcodes = new Set(currentItems.map((item) => item.barcode));
   return [...updatedItems.filter((item) => !existingBarcodes.has(item.barcode)), ...merged];
+}
+
+function parseBarcodeInput(input: string) {
+  return uniqueBarcodes(input.split(/[\s,，;；]+/));
+}
+
+function countInvalidReviews(barcodes: string[], reviewBarcode?: (barcode: string) => BarcodeReview) {
+  if (!reviewBarcode) return 0;
+  return barcodes.filter((barcode) => reviewBarcode(barcode).tone === "error").length;
 }
 
 const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
@@ -409,20 +424,32 @@ export default function WarehousePrototype() {
     setList: (value: string[]) => void,
     options: { mustBeNew?: boolean; onAfterAdd?: (nextList: string[]) => void } = {}
   ) {
-    const barcode = input.trim();
-    if (!barcode) return;
-    if (currentList.includes(barcode)) {
-      showToast({ tone: "error", message: "当前清单中已有该条码" });
+    const candidates = parseBarcodeInput(input);
+    if (candidates.length === 0) return;
+
+    const accepted = candidates.filter((barcode) => {
+      if (currentList.includes(barcode)) return false;
+      if (options.mustBeNew && state.inventoryItems.some((item) => item.barcode === barcode)) return false;
+      return true;
+    });
+
+    if (accepted.length === 0) {
+      showToast({
+        tone: "error",
+        message: candidates.length === 1 ? "当前清单中已有该条码或条码已存在" : "没有可加入的条码"
+      });
       return;
     }
-    if (options.mustBeNew && state.inventoryItems.some((item) => item.barcode === barcode)) {
-      showToast({ tone: "error", message: "该条码已存在，单件条码不可重复" });
-      return;
-    }
-    const nextList = [...currentList, barcode];
+
+    const nextList = [...currentList, ...accepted];
     setList(nextList);
     options.onAfterAdd?.(nextList);
     setInput("");
+
+    const skippedCount = candidates.length - accepted.length;
+    if (skippedCount > 0) {
+      showToast({ tone: "info", message: `已加入 ${accepted.length} 条，跳过 ${skippedCount} 条重复或不可用条码` });
+    }
   }
 
   async function submitInbound() {
@@ -2130,6 +2157,47 @@ function InboundView(props: {
     props.productionDate
       ? addYears(props.productionDate, 3)
       : "无";
+  const reviewInboundBarcode = (barcode: string): BarcodeReview => {
+    const existingItem = props.state.inventoryItems.find((item) => item.barcode === barcode);
+    if (props.inboundSource === "factory") {
+      return existingItem
+        ? {
+            tone: "error",
+            label: "已存在",
+            detail: ownerLabel(existingItem, props.state.warehouses, props.state.salespeople, props.state.locations)
+          }
+        : { tone: "success", label: "新条码", detail: "可作为厂家到货入库" };
+    }
+
+    if (!existingItem) {
+      return { tone: "success", label: "新退换货", detail: "可登记为终端退换货入库" };
+    }
+
+    if (existingItem.goodsId !== props.inboundGoodsId) {
+      return { tone: "error", label: "货物不符", detail: "该条码已绑定其他货物" };
+    }
+
+    if (existingItem.ownerType !== "salesperson") {
+      return {
+        tone: "error",
+        label: "已在库",
+        detail: ownerLabel(existingItem, props.state.warehouses, props.state.salespeople, props.state.locations)
+      };
+    }
+
+    return {
+      tone: "success",
+      label: "可回仓",
+      detail: ownerLabel(existingItem, props.state.warehouses, props.state.salespeople, props.state.locations)
+    };
+  };
+  const invalidBarcodeCount = countInvalidReviews(props.inboundBarcodes, reviewInboundBarcode);
+  const submitDisabled =
+    barcodeCount === 0 ||
+    invalidBarcodeCount > 0 ||
+    validPlannedQty === 0 ||
+    barcodeCount !== validPlannedQty ||
+    (props.inboundSource === "terminal_return" && !props.productionDate);
 
   return (
     <div className="space-y-5">
@@ -2241,12 +2309,16 @@ function InboundView(props: {
             setBarcodes={props.setInboundBarcodes}
             onAdd={props.addBarcode}
             placeholder="扫描或输入新条码，如 HJ202605290099"
+            reviewBarcode={reviewInboundBarcode}
           />
           <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-slate-600">
               <span className="font-semibold text-ink">{barcodeCount}</span> 件条码等待提交
+              {invalidBarcodeCount > 0 ? (
+                <span className="ml-2 font-semibold text-danger">{invalidBarcodeCount} 件需处理</span>
+              ) : null}
             </div>
-            <button className="primary-button sm:min-w-[180px]" onClick={props.submitInbound}>
+            <button className="primary-button sm:min-w-[180px]" disabled={submitDisabled} onClick={props.submitInbound}>
               <Check className="h-4 w-4" />
               提交入库
             </button>
@@ -2289,6 +2361,39 @@ function OutboundView(props: {
   }).length;
   const targetLabel =
     props.outboundType === "transfer" ? targetWarehouse?.name ?? "未选择" : salesperson?.name ?? "未选择";
+  const reviewOutboundBarcode = (barcode: string): BarcodeReview => {
+    const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
+    if (!item) {
+      return { tone: "error", label: "不存在", detail: "系统内未找到该条码" };
+    }
+    if (item.ownerType !== "warehouse") {
+      return {
+        tone: "error",
+        label: "不在库",
+        detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
+      };
+    }
+    if (item.warehouseId !== props.sourceWarehouseId) {
+      return {
+        tone: "error",
+        label: "仓库不符",
+        detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
+      };
+    }
+
+    return {
+      tone: "success",
+      label: "可出库",
+      detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
+    };
+  };
+  const invalidBarcodeCount = countInvalidReviews(props.outboundBarcodes, reviewOutboundBarcode);
+  const submitDisabled =
+    props.outboundBarcodes.length === 0 ||
+    invalidBarcodeCount > 0 ||
+    !sourceWarehouse ||
+    (props.outboundType === "transfer" && (!targetWarehouse || targetWarehouse.id === sourceWarehouse.id)) ||
+    (props.outboundType === "sales" && !salesperson);
 
   return (
     <div className="space-y-5">
@@ -2373,12 +2478,16 @@ function OutboundView(props: {
             setBarcodes={props.setOutboundBarcodes}
             onAdd={props.addBarcode}
             placeholder="扫描或输入当前在库条码"
+            reviewBarcode={reviewOutboundBarcode}
           />
           <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-slate-600">
               <span className="font-semibold text-ink">{props.outboundBarcodes.length}</span> 件条码等待提交
+              {invalidBarcodeCount > 0 ? (
+                <span className="ml-2 font-semibold text-danger">{invalidBarcodeCount} 件需处理</span>
+              ) : null}
             </div>
-            <button className="primary-button sm:min-w-[180px]" onClick={props.submitOutbound}>
+            <button className="primary-button sm:min-w-[180px]" disabled={submitDisabled} onClick={props.submitOutbound}>
               <Check className="h-4 w-4" />
               提交出库
             </button>
@@ -2407,6 +2516,27 @@ function SalesReturnView(props: {
     const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
     return item?.ownerType === "salesperson";
   }).length;
+  const reviewReturnBarcode = (barcode: string): BarcodeReview => {
+    const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
+    if (!item) {
+      return { tone: "error", label: "不存在", detail: "系统内未找到该条码" };
+    }
+    if (item.ownerType !== "salesperson") {
+      return {
+        tone: "error",
+        label: "不在销售名下",
+        detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
+      };
+    }
+
+    return {
+      tone: "success",
+      label: "可退回",
+      detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
+    };
+  };
+  const invalidBarcodeCount = countInvalidReviews(props.returnBarcodes, reviewReturnBarcode);
+  const submitDisabled = props.returnBarcodes.length === 0 || invalidBarcodeCount > 0 || !returnWarehouse;
 
   return (
     <div className="space-y-5">
@@ -2458,12 +2588,16 @@ function SalesReturnView(props: {
             setBarcodes={props.setReturnBarcodes}
             onAdd={props.addBarcode}
             placeholder="扫描或输入销售人员名下条码，如 XS202605290001"
+            reviewBarcode={reviewReturnBarcode}
           />
           <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-slate-600">
               <span className="font-semibold text-ink">{props.returnBarcodes.length}</span> 件条码等待提交
+              {invalidBarcodeCount > 0 ? (
+                <span className="ml-2 font-semibold text-danger">{invalidBarcodeCount} 件需处理</span>
+              ) : null}
             </div>
-            <button className="primary-button sm:min-w-[180px]" onClick={props.submitSalesReturn}>
+            <button className="primary-button sm:min-w-[180px]" disabled={submitDisabled} onClick={props.submitSalesReturn}>
               <Check className="h-4 w-4" />
               提交退回
             </button>
@@ -3152,7 +3286,8 @@ function BarcodeCollector({
   barcodes,
   setBarcodes,
   onAdd,
-  placeholder
+  placeholder,
+  reviewBarcode
 }: {
   title?: string;
   description?: string;
@@ -3162,7 +3297,12 @@ function BarcodeCollector({
   setBarcodes: (value: string[]) => void;
   onAdd: (input: string) => void;
   placeholder: string;
+  reviewBarcode?: (barcode: string) => BarcodeReview;
 }) {
+  const reviews = reviewBarcode ? barcodes.map((barcode) => reviewBarcode(barcode)) : [];
+  const invalidCount = reviews.filter((review) => review.tone === "error").length;
+  const readyCount = reviewBarcode ? barcodes.length - invalidCount : barcodes.length;
+
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -3176,14 +3316,19 @@ function BarcodeCollector({
               {description ? <p className="mt-0.5 text-xs text-muted">{description}</p> : null}
             </div>
           </div>
-          <span className="rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm">
-            {barcodes.length} 件
+          <span
+            className={`rounded-md bg-white px-3 py-1.5 text-xs font-semibold shadow-sm ${
+              invalidCount > 0 ? "text-danger" : "text-slate-600"
+            }`}
+          >
+            {reviewBarcode ? `${readyCount} / ${barcodes.length} 可提交` : `${barcodes.length} 件`}
           </span>
         </div>
         <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-          <input
-            className="field h-12 font-mono text-base"
+          <textarea
+            className="field h-12 min-h-12 resize-none py-3 font-mono text-base"
             placeholder={placeholder}
+            rows={1}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
@@ -3216,25 +3361,65 @@ function BarcodeCollector({
           </div>
         ) : (
           <div className="grid max-h-[360px] gap-2 overflow-y-auto p-4 sm:grid-cols-2">
-            {barcodes.map((barcode) => (
-              <div
-                className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
-                key={barcode}
-              >
-                <span className="min-w-0 truncate font-mono text-slate-700">{barcode}</span>
-                <button
-                  className="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-danger hover:bg-red-50"
-                  onClick={() => setBarcodes(barcodes.filter((entry) => entry !== barcode))}
+            {barcodes.map((barcode) => {
+              const review = reviewBarcode?.(barcode);
+              return (
+                <div
+                  className={`rounded-md border px-3 py-2 text-sm ${barcodeCardClass(review?.tone ?? "neutral")}`}
+                  key={barcode}
                 >
-                  移除
-                </button>
-              </div>
-            ))}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-mono text-slate-700">{barcode}</span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {review ? <BarcodeReviewBadge review={review} /> : null}
+                      <button
+                        aria-label={`移除条码 ${barcode}`}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-white hover:text-danger"
+                        onClick={() => setBarcodes(barcodes.filter((entry) => entry !== barcode))}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  {review?.detail ? (
+                    <p className={`mt-1 truncate text-xs ${review.tone === "error" ? "text-danger" : "text-muted"}`}>
+                      {review.detail}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
     </div>
   );
+}
+
+function BarcodeReviewBadge({ review }: { review: BarcodeReview }) {
+  return (
+    <span
+      className={`rounded-md border px-2 py-1 text-[11px] font-semibold leading-none ${barcodeBadgeClass(
+        review.tone
+      )}`}
+    >
+      {review.label}
+    </span>
+  );
+}
+
+function barcodeCardClass(tone: BarcodeReviewTone) {
+  if (tone === "success") return "border-emerald-200 bg-emerald-50";
+  if (tone === "warning") return "border-amber-200 bg-amber-50";
+  if (tone === "error") return "border-red-200 bg-red-50";
+  return "border-slate-200 bg-slate-50";
+}
+
+function barcodeBadgeClass(tone: BarcodeReviewTone) {
+  if (tone === "success") return "border-emerald-200 bg-white text-work";
+  if (tone === "warning") return "border-amber-200 bg-white text-amber";
+  if (tone === "error") return "border-red-200 bg-white text-danger";
+  return "border-slate-200 bg-white text-slate-500";
 }
 
 function FieldSelect({
