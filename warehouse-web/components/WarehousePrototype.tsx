@@ -2723,21 +2723,17 @@ function InventoryView(props: {
   const salesResultCount = props.inventoryItems.filter((item) => item.ownerType === "salesperson").length;
 
   return (
-    <div className="space-y-5">
-      <OperationPageHeader
-        icon={Search}
-        eyebrow="库存查询"
-        title="库存与流转查询"
-        summary={[
-          { label: "查询结果", value: `${props.inventoryItems.length} 件` },
-          { label: "仓库在库", value: `${warehouseResultCount} 件` },
-          { label: "销售人员名下", value: `${salesResultCount} 件` }
-        ]}
-      />
-
+    <div className="grid gap-5">
       <section className="panel p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="grid flex-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <SectionHeader icon={Search} title="库存查询" compact />
+          <p className="text-xs text-muted">
+            查询结果 {props.inventoryItems.length} 件 · 仓库在库 {warehouseResultCount} 件 · 销售人员名下{" "}
+            {salesResultCount} 件
+          </p>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_180px_180px_180px] xl:items-end">
             <div>
               <label className="label" htmlFor="inventory-keyword">
                 关键字
@@ -2777,51 +2773,37 @@ function InventoryView(props: {
                 ...props.state.goods.map((goods) => ({ value: goods.id, label: goods.name }))
               ]}
             />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="secondary-button"
-              onClick={exportSelectedMovements}
-              disabled={!props.selectedItem || props.selectedMovements.length === 0}
-            >
-              <Download className="h-4 w-4" />
-              导出流水
-            </button>
-            <button className="secondary-button" onClick={props.refreshData} disabled={props.refreshing}>
-              <RotateCcw className="h-4 w-4" />
-              {props.refreshing ? "刷新中" : "刷新数据"}
-            </button>
-            <button className="secondary-button" onClick={clearInventoryFilters}>
-              <RotateCcw className="h-4 w-4" />
-              清空筛选
-            </button>
-          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <button className="secondary-button whitespace-nowrap" onClick={props.refreshData} disabled={props.refreshing}>
+            <RotateCcw className="h-4 w-4" />
+            {props.refreshing ? "刷新中" : "刷新数据"}
+          </button>
+          <button className="secondary-button whitespace-nowrap" onClick={clearInventoryFilters}>
+            <RotateCcw className="h-4 w-4" />
+            清空筛选
+          </button>
         </div>
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_420px]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <section className="panel overflow-hidden">
-          <SectionHeader icon={Boxes} title="库存明细" />
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
+            <SectionHeader icon={Boxes} title="库存列表" compact />
+            <p className="text-xs text-muted">点击任意条码查看右侧详情和完整流转</p>
+          </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px]">
+            <table className="w-full">
               <thead className="table-head">
                 <tr>
-                  <th className="px-4 py-3">条码</th>
-                  <th className="px-4 py-3">货物</th>
+                  <th className="px-4 py-3">条码 / 货物</th>
                   <th className="px-4 py-3">当前归属</th>
-                  <th className="px-4 py-3">生产日期</th>
-                  <th className="px-4 py-3">保质期</th>
                   <th className="px-4 py-3">状态</th>
-                  <th className="px-4 py-3">最近流转</th>
                 </tr>
               </thead>
               <tbody>
                 {props.inventoryItems.map((item) => {
                   const goods = props.state.goods.find((entry) => entry.id === item.goodsId);
-                  const itemMovements = props.state.movements
-                    .filter((movement) => movement.barcode === item.barcode)
-                    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt));
-                  const latestMovement = itemMovements[0];
                   const selected = props.selectedBarcode === item.barcode;
                   return (
                     <tr
@@ -2829,29 +2811,18 @@ function InventoryView(props: {
                       className={`cursor-pointer hover:bg-slate-50 ${selected ? "bg-emerald-50" : ""}`}
                       onClick={() => props.setSelectedBarcode(item.barcode)}
                     >
-                      <td className="table-cell font-mono text-work">{item.barcode}</td>
                       <td className="table-cell">
-                        <div className="font-medium text-ink">{goods?.name ?? "未知货物"}</div>
-                        <div className="mt-1 text-xs text-slate-500">
+                        <div className="font-mono text-sm font-semibold text-work">{item.barcode}</div>
+                        <div className="mt-1 font-medium text-ink">{goods?.name ?? "未知货物"}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">
                           {goods?.code ?? "-"} · {goods ? formatCategory(goods.category) : "-"}
                         </div>
                       </td>
                       <td className="table-cell text-slate-600">
                         {ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)}
                       </td>
-                      <td className="table-cell">{item.productionDate ?? "-"}</td>
-                      <td className="table-cell">{item.shelfLifeDate ?? "无"}</td>
                       <td className="table-cell">
                         <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
-                      </td>
-                      <td className="table-cell text-slate-600">
-                        {latestMovement ? (
-                          <span>
-                            {formatMovementType(latestMovement.type)} / {latestMovement.occurredAt}
-                          </span>
-                        ) : (
-                          "-"
-                        )}
                       </td>
                     </tr>
                   );
@@ -2914,7 +2885,7 @@ function InventoryDetailPanel({
       </div>
 
       <div className="space-y-5 p-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+        <div className="overflow-hidden rounded-lg border border-slate-200">
           <DetailRow label="货物" value={goods?.name ?? "未知货物"} meta={goods?.code ?? "-"} />
           <DetailRow label="大类" value={goods ? formatCategory(goods.category) : "-"} />
           <DetailRow
@@ -2936,19 +2907,23 @@ function InventoryDetailPanel({
           </button>
         </div>
 
-        <div className="space-y-3">
-          {movements.map((movement) => (
-            <div key={movement.id} className="rounded-lg border border-slate-200 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-ink">{formatMovementType(movement.type)}</p>
-                <span className="font-mono text-xs text-slate-500">{movement.occurredAt}</span>
+        <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
+          {movements.map((movement, index) => (
+            <div key={movement.id} className="relative pl-5">
+              <span className="absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full bg-work" />
+              {index < movements.length - 1 ? (
+                <span className="absolute bottom-[-18px] left-[4px] top-5 w-px bg-slate-200" />
+              ) : null}
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-ink">{formatMovementType(movement.type)}</p>
+                  <span className="font-mono text-xs text-slate-500">{movement.occurredAt}</span>
+                </div>
+                <p className="mt-2 text-sm text-slate-700">
+                  {movement.fromLabel} → {movement.toLabel}
+                </p>
+                <p className="mt-2 text-xs text-slate-500">{movement.note}</p>
               </div>
-              <div className="mt-3 grid items-center gap-2 text-sm text-slate-700 sm:grid-cols-[1fr_auto_1fr] xl:grid-cols-1">
-                <span>{movement.fromLabel}</span>
-                <ArrowRight className="hidden h-4 w-4 text-work sm:block xl:hidden" />
-                <span>{movement.toLabel}</span>
-              </div>
-              <p className="mt-3 text-xs text-slate-500">{movement.note}</p>
             </div>
           ))}
           {movements.length === 0 ? (
@@ -2964,10 +2939,12 @@ function InventoryDetailPanel({
 
 function DetailRow({ label, value, meta }: { label: string; value: string; meta?: string }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+    <div className="grid gap-1 border-b border-slate-200 px-3 py-2.5 last:border-b-0 sm:grid-cols-[78px_1fr] xl:grid-cols-1">
       <p className="text-xs text-muted">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold text-ink">{value}</p>
-      {meta ? <p className="mt-1 break-words text-xs text-slate-500">{meta}</p> : null}
+      <div>
+        <p className="break-words text-sm font-semibold text-ink">{value}</p>
+        {meta ? <p className="mt-1 break-words text-xs text-slate-500">{meta}</p> : null}
+      </div>
     </div>
   );
 }
