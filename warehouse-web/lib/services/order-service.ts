@@ -39,6 +39,7 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
   return [
     ...inboundOrders.map((order): OrderSummary => {
       const location = `${order.warehouse.name} / ${order.location.name}`;
+      const barcodes = order.items.map((item) => item.barcode);
       return {
         id: order.id,
         orderNo: order.orderNo,
@@ -50,11 +51,13 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
         createdAt: formatDateTime(order.createdAt),
         itemCount: order.items.length,
         goodsSummary: summarizeGoods(order.items.map((item) => item.goods.name)),
-        barcodePreview: summarizeBarcodes(order.items.map((item) => item.barcode))
+        barcodePreview: summarizeBarcodes(barcodes),
+        barcodes
       };
     }),
     ...outboundOrders.map((order): OrderSummary => {
       const isTransfer = order.type === "TRANSFER";
+      const barcodes = order.items.map((item) => item.barcode);
       return {
         id: order.id,
         orderNo: order.orderNo,
@@ -68,22 +71,27 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
         createdAt: formatDateTime(order.createdAt),
         itemCount: order.items.length,
         goodsSummary: summarizeGoods(order.items.map((item) => item.goods.name)),
-        barcodePreview: summarizeBarcodes(order.items.map((item) => item.barcode))
+        barcodePreview: summarizeBarcodes(barcodes),
+        barcodes
       };
     }),
-    ...salesReturnOrders.map((order): OrderSummary => ({
-      id: order.id,
-      orderNo: order.orderNo,
-      kind: "sales_return",
-      businessType: "销售退回",
-      primaryTarget: `${order.returnWarehouse.name} / ${order.returnLocation.name}`,
-      counterparty: summarizeSalespeople(order.items.map((item) => item.fromSalesperson.name)),
-      operator: order.operatorName,
-      createdAt: formatDateTime(order.createdAt),
-      itemCount: order.items.length,
-      goodsSummary: summarizeGoods(order.items.map((item) => item.goods.name)),
-      barcodePreview: summarizeBarcodes(order.items.map((item) => item.barcode))
-    }))
+    ...salesReturnOrders.map((order): OrderSummary => {
+      const barcodes = order.items.map((item) => item.barcode);
+      return {
+        id: order.id,
+        orderNo: order.orderNo,
+        kind: "sales_return",
+        businessType: "销售退回",
+        primaryTarget: `${order.returnWarehouse.name} / ${order.returnLocation.name}`,
+        counterparty: summarizeSalespeople(order.items.map((item) => item.fromSalesperson.name)),
+        operator: order.operatorName,
+        createdAt: formatDateTime(order.createdAt),
+        itemCount: order.items.length,
+        goodsSummary: summarizeGoods(order.items.map((item) => item.goods.name)),
+        barcodePreview: summarizeBarcodes(barcodes),
+        barcodes
+      };
+    })
   ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 

@@ -2764,9 +2764,46 @@ function OrdersView({
   setKindFilter: (value: OrderKind | "all") => void;
   refreshOrders: () => void;
 }) {
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const inboundCount = orders.filter((order) => order.kind === "inbound").length;
   const outboundCount = orders.filter((order) => order.kind === "outbound").length;
   const returnCount = orders.filter((order) => order.kind === "sales_return").length;
+  const selectedOrders = orders.filter((order) => selectedOrderIds.includes(order.id));
+  const allVisibleSelected = orders.length > 0 && selectedOrders.length === orders.length;
+
+  useEffect(() => {
+    setSelectedOrderIds((previous) => previous.filter((id) => orders.some((order) => order.id === id)));
+  }, [orders]);
+
+  function toggleOrderSelection(orderId: string, checked: boolean) {
+    setSelectedOrderIds((previous) =>
+      checked ? [...new Set([...previous, orderId])] : previous.filter((id) => id !== orderId)
+    );
+  }
+
+  function toggleAllVisibleOrders(checked: boolean) {
+    setSelectedOrderIds(checked ? orders.map((order) => order.id) : []);
+  }
+
+  function exportSelectedOrders() {
+    if (selectedOrders.length === 0) return;
+
+    const header = ["单据号", "单据类型", "业务类型", "来源 / 去向", "往来方", "数量", "货物", "条码", "操作人", "创建时间"];
+    const rows = selectedOrders.map((order) => [
+      order.orderNo,
+      formatOrderKind(order.kind),
+      order.businessType,
+      order.primaryTarget,
+      order.counterparty ?? "-",
+      `${order.itemCount}`,
+      order.goodsSummary || "-",
+      order.barcodes.length > 0 ? order.barcodes.join("、") : order.barcodePreview || "-",
+      order.operator,
+      order.createdAt
+    ]);
+    const timestamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+    downloadCsv(`业务单据导出-${timestamp}.csv`, [header, ...rows]);
+  }
 
   return (
     <div className="space-y-5">
@@ -2778,7 +2815,7 @@ function OrdersView({
               全部 {orders.length} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-[220px_auto] sm:items-end">
+          <div className="grid gap-3 sm:grid-cols-[220px_auto_auto] sm:items-end">
             <div>
               <FieldSelect
                 label="业务类型"
@@ -2796,6 +2833,10 @@ function OrdersView({
               <RotateCcw className="h-4 w-4" />
               {loading ? "刷新中" : "刷新单据"}
             </button>
+            <button className="primary-button" onClick={exportSelectedOrders} disabled={selectedOrders.length === 0}>
+              <Download className="h-4 w-4" />
+              导出已选
+            </button>
           </div>
         </div>
       </section>
@@ -2803,12 +2844,24 @@ function OrdersView({
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <SectionHeader icon={ClipboardList} title="单据列表" compact />
-          <p className="text-xs text-muted">当前 {formatOrderFilterLabel(kindFilter)} · {orders.length} 张</p>
+          <p className="text-xs text-muted">
+            当前 {formatOrderFilterLabel(kindFilter)} · {orders.length} 张 · 已选 {selectedOrders.length} 张
+          </p>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[920px]">
+          <table className="w-full min-w-[1040px]">
             <thead className="table-head">
               <tr>
+                <th className="w-12 px-4 py-3">
+                  <input
+                    aria-label="选择当前列表全部单据"
+                    checked={allVisibleSelected}
+                    className="h-4 w-4 rounded border-slate-300 text-work"
+                    disabled={orders.length === 0}
+                    onChange={(event) => toggleAllVisibleOrders(event.target.checked)}
+                    type="checkbox"
+                  />
+                </th>
                 <th className="px-4 py-3">单据</th>
                 <th className="px-4 py-3">业务</th>
                 <th className="px-4 py-3">来源 / 去向</th>
@@ -2817,34 +2870,46 @@ function OrdersView({
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => (
-                <tr key={order.id} className="hover:bg-slate-50">
-                  <td className="table-cell">
-                    <div className="font-mono text-sm font-semibold text-work">{order.orderNo}</div>
-                    <div className="mt-1 text-xs text-slate-500">{order.createdAt}</div>
-                  </td>
-                  <td className="table-cell">
-                    <StatusBadge label={order.businessType} />
-                    <div className="mt-2 text-xs text-slate-500">{formatOrderKind(order.kind)}</div>
-                  </td>
-                  <td className="table-cell">
-                    <div className="font-medium text-ink">{order.primaryTarget}</div>
-                    <div className="mt-1 text-xs text-slate-500">{order.counterparty ?? "-"}</div>
-                  </td>
-                  <td className="table-cell">
-                    <div className="text-sm font-semibold text-ink">{order.itemCount} 件</div>
-                    <div className="mt-1 text-xs text-slate-500">{order.goodsSummary || "-"}</div>
-                    <div className="mt-2 font-mono text-xs text-slate-500">{order.barcodePreview || "-"}</div>
-                  </td>
-                  <td className="table-cell">
-                    <div className="font-medium text-ink">{order.operator}</div>
-                    <div className="mt-1 text-xs text-slate-500">已写入库存流水</div>
-                  </td>
-                </tr>
-              ))}
+              {orders.map((order) => {
+                const selected = selectedOrderIds.includes(order.id);
+                return (
+                  <tr key={order.id} className={`${selected ? "bg-emerald-50" : ""} hover:bg-slate-50`}>
+                    <td className="table-cell">
+                      <input
+                        aria-label={`选择单据 ${order.orderNo}`}
+                        checked={selected}
+                        className="h-4 w-4 rounded border-slate-300 text-work"
+                        onChange={(event) => toggleOrderSelection(order.id, event.target.checked)}
+                        type="checkbox"
+                      />
+                    </td>
+                    <td className="table-cell">
+                      <div className="font-mono text-sm font-semibold text-work">{order.orderNo}</div>
+                      <div className="mt-1 text-xs text-slate-500">{order.createdAt}</div>
+                    </td>
+                    <td className="table-cell">
+                      <StatusBadge label={order.businessType} />
+                      <div className="mt-2 text-xs text-slate-500">{formatOrderKind(order.kind)}</div>
+                    </td>
+                    <td className="table-cell">
+                      <div className="font-medium text-ink">{order.primaryTarget}</div>
+                      <div className="mt-1 text-xs text-slate-500">{order.counterparty ?? "-"}</div>
+                    </td>
+                    <td className="table-cell">
+                      <div className="text-sm font-semibold text-ink">{order.itemCount} 件</div>
+                      <div className="mt-1 text-xs text-slate-500">{order.goodsSummary || "-"}</div>
+                      <div className="mt-2 font-mono text-xs text-slate-500">{order.barcodePreview || "-"}</div>
+                    </td>
+                    <td className="table-cell">
+                      <div className="font-medium text-ink">{order.operator}</div>
+                      <div className="mt-1 text-xs text-slate-500">已写入库存流水</div>
+                    </td>
+                  </tr>
+                );
+              })}
               {orders.length === 0 ? (
                 <tr>
-                  <td className="table-cell text-center text-slate-500" colSpan={5}>
+                  <td className="table-cell text-center text-slate-500" colSpan={6}>
                     {loading ? "正在读取单据..." : "暂无符合条件的单据"}
                   </td>
                 </tr>

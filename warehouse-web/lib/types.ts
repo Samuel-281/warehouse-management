@@ -130,6 +130,7 @@ export type OrderSummary = {
   itemCount: number;
   goodsSummary: string;
   barcodePreview: string;
+  barcodes: string[];
 };
 
 export type WarehouseState = {
