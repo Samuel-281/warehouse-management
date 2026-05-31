@@ -983,21 +983,134 @@ function DashboardView({
   setSelectedBarcode: (barcode: string) => void;
   canOperateWarehouse: boolean;
 }) {
-  const recentMovements = state.movements.slice(0, 6);
+  const recentMovements = state.movements.slice(0, 8);
+  const totalItems = state.inventoryItems.length;
+  const warehouseRows = state.warehouses.map((warehouse) => ({
+    warehouse,
+    count: state.inventoryItems.filter((item) => item.ownerType === "warehouse" && item.warehouseId === warehouse.id).length
+  }));
+  const salespersonRows = state.salespeople.map((person) => ({
+    person,
+    count: state.inventoryItems.filter((item) => item.ownerType === "salesperson" && item.salespersonId === person.id).length
+  }));
+  const distributionRows = [
+    { label: "总仓库存", value: stats.mainCount },
+    { label: "分仓库存", value: stats.branchCount },
+    { label: "销售人员名下", value: stats.withSales }
+  ];
+
   return (
     <div className="space-y-5">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="仓库在库条码" value={stats.inStock} icon={Boxes} />
-        <MetricCard label="总仓库存" value={stats.mainCount} icon={Warehouse} />
-        <MetricCard label="分仓库存" value={stats.branchCount} icon={Building2} />
-        <MetricCard label="销售人员名下" value={stats.withSales} icon={Users} />
+      <section className="panel p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <p className="text-xs font-semibold text-muted">库存运营总览</p>
+            <h2 className="mt-1 text-xl font-semibold text-ink">单件条码库存状态</h2>
+          </div>
+          <div className="grid grid-cols-3 gap-3 text-center text-sm">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-xs text-muted">货物资料</p>
+              <p className="mt-1 text-lg font-semibold text-ink">{state.goods.length}</p>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-xs text-muted">仓库数量</p>
+              <p className="mt-1 text-lg font-semibold text-ink">{state.warehouses.length}</p>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-xs text-muted">销售人员</p>
+              <p className="mt-1 text-lg font-semibold text-ink">{state.salespeople.length}</p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="全部条码" value={totalItems} detail="当前系统内可追踪货物" icon={Barcode} />
+          <MetricCard label="仓库在库" value={stats.inStock} detail={`${formatPercent(stats.inStock, totalItems)}% 留存在仓库`} icon={Boxes} />
+          <MetricCard label="分仓库存" value={stats.branchCount} detail={`${formatPercent(stats.branchCount, stats.inStock)}% 在库库存`} icon={Building2} />
+          <MetricCard label="销售人员名下" value={stats.withSales} detail={`${formatPercent(stats.withSales, totalItems)}% 总条码`} icon={Users} />
+        </div>
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+        <section className="panel p-5">
+          <SectionHeader icon={PackageCheck} title="库存归属结构" compact />
+          <div className="mt-4 space-y-4">
+            {distributionRows.map((row) => (
+              <div key={row.label}>
+                <div className="mb-1.5 flex items-center justify-between text-sm">
+                  <span className="font-semibold text-slate-700">{row.label}</span>
+                  <span className="font-mono text-slate-500">
+                    {row.value} 件 · {formatPercent(row.value, totalItems)}%
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-slate-100">
+                  <div
+                    className="h-2 rounded-full bg-work"
+                    style={{ width: `${formatPercent(row.value, totalItems)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-2">
+            <MiniDistributionTable
+              title="仓库库存分布"
+              rows={warehouseRows.map(({ warehouse, count }) => ({
+                label: warehouse.name,
+                meta: warehouse.type === "main" ? "总仓" : "分仓",
+                count
+              }))}
+            />
+            <MiniDistributionTable
+              title="销售人员持有"
+              rows={salespersonRows.map(({ person, count }) => ({
+                label: person.name,
+                meta: person.region,
+                count
+              }))}
+            />
+          </div>
+        </section>
+
+        <section className="panel p-5">
+          <SectionHeader icon={PackageCheck} title="常用业务" compact />
+          <div className="mt-4 grid gap-3">
+            {canOperateWarehouse ? (
+              <>
+                <DashboardAction
+                  icon={Truck}
+                  title="入库管理"
+                  description="厂家到货、终端店铺退换货"
+                  onClick={() => setActiveView("inbound")}
+                />
+                <DashboardAction
+                  icon={ArrowLeftRight}
+                  title="出库管理"
+                  description="仓库挪动、销售人员分配"
+                  onClick={() => setActiveView("outbound")}
+                />
+                <DashboardAction
+                  icon={Undo2}
+                  title="销售退回"
+                  description="未售完货物回流仓库"
+                  onClick={() => setActiveView("return")}
+                />
+              </>
+            ) : null}
+            <DashboardAction
+              icon={Search}
+              title="库存查询"
+              description="按条码查看库存与流转"
+              onClick={() => setActiveView("inventory")}
+            />
+          </div>
+        </section>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
+      <div className="grid gap-5">
         <section className="panel overflow-hidden">
           <SectionHeader icon={ClipboardList} title="最近库存流转" />
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px]">
+            <table className="w-full min-w-[860px]">
               <thead className="table-head">
                 <tr>
                   <th className="px-4 py-3">时间</th>
@@ -1010,7 +1123,9 @@ function DashboardView({
                 {recentMovements.map((movement) => (
                   <tr key={movement.id} className="hover:bg-slate-50">
                     <td className="table-cell text-slate-600">{movement.occurredAt}</td>
-                    <td className="table-cell font-semibold">{formatMovementType(movement.type)}</td>
+                    <td className="table-cell">
+                      <StatusBadge label={formatMovementType(movement.type)} />
+                    </td>
                     <td className="table-cell">
                       <button
                         className="font-mono text-work"
@@ -1029,32 +1144,11 @@ function DashboardView({
                 ))}
               </tbody>
             </table>
-          </div>
-        </section>
-
-        <section className="panel p-4">
-          <SectionHeader icon={PackageCheck} title="常用操作" compact />
-          <div className="grid gap-3">
-            {canOperateWarehouse ? (
-              <>
-                <button className="secondary-button justify-start" onClick={() => setActiveView("inbound")}>
-                  <Truck className="h-4 w-4" />
-                  厂家到货或终端退换货入库
-                </button>
-                <button className="secondary-button justify-start" onClick={() => setActiveView("outbound")}>
-                  <ArrowLeftRight className="h-4 w-4" />
-                  挪仓或销售出库
-                </button>
-                <button className="secondary-button justify-start" onClick={() => setActiveView("return")}>
-                  <Undo2 className="h-4 w-4" />
-                  销售人员未售完退回
-                </button>
-              </>
+            {recentMovements.length === 0 ? (
+              <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+                暂无库存流转记录。
+              </div>
             ) : null}
-            <button className="secondary-button justify-start" onClick={() => setActiveView("inventory")}>
-              <Search className="h-4 w-4" />
-              查询库存与条码流转
-            </button>
           </div>
         </section>
       </div>
@@ -1062,17 +1156,85 @@ function DashboardView({
   );
 }
 
-function MetricCard({ label, value, icon: Icon }: { label: string; value: number; icon: typeof Home }) {
+function formatPercent(value: number, total: number) {
+  if (!total) return 0;
+  return Math.round((value / total) * 100);
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+  icon: Icon
+}: {
+  label: string;
+  value: number;
+  detail: string;
+  icon: typeof Home;
+}) {
   return (
     <section className="panel p-4">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-slate-600">{label}</p>
-        <div className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-100 text-work">
+        <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-50 text-work">
           <Icon className="h-5 w-5" />
         </div>
       </div>
       <p className="mt-4 text-3xl font-semibold text-ink">{value}</p>
+      <p className="mt-1 text-xs text-muted">{detail}</p>
     </section>
+  );
+}
+
+function MiniDistributionTable({
+  title,
+  rows
+}: {
+  title: string;
+  rows: Array<{ label: string; meta: string; count: number }>;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200">
+      <div className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">{title}</div>
+      <div className="divide-y divide-slate-200">
+        {rows.map((row) => (
+          <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm" key={`${row.label}-${row.meta}`}>
+            <div className="min-w-0">
+              <p className="truncate font-medium text-ink">{row.label}</p>
+              <p className="truncate text-xs text-muted">{row.meta}</p>
+            </div>
+            <span className="font-mono font-semibold text-slate-700">{row.count}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DashboardAction({
+  icon: Icon,
+  title,
+  description,
+  onClick
+}: {
+  icon: typeof Home;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-work hover:bg-emerald-50"
+      onClick={onClick}
+    >
+      <div className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-100 text-work">
+        <Icon className="h-5 w-5" />
+      </div>
+      <div>
+        <p className="text-sm font-semibold text-ink">{title}</p>
+        <p className="mt-0.5 text-xs text-muted">{description}</p>
+      </div>
+    </button>
   );
 }
 
