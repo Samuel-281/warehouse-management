@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  AlertCircle,
   ArrowLeftRight,
+  ArrowRight,
   Barcode,
   Boxes,
   Building2,
@@ -16,8 +18,10 @@ import {
   Pencil,
   Power,
   RotateCcw,
+  ScanLine,
   Search,
   ShieldCheck,
+  Trash2,
   Truck,
   Undo2,
   Users,
@@ -1238,6 +1242,106 @@ function DashboardAction({
   );
 }
 
+function OperationPageHeader({
+  icon: Icon,
+  eyebrow,
+  title,
+  summary
+}: {
+  icon: typeof Home;
+  eyebrow: string;
+  title: string;
+  summary: Array<{ label: string; value: string }>;
+}) {
+  return (
+    <section className="panel p-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-md bg-emerald-50 text-work">
+            <Icon className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-muted">{eyebrow}</p>
+            <h2 className="mt-1 text-xl font-semibold text-ink">{title}</h2>
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {summary.map((item) => (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3" key={item.label}>
+              <p className="text-xs text-muted">{item.label}</p>
+              <p className="mt-1 truncate text-sm font-semibold text-ink">{item.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="label">{label}</p>
+      <div className="flex h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function BusinessRuleStrip({
+  tone,
+  title,
+  detail
+}: {
+  tone: "neutral" | "warning";
+  title: string;
+  detail: string;
+}) {
+  const isWarning = tone === "warning";
+  return (
+    <div
+      className={`mt-5 flex gap-3 rounded-lg border p-3 text-sm ${
+        isWarning ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-slate-50 text-slate-600"
+      }`}
+    >
+      <AlertCircle className={`mt-0.5 h-4 w-4 shrink-0 ${isWarning ? "text-amber-600" : "text-work"}`} />
+      <div>
+        <p className="font-semibold">{title}</p>
+        <p className="mt-1">{detail}</p>
+      </div>
+    </div>
+  );
+}
+
+function RoutePreview({
+  from,
+  fromMeta,
+  to,
+  toMeta
+}: {
+  from: string;
+  fromMeta: string;
+  to: string;
+  toMeta: string;
+}) {
+  return (
+    <div className="mt-5 grid items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1fr_auto_1fr]">
+      <div>
+        <p className="text-xs text-muted">{fromMeta}</p>
+        <p className="mt-1 truncate text-sm font-semibold text-ink">{from}</p>
+      </div>
+      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-work shadow-sm">
+        <ArrowRight className="h-4 w-4" />
+      </div>
+      <div>
+        <p className="text-xs text-muted">{toMeta}</p>
+        <p className="mt-1 truncate text-sm font-semibold text-ink">{to}</p>
+      </div>
+    </div>
+  );
+}
+
 function MastersView({
   state,
   setState,
@@ -1967,6 +2071,18 @@ function InboundView(props: {
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
   const enabledGoods = props.state.goods.filter((goods) => goods.status === "enabled");
   const enabledStores = props.state.terminalStores.filter((store) => store.status === "enabled");
+  const selectedWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.inboundWarehouseId);
+  const plannedQty = Number(props.inboundQty);
+  const validPlannedQty = Number.isInteger(plannedQty) && plannedQty > 0 ? plannedQty : 0;
+  const barcodeCount = props.inboundBarcodes.length;
+  const quantityStatus =
+    validPlannedQty === 0
+      ? "待确认"
+      : barcodeCount === validPlannedQty
+        ? "数量匹配"
+        : barcodeCount > validPlannedQty
+          ? "条码超量"
+          : `还差 ${validPlannedQty - barcodeCount} 件`;
   const shelfLifePreview =
     props.inboundSource === "terminal_return" &&
     selectedGoods?.category === "health_wine" &&
@@ -1975,98 +2091,127 @@ function InboundView(props: {
       : "无";
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-      <section className="panel p-5">
-        <SectionHeader icon={Truck} title="创建入库单" compact />
-        <SegmentedControl
-          options={[
-            { value: "factory", label: "厂家到货" },
-            { value: "terminal_return", label: "终端店铺退换货" }
-          ]}
-          value={props.inboundSource}
-          onChange={(value) => props.setInboundSource(value as InboundSource)}
-        />
+    <div className="space-y-5">
+      <OperationPageHeader
+        icon={Truck}
+        eyebrow="入库管理"
+        title={props.inboundSource === "factory" ? "厂家到货入库" : "终端店铺退换货入库"}
+        summary={[
+          { label: "入库仓库", value: selectedWarehouse?.name ?? "未选择" },
+          { label: "货物", value: selectedGoods?.name ?? "未选择" },
+          { label: "条码数量", value: `${barcodeCount} / ${validPlannedQty || "-"} 件` }
+        ]}
+      />
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <FieldSelect
-            label="入库仓库"
-            value={props.inboundWarehouseId}
-            onChange={props.setInboundWarehouseId}
-            options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
-          />
-          <FieldSelect
-            label="货物"
-            value={props.inboundGoodsId}
-            onChange={props.setInboundGoodsId}
-            options={enabledGoods.map((goods) => ({
-              value: goods.id,
-              label: `${goods.name} / ${formatCategory(goods.category)}`
-            }))}
-          />
-          <div>
-            <label className="label" htmlFor="inboundQty">
-              入库数量
-            </label>
-            <input
-              id="inboundQty"
-              className="field"
-              type="number"
-              min="1"
-              value={props.inboundQty}
-              onChange={(event) => props.setInboundQty(event.target.value)}
+      <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
+        <section className="panel p-5">
+          <SectionHeader icon={ClipboardList} title="入库参数" compact />
+          <div className="mt-4">
+            <SegmentedControl
+              options={[
+                { value: "factory", label: "厂家到货" },
+                { value: "terminal_return", label: "终端店铺退换货" }
+              ]}
+              value={props.inboundSource}
+              onChange={(value) => props.setInboundSource(value as InboundSource)}
             />
           </div>
-          {props.inboundSource === "terminal_return" ? (
-            <>
-              <FieldSelect
-                label="终端店铺"
-                value={props.terminalStoreId}
-                onChange={props.setTerminalStoreId}
-                options={enabledStores.map((store) => ({ value: store.id, label: store.name }))}
+
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <FieldSelect
+              label="入库仓库"
+              value={props.inboundWarehouseId}
+              onChange={props.setInboundWarehouseId}
+              options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+            />
+            <FieldSelect
+              label="货物"
+              value={props.inboundGoodsId}
+              onChange={props.setInboundGoodsId}
+              options={enabledGoods.map((goods) => ({
+                value: goods.id,
+                label: `${goods.name} / ${formatCategory(goods.category)}`
+              }))}
+            />
+            <div>
+              <label className="label" htmlFor="inboundQty">
+                入库数量
+              </label>
+              <input
+                id="inboundQty"
+                className="field"
+                type="number"
+                min={Math.max(1, barcodeCount)}
+                value={props.inboundQty}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  const nextQty = Number(nextValue);
+                  if (nextValue && Number.isFinite(nextQty) && nextQty < barcodeCount) {
+                    props.setInboundQty(String(barcodeCount));
+                    return;
+                  }
+                  props.setInboundQty(nextValue);
+                }}
               />
-              <div>
-                <label className="label" htmlFor="productionDate">
-                  生产日期
-                </label>
-                <input
-                  id="productionDate"
-                  className="field"
-                  type="date"
-                  value={props.productionDate}
-                  onChange={(event) => props.setProductionDate(event.target.value)}
+            </div>
+            <ReadOnlyField label="数量状态" value={quantityStatus} />
+            {props.inboundSource === "terminal_return" ? (
+              <>
+                <FieldSelect
+                  label="终端店铺"
+                  value={props.terminalStoreId}
+                  onChange={props.setTerminalStoreId}
+                  options={enabledStores.map((store) => ({ value: store.id, label: store.name }))}
                 />
-              </div>
-            </>
-          ) : null}
-        </div>
-
-        {props.inboundSource === "terminal_return" ? (
-          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-            当前货物大类：{selectedGoods ? formatCategory(selectedGoods.category) : "未选择"}；默认保质期：
-            {shelfLifePreview}
+                <div>
+                  <label className="label" htmlFor="productionDate">
+                    生产日期
+                  </label>
+                  <input
+                    id="productionDate"
+                    className="field"
+                    type="date"
+                    value={props.productionDate}
+                    onChange={(event) => props.setProductionDate(event.target.value)}
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
-        ) : (
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-            厂家到货入库不强制登记生产日期，也不默认计算保质期。
-          </div>
-        )}
-      </section>
 
-      <section className="panel p-5">
-        <SectionHeader icon={Barcode} title="单件条码录入" compact />
-        <BarcodeCollector
-          input={props.inboundBarcodeInput}
-          setInput={props.setInboundBarcodeInput}
-          barcodes={props.inboundBarcodes}
-          setBarcodes={props.setInboundBarcodes}
-          onAdd={props.addBarcode}
-          placeholder="扫描或输入新条码，如 HJ202605290099"
-        />
-        <button className="primary-button mt-5 w-full" onClick={props.submitInbound}>
-          <Check className="h-4 w-4" />
-          提交入库并更新库存
-        </button>
-      </section>
+          <BusinessRuleStrip
+            tone={props.inboundSource === "terminal_return" ? "warning" : "neutral"}
+            title={props.inboundSource === "terminal_return" ? "退换货入库规则" : "厂家到货规则"}
+            detail={
+              props.inboundSource === "terminal_return"
+                ? `货物大类：${selectedGoods ? formatCategory(selectedGoods.category) : "未选择"}；默认保质期：${shelfLifePreview}`
+                : "生产日期与默认保质期不强制登记。"
+            }
+          />
+        </section>
+
+        <section className="panel p-5">
+          <BarcodeCollector
+            title="入库条码"
+            description="单件条码进入所选仓库库存"
+            input={props.inboundBarcodeInput}
+            setInput={props.setInboundBarcodeInput}
+            barcodes={props.inboundBarcodes}
+            setBarcodes={props.setInboundBarcodes}
+            onAdd={props.addBarcode}
+            placeholder="扫描或输入新条码，如 HJ202605290099"
+          />
+          <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-slate-600">
+              <span className="font-semibold text-ink">{barcodeCount}</span> 件条码等待提交
+            </div>
+            <button className="primary-button sm:min-w-[180px]" onClick={props.submitInbound}>
+              <Check className="h-4 w-4" />
+              提交入库
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
@@ -2091,66 +2236,114 @@ function OutboundView(props: {
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
   const transferTargetWarehouses = enabledWarehouses.filter((warehouse) => warehouse.id !== props.sourceWarehouseId);
   const enabledSalespeople = props.state.salespeople.filter((person) => person.status === "enabled");
-  return (
-    <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-      <section className="panel p-5">
-        <SectionHeader icon={ArrowLeftRight} title="创建出库单" compact />
-        <SegmentedControl
-          options={[
-            { value: "transfer", label: "挪仓" },
-            { value: "sales", label: "销售出库" }
-          ]}
-          value={props.outboundType}
-          onChange={(value) => props.setOutboundType(value as OutboundType)}
-        />
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <FieldSelect
-            label="出库仓库"
-            value={props.sourceWarehouseId}
-            onChange={props.setSourceWarehouseId}
-            options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
-          />
-          {props.outboundType === "transfer" ? (
-            <FieldSelect
-              label="目标仓库"
-              value={props.targetWarehouseId}
-              onChange={props.setTargetWarehouseId}
-              options={transferTargetWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
-            />
-          ) : (
-            <FieldSelect
-              label="销售人员"
-              value={props.salespersonId}
-              onChange={props.setSalespersonId}
-              options={enabledSalespeople.map((person) => ({
-                value: person.id,
-                label: `${person.name} / ${person.region}`
-              }))}
-            />
-          )}
-        </div>
-        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-          {props.outboundType === "transfer"
-            ? "挪仓规则：总仓和分仓可以互相挪动，提交后直接进入目标仓库库存。"
-            : "销售出库规则：总仓和分仓都可以出库，只分配到销售人员名下。"}
-        </div>
-      </section>
+  const sourceWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.sourceWarehouseId);
+  const targetWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.targetWarehouseId);
+  const salesperson = enabledSalespeople.find((person) => person.id === props.salespersonId);
+  const sourceStockCount = props.state.inventoryItems.filter(
+    (item) => item.ownerType === "warehouse" && item.warehouseId === props.sourceWarehouseId
+  ).length;
+  const validBarcodeCount = props.outboundBarcodes.filter((barcode) => {
+    const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
+    return item?.ownerType === "warehouse" && item.warehouseId === props.sourceWarehouseId;
+  }).length;
+  const targetLabel =
+    props.outboundType === "transfer" ? targetWarehouse?.name ?? "未选择" : salesperson?.name ?? "未选择";
 
-      <section className="panel p-5">
-        <SectionHeader icon={Barcode} title="出库条码清单" compact />
-        <BarcodeCollector
-          input={props.outboundBarcodeInput}
-          setInput={props.setOutboundBarcodeInput}
-          barcodes={props.outboundBarcodes}
-          setBarcodes={props.setOutboundBarcodes}
-          onAdd={props.addBarcode}
-          placeholder="扫描或输入当前在库条码"
-        />
-        <button className="primary-button mt-5 w-full" onClick={props.submitOutbound}>
-          <Check className="h-4 w-4" />
-          提交出库并更新归属
-        </button>
-      </section>
+  return (
+    <div className="space-y-5">
+      <OperationPageHeader
+        icon={ArrowLeftRight}
+        eyebrow="出库管理"
+        title={props.outboundType === "transfer" ? "仓库挪动" : "销售出库"}
+        summary={[
+          { label: "出库仓库", value: sourceWarehouse?.name ?? "未选择" },
+          { label: props.outboundType === "transfer" ? "目标仓库" : "销售人员", value: targetLabel },
+          { label: "条码数量", value: `${props.outboundBarcodes.length} 件` }
+        ]}
+      />
+
+      <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
+        <section className="panel p-5">
+          <SectionHeader icon={ClipboardList} title="出库参数" compact />
+          <div className="mt-4">
+            <SegmentedControl
+              options={[
+                { value: "transfer", label: "挪仓" },
+                { value: "sales", label: "销售出库" }
+              ]}
+              value={props.outboundType}
+              onChange={(value) => props.setOutboundType(value as OutboundType)}
+            />
+          </div>
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <FieldSelect
+              label="出库仓库"
+              value={props.sourceWarehouseId}
+              onChange={props.setSourceWarehouseId}
+              options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+            />
+            {props.outboundType === "transfer" ? (
+              <FieldSelect
+                label="目标仓库"
+                value={props.targetWarehouseId}
+                onChange={props.setTargetWarehouseId}
+                options={transferTargetWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+              />
+            ) : (
+              <FieldSelect
+                label="销售人员"
+                value={props.salespersonId}
+                onChange={props.setSalespersonId}
+                options={enabledSalespeople.map((person) => ({
+                  value: person.id,
+                  label: `${person.name} / ${person.region}`
+                }))}
+              />
+            )}
+            <ReadOnlyField label="仓库可用库存" value={`${sourceStockCount} 件`} />
+            <ReadOnlyField label="条码校验" value={`${validBarcodeCount} / ${props.outboundBarcodes.length} 可出库`} />
+          </div>
+
+          <RoutePreview
+            from={sourceWarehouse?.name ?? "未选择"}
+            fromMeta="出库仓库"
+            to={targetLabel}
+            toMeta={props.outboundType === "transfer" ? "目标仓库" : salesperson?.region ?? "销售人员"}
+          />
+
+          <BusinessRuleStrip
+            tone="neutral"
+            title={props.outboundType === "transfer" ? "挪仓规则" : "销售出库规则"}
+            detail={
+              props.outboundType === "transfer"
+                ? "总仓与分仓可互相挪动，目标仓库不能与出库仓库相同。"
+                : "总仓与分仓均可销售出库，货物只分配到销售人员名下。"
+            }
+          />
+        </section>
+
+        <section className="panel p-5">
+          <BarcodeCollector
+            title="出库条码"
+            description="条码归属将从仓库库存转出"
+            input={props.outboundBarcodeInput}
+            setInput={props.setOutboundBarcodeInput}
+            barcodes={props.outboundBarcodes}
+            setBarcodes={props.setOutboundBarcodes}
+            onAdd={props.addBarcode}
+            placeholder="扫描或输入当前在库条码"
+          />
+          <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-slate-600">
+              <span className="font-semibold text-ink">{props.outboundBarcodes.length}</span> 件条码等待提交
+            </div>
+            <button className="primary-button sm:min-w-[180px]" onClick={props.submitOutbound}>
+              <Check className="h-4 w-4" />
+              提交出库
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
@@ -2690,6 +2883,8 @@ function InventoryView(props: {
 }
 
 function BarcodeCollector({
+  title = "单件条码",
+  description,
   input,
   setInput,
   barcodes,
@@ -2697,6 +2892,8 @@ function BarcodeCollector({
   onAdd,
   placeholder
 }: {
+  title?: string;
+  description?: string;
   input: string;
   setInput: (value: string) => void;
   barcodes: string[];
@@ -2705,44 +2902,66 @@ function BarcodeCollector({
   placeholder: string;
 }) {
   return (
-    <div>
-      <div className="flex gap-2">
-        <input
-          className="field font-mono"
-          placeholder={placeholder}
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              onAdd(input);
-            }
-          }}
-        />
-        <button className="secondary-button shrink-0" onClick={() => onAdd(input)}>
-          <Barcode className="h-4 w-4" />
-          加入
-        </button>
+    <div className="space-y-4">
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-white text-work shadow-sm">
+              <ScanLine className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-ink">{title}</p>
+              {description ? <p className="mt-0.5 text-xs text-muted">{description}</p> : null}
+            </div>
+          </div>
+          <span className="rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm">
+            {barcodes.length} 件
+          </span>
+        </div>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <input
+            className="field h-12 font-mono text-base"
+            placeholder={placeholder}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                onAdd(input);
+              }
+            }}
+          />
+          <button className="secondary-button h-12 shrink-0 sm:min-w-[104px]" onClick={() => onAdd(input)}>
+            <Barcode className="h-4 w-4" />
+            加入
+          </button>
+        </div>
       </div>
-      <div className="mt-4 min-h-[220px] rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-semibold text-slate-700">已录入条码</p>
-          <span className="rounded-md bg-white px-2 py-1 text-xs text-slate-500">{barcodes.length} 件</span>
+
+      <div className="min-h-[260px] rounded-lg border border-slate-200 bg-white">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <p className="text-sm font-semibold text-slate-700">条码清单</p>
+          {barcodes.length > 0 ? (
+            <button className="secondary-button h-8 px-2 text-xs" onClick={() => setBarcodes([])}>
+              <Trash2 className="h-3.5 w-3.5" />
+              清空
+            </button>
+          ) : null}
         </div>
         {barcodes.length === 0 ? (
-          <div className="flex h-36 items-center justify-center rounded-md border border-dashed border-slate-300 text-sm text-slate-400">
+          <div className="m-4 flex h-40 items-center justify-center rounded-md border border-dashed border-slate-300 text-sm text-slate-400">
             等待扫码录入
           </div>
         ) : (
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid max-h-[360px] gap-2 overflow-y-auto p-4 sm:grid-cols-2">
             {barcodes.map((barcode) => (
               <div
-                className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
                 key={barcode}
               >
-                <span className="font-mono text-slate-700">{barcode}</span>
+                <span className="min-w-0 truncate font-mono text-slate-700">{barcode}</span>
                 <button
-                  className="text-xs font-semibold text-danger"
+                  className="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-danger hover:bg-red-50"
                   onClick={() => setBarcodes(barcodes.filter((entry) => entry !== barcode))}
                 >
                   移除
