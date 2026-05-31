@@ -2345,38 +2345,75 @@ function SalesReturnView(props: {
   submitSalesReturn: () => void;
 }) {
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
-  return (
-    <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-      <section className="panel p-5">
-        <SectionHeader icon={Undo2} title="销售退回设置" compact />
-        <div className="grid gap-4">
-          <FieldSelect
-            label="回流仓库"
-            value={props.returnWarehouseId}
-            onChange={props.setReturnWarehouseId}
-            options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
-          />
-        </div>
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-          销售退回只把销售人员名下未售完条码回流到仓库，不记录终端店铺、生产日期，也不重新计算保质期。
-        </div>
-      </section>
+  const returnWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.returnWarehouseId);
+  const salespersonCustodyCount = props.state.inventoryItems.filter((item) => item.ownerType === "salesperson").length;
+  const validReturnCount = props.returnBarcodes.filter((barcode) => {
+    const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
+    return item?.ownerType === "salesperson";
+  }).length;
 
-      <section className="panel p-5">
-        <SectionHeader icon={Barcode} title="退回条码清单" compact />
-        <BarcodeCollector
-          input={props.returnBarcodeInput}
-          setInput={props.setReturnBarcodeInput}
-          barcodes={props.returnBarcodes}
-          setBarcodes={props.setReturnBarcodes}
-          onAdd={props.addBarcode}
-          placeholder="扫描或输入销售人员名下条码，如 XS202605290001"
-        />
-        <button className="primary-button mt-5 w-full" onClick={props.submitSalesReturn}>
-          <Check className="h-4 w-4" />
-          提交销售退回
-        </button>
-      </section>
+  return (
+    <div className="space-y-5">
+      <OperationPageHeader
+        icon={Undo2}
+        eyebrow="销售退回"
+        title="未售完货物回流仓库"
+        summary={[
+          { label: "回流仓库", value: returnWarehouse?.name ?? "未选择" },
+          { label: "销售人员名下", value: `${salespersonCustodyCount} 件` },
+          { label: "待退回条码", value: `${props.returnBarcodes.length} 件` }
+        ]}
+      />
+
+      <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
+        <section className="panel p-5">
+          <SectionHeader icon={ClipboardList} title="退回设置" compact />
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <FieldSelect
+              label="回流仓库"
+              value={props.returnWarehouseId}
+              onChange={props.setReturnWarehouseId}
+              options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
+            />
+            <ReadOnlyField label="条码校验" value={`${validReturnCount} / ${props.returnBarcodes.length} 可退回`} />
+          </div>
+
+          <RoutePreview
+            from="销售人员名下"
+            fromMeta="当前归属"
+            to={returnWarehouse?.name ?? "未选择"}
+            toMeta="回流仓库"
+          />
+
+          <BusinessRuleStrip
+            tone="neutral"
+            title="销售退回规则"
+            detail="仅把销售人员名下未售完条码回流到仓库，不记录终端店铺、生产日期，也不重新计算保质期。"
+          />
+        </section>
+
+        <section className="panel p-5">
+          <BarcodeCollector
+            title="退回条码"
+            description="条码归属将从销售人员名下回到仓库"
+            input={props.returnBarcodeInput}
+            setInput={props.setReturnBarcodeInput}
+            barcodes={props.returnBarcodes}
+            setBarcodes={props.setReturnBarcodes}
+            onAdd={props.addBarcode}
+            placeholder="扫描或输入销售人员名下条码，如 XS202605290001"
+          />
+          <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-slate-600">
+              <span className="font-semibold text-ink">{props.returnBarcodes.length}</span> 件条码等待提交
+            </div>
+            <button className="primary-button sm:min-w-[180px]" onClick={props.submitSalesReturn}>
+              <Check className="h-4 w-4" />
+              提交退回
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
