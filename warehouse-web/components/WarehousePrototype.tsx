@@ -76,6 +76,11 @@ type BarcodeReview = {
   label: string;
   detail?: string;
 };
+type OperationCheck = {
+  label: string;
+  passed: boolean;
+  detail: string;
+};
 
 type ApiResponse<T> = { data: T } | { error: string };
 
@@ -1303,6 +1308,95 @@ function OperationPageHeader({
   );
 }
 
+function OperationPanel({
+  step,
+  icon: Icon,
+  title,
+  children
+}: {
+  step: string;
+  icon: typeof Home;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="panel overflow-hidden">
+      <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900 text-xs font-semibold text-white">
+          {step}
+        </div>
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-white text-work shadow-sm">
+          <Icon className="h-4 w-4" />
+        </div>
+        <h2 className="text-sm font-semibold text-ink">{title}</h2>
+      </div>
+      <div className="p-5">{children}</div>
+    </section>
+  );
+}
+
+function OperationSubmitBar({
+  checks,
+  itemCount,
+  invalidCount,
+  submitLabel,
+  disabled,
+  onSubmit
+}: {
+  checks: OperationCheck[];
+  itemCount: number;
+  invalidCount: number;
+  submitLabel: string;
+  disabled: boolean;
+  onSubmit: () => void;
+}) {
+  const allPassed = checks.every((check) => check.passed);
+
+  return (
+    <div className="mt-5 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div className="grid gap-2 bg-slate-50 p-3 lg:grid-cols-3">
+        {checks.map((check) => (
+          <div
+            className={`flex min-w-0 items-start gap-2 rounded-md border bg-white p-3 ${
+              check.passed ? "border-emerald-200" : "border-red-200"
+            }`}
+            key={check.label}
+          >
+            <div
+              className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+                check.passed ? "bg-emerald-50 text-work" : "bg-red-50 text-danger"
+              }`}
+            >
+              {check.passed ? <Check className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-xs font-semibold text-ink">{check.label}</p>
+              <p className="mt-0.5 truncate text-xs text-muted">{check.detail}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-ink">{allPassed ? "可以提交" : "提交前仍需处理"}</p>
+          <p className="mt-1 text-xs text-muted">
+            已录入 {itemCount} 件条码
+            {invalidCount > 0
+              ? `，${invalidCount} 件需处理`
+              : allPassed
+                ? "，提交后会写入库存流水"
+                : "，请完成上方检查项"}
+          </p>
+        </div>
+        <button className="primary-button sm:min-w-[180px]" disabled={disabled} onClick={onSubmit}>
+          <Check className="h-4 w-4" />
+          {submitLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ReadOnlyField({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -2198,6 +2292,32 @@ function InboundView(props: {
     validPlannedQty === 0 ||
     barcodeCount !== validPlannedQty ||
     (props.inboundSource === "terminal_return" && !props.productionDate);
+  const inboundChecks: OperationCheck[] = [
+    {
+      label: "业务参数",
+      passed: Boolean(selectedWarehouse && selectedGoods),
+      detail: `${selectedWarehouse?.name ?? "未选仓库"} / ${selectedGoods?.name ?? "未选货物"}`
+    },
+    {
+      label: "数量匹配",
+      passed: barcodeCount > 0 && validPlannedQty > 0 && barcodeCount === validPlannedQty,
+      detail: quantityStatus
+    },
+    {
+      label: "条码校验",
+      passed: barcodeCount > 0 && invalidBarcodeCount === 0,
+      detail: invalidBarcodeCount > 0 ? `${invalidBarcodeCount} 件需处理` : `${barcodeCount} 件可入库`
+    },
+    ...(props.inboundSource === "terminal_return"
+      ? [
+          {
+            label: "生产日期",
+            passed: Boolean(props.productionDate),
+            detail: props.productionDate ? `保质期：${shelfLifePreview}` : "终端店铺退换货必须登记"
+          }
+        ]
+      : [])
+  ];
 
   return (
     <div className="space-y-5">
@@ -2213,9 +2333,8 @@ function InboundView(props: {
       />
 
       <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
-        <section className="panel p-5">
-          <SectionHeader icon={ClipboardList} title="入库参数" compact />
-          <div className="mt-4">
+        <OperationPanel step="1" icon={ClipboardList} title="入库参数">
+          <div>
             <SegmentedControl
               options={[
                 { value: "factory", label: "厂家到货" },
@@ -2297,9 +2416,9 @@ function InboundView(props: {
                 : "生产日期与默认保质期不强制登记。"
             }
           />
-        </section>
+        </OperationPanel>
 
-        <section className="panel p-5">
+        <OperationPanel step="2" icon={ScanLine} title="条码录入与提交">
           <BarcodeCollector
             title="入库条码"
             description="单件条码进入所选仓库库存"
@@ -2311,19 +2430,15 @@ function InboundView(props: {
             placeholder="扫描或输入新条码，如 HJ202605290099"
             reviewBarcode={reviewInboundBarcode}
           />
-          <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm text-slate-600">
-              <span className="font-semibold text-ink">{barcodeCount}</span> 件条码等待提交
-              {invalidBarcodeCount > 0 ? (
-                <span className="ml-2 font-semibold text-danger">{invalidBarcodeCount} 件需处理</span>
-              ) : null}
-            </div>
-            <button className="primary-button sm:min-w-[180px]" disabled={submitDisabled} onClick={props.submitInbound}>
-              <Check className="h-4 w-4" />
-              提交入库
-            </button>
-          </div>
-        </section>
+          <OperationSubmitBar
+            checks={inboundChecks}
+            itemCount={barcodeCount}
+            invalidCount={invalidBarcodeCount}
+            submitLabel="提交入库"
+            disabled={submitDisabled}
+            onSubmit={props.submitInbound}
+          />
+        </OperationPanel>
       </div>
     </div>
   );
@@ -2394,6 +2509,29 @@ function OutboundView(props: {
     !sourceWarehouse ||
     (props.outboundType === "transfer" && (!targetWarehouse || targetWarehouse.id === sourceWarehouse.id)) ||
     (props.outboundType === "sales" && !salesperson);
+  const outboundChecks: OperationCheck[] = [
+    {
+      label: "出库仓库",
+      passed: Boolean(sourceWarehouse),
+      detail: sourceWarehouse?.name ?? "未选择"
+    },
+    {
+      label: props.outboundType === "transfer" ? "目标仓库" : "销售人员",
+      passed:
+        props.outboundType === "transfer"
+          ? Boolean(targetWarehouse && sourceWarehouse && targetWarehouse.id !== sourceWarehouse.id)
+          : Boolean(salesperson),
+      detail: targetLabel
+    },
+    {
+      label: "条码校验",
+      passed: props.outboundBarcodes.length > 0 && invalidBarcodeCount === 0,
+      detail:
+        invalidBarcodeCount > 0
+          ? `${invalidBarcodeCount} 件需处理`
+          : `${validBarcodeCount} / ${props.outboundBarcodes.length} 可出库`
+    }
+  ];
 
   return (
     <div className="space-y-5">
@@ -2409,9 +2547,8 @@ function OutboundView(props: {
       />
 
       <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
-        <section className="panel p-5">
-          <SectionHeader icon={ClipboardList} title="出库参数" compact />
-          <div className="mt-4">
+        <OperationPanel step="1" icon={ClipboardList} title="出库参数">
+          <div>
             <SegmentedControl
               options={[
                 { value: "transfer", label: "挪仓" },
@@ -2466,9 +2603,9 @@ function OutboundView(props: {
                 : "总仓与分仓均可销售出库，货物只分配到销售人员名下。"
             }
           />
-        </section>
+        </OperationPanel>
 
-        <section className="panel p-5">
+        <OperationPanel step="2" icon={ScanLine} title="条码录入与提交">
           <BarcodeCollector
             title="出库条码"
             description="条码归属将从仓库库存转出"
@@ -2480,19 +2617,15 @@ function OutboundView(props: {
             placeholder="扫描或输入当前在库条码"
             reviewBarcode={reviewOutboundBarcode}
           />
-          <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm text-slate-600">
-              <span className="font-semibold text-ink">{props.outboundBarcodes.length}</span> 件条码等待提交
-              {invalidBarcodeCount > 0 ? (
-                <span className="ml-2 font-semibold text-danger">{invalidBarcodeCount} 件需处理</span>
-              ) : null}
-            </div>
-            <button className="primary-button sm:min-w-[180px]" disabled={submitDisabled} onClick={props.submitOutbound}>
-              <Check className="h-4 w-4" />
-              提交出库
-            </button>
-          </div>
-        </section>
+          <OperationSubmitBar
+            checks={outboundChecks}
+            itemCount={props.outboundBarcodes.length}
+            invalidCount={invalidBarcodeCount}
+            submitLabel="提交出库"
+            disabled={submitDisabled}
+            onSubmit={props.submitOutbound}
+          />
+        </OperationPanel>
       </div>
     </div>
   );
@@ -2537,6 +2670,21 @@ function SalesReturnView(props: {
   };
   const invalidBarcodeCount = countInvalidReviews(props.returnBarcodes, reviewReturnBarcode);
   const submitDisabled = props.returnBarcodes.length === 0 || invalidBarcodeCount > 0 || !returnWarehouse;
+  const returnChecks: OperationCheck[] = [
+    {
+      label: "回流仓库",
+      passed: Boolean(returnWarehouse),
+      detail: returnWarehouse?.name ?? "未选择"
+    },
+    {
+      label: "条码校验",
+      passed: props.returnBarcodes.length > 0 && invalidBarcodeCount === 0,
+      detail:
+        invalidBarcodeCount > 0
+          ? `${invalidBarcodeCount} 件需处理`
+          : `${validReturnCount} / ${props.returnBarcodes.length} 可退回`
+    }
+  ];
 
   return (
     <div className="space-y-5">
@@ -2552,9 +2700,8 @@ function SalesReturnView(props: {
       />
 
       <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
-        <section className="panel p-5">
-          <SectionHeader icon={ClipboardList} title="退回设置" compact />
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <OperationPanel step="1" icon={ClipboardList} title="退回设置">
+          <div className="grid gap-4 md:grid-cols-2">
             <FieldSelect
               label="回流仓库"
               value={props.returnWarehouseId}
@@ -2576,9 +2723,9 @@ function SalesReturnView(props: {
             title="销售退回规则"
             detail="仅把销售人员名下未售完条码回流到仓库，不记录终端店铺、生产日期，也不重新计算保质期。"
           />
-        </section>
+        </OperationPanel>
 
-        <section className="panel p-5">
+        <OperationPanel step="2" icon={ScanLine} title="条码录入与提交">
           <BarcodeCollector
             title="退回条码"
             description="条码归属将从销售人员名下回到仓库"
@@ -2590,19 +2737,15 @@ function SalesReturnView(props: {
             placeholder="扫描或输入销售人员名下条码，如 XS202605290001"
             reviewBarcode={reviewReturnBarcode}
           />
-          <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm text-slate-600">
-              <span className="font-semibold text-ink">{props.returnBarcodes.length}</span> 件条码等待提交
-              {invalidBarcodeCount > 0 ? (
-                <span className="ml-2 font-semibold text-danger">{invalidBarcodeCount} 件需处理</span>
-              ) : null}
-            </div>
-            <button className="primary-button sm:min-w-[180px]" disabled={submitDisabled} onClick={props.submitSalesReturn}>
-              <Check className="h-4 w-4" />
-              提交退回
-            </button>
-          </div>
-        </section>
+          <OperationSubmitBar
+            checks={returnChecks}
+            itemCount={props.returnBarcodes.length}
+            invalidCount={invalidBarcodeCount}
+            submitLabel="提交退回"
+            disabled={submitDisabled}
+            onSubmit={props.submitSalesReturn}
+          />
+        </OperationPanel>
       </div>
     </div>
   );
