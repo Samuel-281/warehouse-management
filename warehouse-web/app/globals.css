@@ -4,7 +4,7 @@
 
 :root {
   color-scheme: light;
-  background: #f6f8fb;
+  background: #f4f6f9;
 }
 
 * {
@@ -13,7 +13,7 @@
 
 body {
   margin: 0;
-  background: #f6f8fb;
+  background: #f4f6f9;
   color: #182230;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -37,11 +37,11 @@ textarea:focus-visible {
 
 @layer components {
   .panel {
-    @apply rounded-lg border border-line bg-white shadow-panel;
+    @apply rounded-md border border-slate-200 bg-white shadow-sm;
   }
 
   .field {
-    @apply h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-ink shadow-sm outline-none transition placeholder:text-slate-400 focus:border-work focus:ring focus:ring-emerald-100;
+    @apply h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-ink outline-none transition placeholder:text-slate-400 hover:border-slate-400 focus:border-work focus:ring-2 focus:ring-emerald-100;
   }
 
   .label {
@@ -49,22 +49,22 @@ textarea:focus-visible {
   }
 
   .icon-button {
-    @apply inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:border-work hover:bg-emerald-50 hover:text-work;
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:border-work hover:bg-emerald-50 hover:text-work disabled:cursor-not-allowed disabled:text-slate-400;
   }
 
   .primary-button {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md bg-work px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300;
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-md bg-work px-3.5 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300;
   }
 
   .secondary-button {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:border-work hover:bg-emerald-50 hover:text-work disabled:cursor-not-allowed disabled:text-slate-400;
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-700 transition hover:border-work hover:bg-emerald-50 hover:text-work disabled:cursor-not-allowed disabled:text-slate-400;
   }
 
   .table-head {
-    @apply bg-slate-50 text-left text-xs font-semibold uppercase tracking-normal text-slate-500;
+    @apply bg-slate-50 text-left text-xs font-semibold tracking-normal text-slate-500;
   }
 
   .table-cell {
-    @apply border-t border-slate-200 px-4 py-3 text-sm;
+    @apply border-t border-slate-200 px-4 py-2.5 text-sm align-middle;
   }
 }

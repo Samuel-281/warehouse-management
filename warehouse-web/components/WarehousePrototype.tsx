@@ -703,22 +703,22 @@ export default function WarehousePrototype() {
   }
 
   return (
-    <main className="min-h-screen bg-canvas text-ink">
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-72 border-r border-slate-200 bg-slate-950 text-white lg:block">
-        <div className="px-5 py-5">
+    <main className="min-h-screen bg-[#f4f6f9] text-ink">
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-slate-200 bg-white lg:block">
+        <div className="px-4 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-work text-white">
+            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-work text-white">
               <Warehouse className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-sm font-semibold">仓库货物管理系统</p>
-              <p className="text-xs text-slate-400">条码级库存运营平台</p>
+              <p className="text-sm font-semibold text-ink">仓库货物管理系统</p>
+              <p className="text-xs text-slate-500">条码级库存运营平台</p>
             </div>
           </div>
         </div>
 
-        <div className="border-t border-white/10 px-3 py-4">
-          <p className="mb-2 px-3 text-xs font-semibold text-slate-400">业务导航</p>
+        <div className="border-t border-slate-200 px-3 py-4">
+          <p className="mb-2 px-3 text-xs font-semibold text-slate-500">业务导航</p>
           <nav className="space-y-1">
             {allowedNavItems.map((item) => {
               const Icon = item.icon;
@@ -728,8 +728,8 @@ export default function WarehousePrototype() {
                   key={item.key}
                   className={`flex h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition ${
                     active
-                      ? "bg-white text-slate-950 shadow-sm"
-                      : "text-slate-300 hover:bg-white/10 hover:text-white"
+                      ? "bg-emerald-50 text-work"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-ink"
                   }`}
                   onClick={() => setActiveView(item.key)}
                 >
@@ -741,23 +741,23 @@ export default function WarehousePrototype() {
           </nav>
         </div>
 
-        <div className="absolute bottom-0 left-0 right-0 border-t border-white/10 p-5">
-          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+        <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200 p-4">
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-md bg-brand text-sm font-bold text-white">
                 {(currentUser?.displayName ?? "仓").slice(0, 1)}
               </div>
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">{currentUser?.displayName ?? "仓库用户"}</p>
-                <p className="truncate text-xs text-slate-400">
+                <p className="truncate text-sm font-semibold text-ink">{currentUser?.displayName ?? "仓库用户"}</p>
+                <p className="truncate text-xs text-slate-500">
                   {currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
                 </p>
                 <p className="mt-1 truncate text-xs text-slate-500">{currentAccessSummary}</p>
               </div>
             </div>
-            <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
+            <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
               <span>数据源</span>
-              <span className="rounded bg-white/10 px-2 py-1 text-slate-200">
+              <span className="rounded border border-slate-200 bg-white px-2 py-1 text-slate-700">
                 {masterDataSource === "database" ? "PostgreSQL" : "本地数据"}
               </span>
             </div>
@@ -765,31 +765,32 @@ export default function WarehousePrototype() {
         </div>
       </aside>
 
-      <section className="lg:pl-72">
+      <section className="lg:pl-64">
         <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <p className="text-xs font-semibold text-muted">仓库运营工作台</p>
-              <h1 className="mt-1 text-2xl font-semibold text-ink">{titleForView(activeView)}</h1>
+              <h1 className="mt-0.5 text-xl font-semibold text-ink">{titleForView(activeView)}</h1>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <div className="hidden rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 md:block">
+              <div className="hidden rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-slate-600 md:block">
                 <p>
                   {currentUser?.displayName ?? "仓库用户"} ·{" "}
                   {currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
                 </p>
                 <p className="mt-0.5 text-xs text-slate-500">{currentAccessSummary}</p>
               </div>
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
                 {masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
               </div>
               <button
-                className="secondary-button"
+                className="icon-button"
                 onClick={() => void refreshWarehouseState({ preserveSelection: true, notify: true })}
                 disabled={refreshing}
+                aria-label={refreshing ? "刷新中" : "刷新数据"}
+                title={refreshing ? "刷新中" : "刷新数据"}
               >
                 <RotateCcw className="h-4 w-4" />
-                {refreshing ? "刷新中" : "刷新数据"}
               </button>
               <button className="secondary-button" onClick={logout}>
                 <LogOut className="h-4 w-4" />
@@ -1039,7 +1040,7 @@ function ToastBox({ toast }: { toast: Toast }) {
         ? "border-red-200 bg-red-50 text-red-800"
         : "border-sky-200 bg-sky-50 text-sky-800";
   return (
-    <div className={`mb-4 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm ${toneClass}`}>
+    <div className={`mb-4 flex items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-sm ${toneClass}`}>
       {toast.tone === "success" ? <Check className="h-4 w-4" /> : <Info className="h-4 w-4" />}
       {toast.message}
     </div>
@@ -1076,29 +1077,29 @@ function DashboardView({
   ];
 
   return (
-    <div className="space-y-5">
-      <section className="panel p-5">
+    <div className="space-y-4">
+      <section className="panel p-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <p className="text-xs font-semibold text-muted">库存运营总览</p>
-            <h2 className="mt-1 text-xl font-semibold text-ink">单件条码库存状态</h2>
+            <h2 className="mt-1 text-lg font-semibold text-ink">单件条码库存状态</h2>
           </div>
-          <div className="grid grid-cols-3 gap-3 text-center text-sm">
-            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+          <div className="grid grid-cols-3 gap-2 text-center text-sm">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5">
               <p className="text-xs text-muted">货物资料</p>
               <p className="mt-1 text-lg font-semibold text-ink">{state.goods.length}</p>
             </div>
-            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5">
               <p className="text-xs text-muted">仓库数量</p>
               <p className="mt-1 text-lg font-semibold text-ink">{state.warehouses.length}</p>
             </div>
-            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5">
               <p className="text-xs text-muted">销售人员</p>
               <p className="mt-1 text-lg font-semibold text-ink">{state.salespeople.length}</p>
             </div>
           </div>
         </div>
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="全部条码" value={totalItems} detail="当前系统内可追踪货物" icon={Barcode} />
           <MetricCard label="仓库在库" value={stats.inStock} detail={`${formatPercent(stats.inStock, totalItems)}% 留存在仓库`} icon={Boxes} />
           <MetricCard label="分仓库存" value={stats.branchCount} detail={`${formatPercent(stats.branchCount, stats.inStock)}% 在库库存`} icon={Building2} />
@@ -1106,8 +1107,8 @@ function DashboardView({
         </div>
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-        <section className="panel p-5">
+      <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <section className="panel p-4">
           <SectionHeader icon={PackageCheck} title="库存归属结构" compact />
           <div className="mt-4 space-y-4">
             {distributionRows.map((row) => (
@@ -1127,7 +1128,7 @@ function DashboardView({
               </div>
             ))}
           </div>
-          <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
             <MiniDistributionTable
               title="仓库库存分布"
               rows={warehouseRows.map(({ warehouse, count }) => ({
@@ -1147,7 +1148,7 @@ function DashboardView({
           </div>
         </section>
 
-        <section className="panel p-5">
+        <section className="panel p-4">
           <SectionHeader icon={PackageCheck} title="常用业务" compact />
           <div className="mt-4 grid gap-3">
             {canOperateWarehouse ? (
@@ -1182,7 +1183,7 @@ function DashboardView({
         </section>
       </div>
 
-      <div className="grid gap-5">
+      <div className="grid gap-4">
         <section className="panel overflow-hidden">
           <SectionHeader icon={ClipboardList} title="最近库存流转" />
           <div className="overflow-x-auto">
@@ -1253,14 +1254,14 @@ function MetricCard({
   icon: typeof Home;
 }) {
   return (
-    <section className="panel p-4">
+    <section className="panel p-3.5">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-slate-600">{label}</p>
-        <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-50 text-work">
-          <Icon className="h-5 w-5" />
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-50 text-work">
+          <Icon className="h-4 w-4" />
         </div>
       </div>
-      <p className="mt-4 text-3xl font-semibold text-ink">{value}</p>
+      <p className="mt-3 text-2xl font-semibold text-ink">{value}</p>
       <p className="mt-1 text-xs text-muted">{detail}</p>
     </section>
   );
@@ -1274,7 +1275,7 @@ function MiniDistributionTable({
   rows: Array<{ label: string; meta: string; count: number }>;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200">
+    <div className="rounded-md border border-slate-200">
       <div className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">{title}</div>
       <div className="divide-y divide-slate-200">
         {rows.map((row) => (
@@ -1304,7 +1305,7 @@ function DashboardAction({
 }) {
   return (
     <button
-      className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-work hover:bg-emerald-50"
+      className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-left transition hover:border-work hover:bg-emerald-50"
       onClick={onClick}
     >
       <div className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-100 text-work">
@@ -1330,20 +1331,20 @@ function OperationPageHeader({
   summary: Array<{ label: string; value: string }>;
 }) {
   return (
-    <section className="panel p-5">
+    <section className="panel p-4">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-md bg-emerald-50 text-work">
+          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-50 text-work">
             <Icon className="h-5 w-5" />
           </div>
           <div>
             <p className="text-xs font-semibold text-muted">{eyebrow}</p>
-            <h2 className="mt-1 text-xl font-semibold text-ink">{title}</h2>
+            <h2 className="mt-1 text-lg font-semibold text-ink">{title}</h2>
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           {summary.map((item) => (
-            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3" key={item.label}>
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5" key={item.label}>
               <p className="text-xs text-muted">{item.label}</p>
               <p className="mt-1 truncate text-sm font-semibold text-ink">{item.value}</p>
             </div>
@@ -1367,7 +1368,7 @@ function OperationPanel({
 }) {
   return (
     <section className="panel overflow-hidden">
-      <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+      <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
         <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900 text-xs font-semibold text-white">
           {step}
         </div>
@@ -1376,7 +1377,7 @@ function OperationPanel({
         </div>
         <h2 className="text-sm font-semibold text-ink">{title}</h2>
       </div>
-      <div className="p-5">{children}</div>
+      <div className="p-4">{children}</div>
     </section>
   );
 }
@@ -1399,11 +1400,11 @@ function OperationSubmitBar({
   const allPassed = checks.every((check) => check.passed);
 
   return (
-    <div className="mt-5 overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <div className="mt-4 overflow-hidden rounded-md border border-slate-200 bg-white">
       <div className="grid gap-2 bg-slate-50 p-3 lg:grid-cols-3">
         {checks.map((check) => (
           <div
-            className={`flex min-w-0 items-start gap-2 rounded-md border bg-white p-3 ${
+            className={`flex min-w-0 items-start gap-2 rounded-md border bg-white p-2.5 ${
               check.passed ? "border-emerald-200" : "border-red-200"
             }`}
             key={check.label}
@@ -1434,7 +1435,7 @@ function OperationSubmitBar({
                 : "，请完成上方检查项"}
           </p>
         </div>
-        <button className="primary-button sm:min-w-[180px]" disabled={disabled} onClick={onSubmit}>
+        <button className="primary-button sm:min-w-[160px]" disabled={disabled} onClick={onSubmit}>
           <Check className="h-4 w-4" />
           {submitLabel}
         </button>
@@ -1453,8 +1454,8 @@ function EmptyState({
   detail: string;
 }) {
   return (
-    <div className="flex min-h-[180px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
-      <div className="flex h-11 w-11 items-center justify-center rounded-md bg-white text-work shadow-sm">
+    <div className="flex min-h-[150px] flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center">
+      <div className="flex h-10 w-10 items-center justify-center rounded-md bg-white text-work shadow-sm">
         <Icon className="h-5 w-5" />
       </div>
       <p className="mt-3 text-sm font-semibold text-ink">{title}</p>
@@ -1486,7 +1487,7 @@ function BusinessRuleStrip({
   const isWarning = tone === "warning";
   return (
     <div
-      className={`mt-5 flex gap-3 rounded-lg border p-3 text-sm ${
+      className={`mt-4 flex gap-3 rounded-md border p-3 text-sm ${
         isWarning ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-slate-50 text-slate-600"
       }`}
     >
@@ -1511,7 +1512,7 @@ function RoutePreview({
   toMeta: string;
 }) {
   return (
-    <div className="mt-5 grid items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1fr_auto_1fr]">
+    <div className="mt-4 grid items-center gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1fr_auto_1fr]">
       <div>
         <p className="text-xs text-muted">{fromMeta}</p>
         <p className="mt-1 truncate text-sm font-semibold text-ink">{from}</p>
@@ -3783,7 +3784,7 @@ function SectionHeader({
 }) {
   return (
     <div className={`flex items-center gap-2 ${compact ? "" : "border-b border-slate-200 px-4 py-3"}`}>
-      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-50 text-work">
+      <div className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-50 text-work">
         <Icon className="h-4 w-4" />
       </div>
       <h2 className="text-sm font-semibold text-ink">{title}</h2>
@@ -3793,7 +3794,7 @@ function SectionHeader({
 
 function StatusBadge({ label }: { label: string }) {
   return (
-    <span className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800">
+    <span className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800">
       {label}
     </span>
   );
