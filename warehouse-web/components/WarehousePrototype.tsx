@@ -24,7 +24,6 @@ import {
   Warehouse,
   X
 } from "lucide-react";
-import Link from "next/link";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { initialState } from "@/lib/demo-data";
 import { hasAnyRole } from "@/lib/role-utils";
@@ -613,7 +612,7 @@ export default function WarehousePrototype() {
   if (!hydrated) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-100 text-slate-600">
-        正在加载仓库原型...
+        正在加载仓库系统...
       </main>
     );
   }
@@ -631,62 +630,82 @@ export default function WarehousePrototype() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100">
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-slate-200 bg-white px-4 py-5 lg:block">
-        <div className="mb-7 flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-work text-white">
-            <Warehouse className="h-6 w-6" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-ink">仓库货物管理</p>
-            <p className="text-xs text-slate-500">页面原型</p>
+    <main className="min-h-screen bg-canvas text-ink">
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-72 border-r border-slate-200 bg-slate-950 text-white lg:block">
+        <div className="px-5 py-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-work text-white">
+              <Warehouse className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold">仓库货物管理系统</p>
+              <p className="text-xs text-slate-400">条码级库存运营平台</p>
+            </div>
           </div>
         </div>
 
-        <nav className="space-y-1">
-          {allowedNavItems.map((item) => {
-            const Icon = item.icon;
-            const active = activeView === item.key;
-            return (
-              <button
-                key={item.key}
-                className={`flex h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition ${
-                  active ? "bg-emerald-50 text-work" : "text-slate-600 hover:bg-slate-50 hover:text-ink"
-                }`}
-                onClick={() => setActiveView(item.key)}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
+        <div className="border-t border-white/10 px-3 py-4">
+          <p className="mb-2 px-3 text-xs font-semibold text-slate-400">业务导航</p>
+          <nav className="space-y-1">
+            {allowedNavItems.map((item) => {
+              const Icon = item.icon;
+              const active = activeView === item.key;
+              return (
+                <button
+                  key={item.key}
+                  className={`flex h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition ${
+                    active
+                      ? "bg-white text-slate-950 shadow-sm"
+                      : "text-slate-300 hover:bg-white/10 hover:text-white"
+                  }`}
+                  onClick={() => setActiveView(item.key)}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
-        <div className="absolute bottom-5 left-4 right-4 space-y-2">
-          <Link href="/pda" className="secondary-button w-full">
-            <Barcode className="h-4 w-4" />
-            PDA 草图
-          </Link>
+        <div className="absolute bottom-0 left-0 right-0 border-t border-white/10 p-5">
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-brand text-sm font-bold text-white">
+                {(currentUser?.displayName ?? "仓").slice(0, 1)}
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{currentUser?.displayName ?? "仓库用户"}</p>
+                <p className="truncate text-xs text-slate-400">
+                  {currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
+              <span>数据源</span>
+              <span className="rounded bg-white/10 px-2 py-1 text-slate-200">
+                {masterDataSource === "database" ? "PostgreSQL" : "本地数据"}
+              </span>
+            </div>
+          </div>
         </div>
       </aside>
 
-      <section className="lg:pl-64">
-        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 px-5 py-4 backdrop-blur">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <section className="lg:pl-72">
+        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <p className="text-xs font-semibold text-work">局域网仓库系统原型</p>
-              <h1 className="text-2xl font-semibold text-ink">{titleForView(activeView)}</h1>
+              <p className="text-xs font-semibold text-muted">仓库运营工作台</p>
+              <h1 className="mt-1 text-2xl font-semibold text-ink">{titleForView(activeView)}</h1>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
-                当前用户：{currentUser?.displayName ?? "仓库操作员"}
-              </span>
-              <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
-                角色：{currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
-              </span>
-              <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
-                数据来源：{masterDataSource === "database" ? "PostgreSQL" : "本地原型"}
-              </span>
+              <div className="hidden rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 md:block">
+                {currentUser?.displayName ?? "仓库用户"} ·{" "}
+                {currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
+              </div>
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                {masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
+              </div>
               <button
                 className="secondary-button"
                 onClick={() => void refreshWarehouseState({ preserveSelection: true, notify: true })}
@@ -701,7 +720,7 @@ export default function WarehousePrototype() {
               </button>
             </div>
           </div>
-          <nav className="mt-4 grid grid-cols-3 gap-2 lg:hidden">
+          <nav className="mt-3 grid grid-cols-3 gap-2 lg:hidden">
             {allowedNavItems.map((item) => {
               const Icon = item.icon;
               const active = activeView === item.key;
@@ -710,7 +729,7 @@ export default function WarehousePrototype() {
                   key={item.key}
                   className={`flex h-10 items-center justify-center gap-2 rounded-md border px-2 text-xs font-semibold transition ${
                     active
-                      ? "border-emerald-200 bg-emerald-50 text-work"
+                      ? "border-slate-900 bg-slate-900 text-white"
                       : "border-slate-200 bg-white text-slate-600"
                   }`}
                   onClick={() => setActiveView(item.key)}
@@ -723,7 +742,7 @@ export default function WarehousePrototype() {
           </nav>
         </header>
 
-        <div className="p-5">
+        <div className="p-4 md:p-6">
           {toast ? <ToastBox toast={toast} /> : null}
           {activeView === "dashboard" ? (
             <DashboardView
@@ -884,16 +903,21 @@ function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
   }
 
   return (
-    <main className="grid min-h-screen grid-cols-1 bg-slate-100 lg:grid-cols-[1fr_440px]">
-      <section className="hidden items-center justify-center bg-slate-900 p-10 text-white lg:flex">
+    <main className="grid min-h-screen grid-cols-1 bg-canvas lg:grid-cols-[1fr_440px]">
+      <section className="hidden items-center justify-center bg-slate-950 p-10 text-white lg:flex">
         <div className="max-w-2xl">
-          <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-lg bg-emerald-500">
-            <Warehouse className="h-8 w-8" />
+          <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-md bg-work">
+            <Warehouse className="h-7 w-7" />
           </div>
-          <h1 className="text-4xl font-semibold">仓库货物管理软件</h1>
+          <h1 className="text-4xl font-semibold">仓库货物管理系统</h1>
           <p className="mt-4 max-w-xl text-lg leading-8 text-slate-300">
-            以单件条码为核心，模拟总仓、分仓和销售人员名下货物的入库、出库、退回与库存流转。
+            以单件条码为核心，管理总仓、分仓和销售人员名下货物的入库、出库、退回与库存流转。
           </p>
+          <div className="mt-8 grid max-w-xl gap-3 text-sm text-slate-300">
+            <div className="rounded-md border border-white/10 bg-white/5 p-3">条码唯一追踪，每件货物有完整流转记录</div>
+            <div className="rounded-md border border-white/10 bg-white/5 p-3">总仓与分仓库存、销售人员名下货物统一查询</div>
+            <div className="rounded-md border border-white/10 bg-white/5 p-3">按角色控制业务操作、基础资料和系统维护权限</div>
+          </div>
         </div>
       </section>
       <section className="flex items-center justify-center p-6">
@@ -905,8 +929,9 @@ function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
           }}
         >
           <div className="mb-6">
-            <p className="text-xs font-semibold text-work">页面原型登录</p>
-            <h2 className="mt-1 text-2xl font-semibold text-ink">进入演示系统</h2>
+            <p className="text-xs font-semibold text-work">账号登录</p>
+            <h2 className="mt-1 text-2xl font-semibold text-ink">进入仓库管理系统</h2>
+            <p className="mt-2 text-sm text-slate-500">请使用分配的账号登录。当前版本保留演示账号用于测试。</p>
           </div>
           <label className="label" htmlFor="username">
             账号
@@ -1312,7 +1337,7 @@ function MastersView({
   return (
     <div className="grid gap-5">
       <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-        基础资料来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地原型数据"}
+        基础资料来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
       </div>
       <MasterEditDialog
         open={Boolean(editingGoods)}

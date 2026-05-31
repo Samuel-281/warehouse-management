@@ -9,14 +9,17 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#182230",
-        line: "#d8dee8",
-        work: "#1f6f63",
-        amber: "#b7791f",
-        danger: "#b42318"
+        ink: "#172033",
+        muted: "#667085",
+        line: "#d6deea",
+        work: "#12655a",
+        brand: "#2457a6",
+        amber: "#a15c07",
+        danger: "#b42318",
+        canvas: "#f6f8fb"
       },
       boxShadow: {
-        panel: "0 10px 30px rgba(21, 32, 43, 0.08)"
+        panel: "0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 28px rgba(15, 23, 42, 0.05)"
       }
     }
   },
