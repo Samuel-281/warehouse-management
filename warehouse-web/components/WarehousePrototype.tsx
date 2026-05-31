@@ -61,6 +61,14 @@ import {
 type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "orders" | "inventory" | "system";
 
 type MasterDataPayload = WarehouseState;
+type InventoryOwnerScope = "all" | "warehouse" | "salesperson";
+type InventoryFilters = {
+  keyword: string;
+  ownerScope: InventoryOwnerScope;
+  warehouseId: string;
+  salespersonId: string;
+  goodsId: string;
+};
 
 type ApiResponse<T> = { data: T } | { error: string };
 
@@ -152,9 +160,10 @@ export default function WarehousePrototype() {
   const [returnBarcodeInput, setReturnBarcodeInput] = useState("");
   const [returnBarcodes, setReturnBarcodes] = useState<string[]>([]);
 
-  const [inventoryFilters, setInventoryFilters] = useState({
+  const [inventoryFilters, setInventoryFilters] = useState<InventoryFilters>({
     keyword: "",
-    warehouseId: "all_owners",
+    ownerScope: "all",
+    warehouseId: "all",
     salespersonId: "all",
     goodsId: "all"
   });
@@ -209,7 +218,7 @@ export default function WarehousePrototype() {
     setSalespersonId(masterData.salespeople[0]?.id ?? "");
     setReturnWarehouseId(mainWarehouse?.id ?? "");
     setReturnLocationId(mainLocation?.id ?? "");
-    setInventoryFilters({ keyword: "", warehouseId: "all_owners", salespersonId: "all", goodsId: "all" });
+    setInventoryFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
     setSelectedBarcode((current) => {
       if (options.preserveSelection && masterData.inventoryItems.some((item) => item.barcode === current)) {
         return current;
@@ -333,16 +342,17 @@ export default function WarehousePrototype() {
         item.barcode.toLowerCase().includes(keyword) ||
         goods?.name.toLowerCase().includes(keyword) ||
         goods?.code.toLowerCase().includes(keyword);
-      const warehouseMatch =
-        inventoryFilters.warehouseId === "all_owners" ||
-        (inventoryFilters.warehouseId === "all" && item.ownerType === "warehouse") ||
-        (item.ownerType === "warehouse" && item.warehouseId === inventoryFilters.warehouseId);
-      const salespersonMatch =
-        inventoryFilters.salespersonId === "all" ||
-        (item.ownerType === "salesperson" && item.salespersonId === inventoryFilters.salespersonId);
+      const ownerMatch =
+        inventoryFilters.ownerScope === "all" ||
+        (inventoryFilters.ownerScope === "warehouse" &&
+          item.ownerType === "warehouse" &&
+          (inventoryFilters.warehouseId === "all" || item.warehouseId === inventoryFilters.warehouseId)) ||
+        (inventoryFilters.ownerScope === "salesperson" &&
+          item.ownerType === "salesperson" &&
+          (inventoryFilters.salespersonId === "all" || item.salespersonId === inventoryFilters.salespersonId));
       const goodsMatch = inventoryFilters.goodsId === "all" || item.goodsId === inventoryFilters.goodsId;
 
-      return keywordMatch && warehouseMatch && salespersonMatch && goodsMatch;
+      return keywordMatch && ownerMatch && goodsMatch;
     });
   }, [inventoryFilters, state.goods, state.inventoryItems]);
 
@@ -2754,8 +2764,8 @@ function SystemMaintenanceView({
 
 function InventoryView(props: {
   state: WarehouseState;
-  filters: { keyword: string; warehouseId: string; salespersonId: string; goodsId: string };
-  setFilters: (value: { keyword: string; warehouseId: string; salespersonId: string; goodsId: string }) => void;
+  filters: InventoryFilters;
+  setFilters: (value: InventoryFilters) => void;
   inventoryItems: InventoryItem[];
   selectedBarcode: string;
   setSelectedBarcode: (barcode: string) => void;
@@ -2810,7 +2820,7 @@ function InventoryView(props: {
   }
 
   function clearInventoryFilters() {
-    props.setFilters({ keyword: "", warehouseId: "all_owners", salespersonId: "all", goodsId: "all" });
+    props.setFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
   }
 
   const warehouseResultCount = props.inventoryItems.filter((item) => item.ownerType === "warehouse").length;
@@ -2827,7 +2837,7 @@ function InventoryView(props: {
           </p>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_180px_180px_180px] xl:items-end">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_160px_180px_180px] xl:items-end">
             <div>
               <label className="label" htmlFor="inventory-keyword">
                 关键字
@@ -2841,30 +2851,45 @@ function InventoryView(props: {
               />
             </div>
             <FieldSelect
-              label="归属范围"
-              value={props.filters.warehouseId}
-              onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value, salespersonId: "all" })}
-              options={[
-                { value: "all_owners", label: "全部归属" },
-                { value: "all", label: "全部仓库" },
-                ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
-              ]}
-            />
-            <FieldSelect
-              label="销售人员"
-              value={props.filters.salespersonId}
+              label="归属类型"
+              value={props.filters.ownerScope}
               onChange={(value) =>
                 props.setFilters({
                   ...props.filters,
-                  salespersonId: value,
-                  warehouseId: value === "all" ? props.filters.warehouseId : "all_owners"
+                  ownerScope: value as InventoryOwnerScope,
+                  warehouseId: "all",
+                  salespersonId: "all"
                 })
               }
               options={[
-                { value: "all", label: "全部销售人员" },
-                ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
+                { value: "all", label: "全部库存" },
+                { value: "warehouse", label: "仓库库存" },
+                { value: "salesperson", label: "销售人员名下" }
               ]}
             />
+            {props.filters.ownerScope === "warehouse" ? (
+              <FieldSelect
+                label="具体仓库"
+                value={props.filters.warehouseId}
+                onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value })}
+                options={[
+                  { value: "all", label: "全部仓库" },
+                  ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
+                ]}
+              />
+            ) : props.filters.ownerScope === "salesperson" ? (
+              <FieldSelect
+                label="具体销售人员"
+                value={props.filters.salespersonId}
+                onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
+                options={[
+                  { value: "all", label: "全部销售人员" },
+                  ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
+                ]}
+              />
+            ) : (
+              <ReadOnlyField label="具体范围" value="全部仓库与销售人员" />
+            )}
             <FieldSelect
               label="货物"
               value={props.filters.goodsId}
