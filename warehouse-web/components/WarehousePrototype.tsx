@@ -3297,19 +3297,38 @@ function InventoryView(props: {
 
   const warehouseResultCount = props.inventoryItems.filter((item) => item.ownerType === "warehouse").length;
   const salesResultCount = props.inventoryItems.filter((item) => item.ownerType === "salesperson").length;
+  const activeFilterCount = [
+    props.filters.keyword.trim(),
+    props.filters.ownerScope !== "all" ? props.filters.ownerScope : "",
+    props.filters.warehouseId !== "all" ? props.filters.warehouseId : "",
+    props.filters.salespersonId !== "all" ? props.filters.salespersonId : "",
+    props.filters.goodsId !== "all" ? props.filters.goodsId : ""
+  ].filter(Boolean).length;
 
   return (
-    <div className="grid gap-5">
+    <div className="grid gap-4">
       <section className="panel p-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <SectionHeader icon={Search} title="库存查询" compact />
-          <p className="text-xs text-muted">
-            查询结果 {props.inventoryItems.length} 件 · 仓库在库 {warehouseResultCount} 件 · 销售人员名下{" "}
-            {salesResultCount} 件
-          </p>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <SectionHeader icon={Search} title="库存查询" compact />
+            <p className="mt-2 text-xs text-muted">
+              当前 {props.inventoryItems.length} 件 · 仓库在库 {warehouseResultCount} 件 · 销售人员名下{" "}
+              {salesResultCount} 件 · 已用筛选 {activeFilterCount} 项
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button whitespace-nowrap" onClick={props.refreshData} disabled={props.refreshing}>
+              <RotateCcw className="h-4 w-4" />
+              {props.refreshing ? "刷新中" : "刷新数据"}
+            </button>
+            <button className="secondary-button whitespace-nowrap" onClick={clearInventoryFilters}>
+              <X className="h-4 w-4" />
+              清空筛选
+            </button>
+          </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_160px_180px_180px] xl:items-end">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.2fr)_160px_190px_190px_190px] xl:items-end">
           <div>
             <label className="label" htmlFor="inventory-keyword">
               关键字
@@ -3372,30 +3391,22 @@ function InventoryView(props: {
             ]}
           />
         </div>
-        <div className="mt-3 flex flex-wrap justify-end gap-2">
-          <button className="secondary-button whitespace-nowrap" onClick={props.refreshData} disabled={props.refreshing}>
-            <RotateCcw className="h-4 w-4" />
-            {props.refreshing ? "刷新中" : "刷新数据"}
-          </button>
-          <button className="secondary-button whitespace-nowrap" onClick={clearInventoryFilters}>
-            <RotateCcw className="h-4 w-4" />
-            清空筛选
-          </button>
-        </div>
       </section>
 
-      <div className="grid gap-5">
+      <div className="grid gap-4">
         <section className="panel overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
             <SectionHeader icon={Boxes} title="库存列表" compact />
             <p className="text-xs text-muted">点击任意条码查看详情和完整流转</p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[980px]">
               <thead className="table-head">
                 <tr>
                   <th className="px-4 py-3">条码 / 货物</th>
                   <th className="px-4 py-3">当前归属</th>
+                  <th className="px-4 py-3">生产 / 保质期</th>
+                  <th className="px-4 py-3">最近流转</th>
                   <th className="px-4 py-3">状态</th>
                 </tr>
               </thead>
@@ -3403,6 +3414,9 @@ function InventoryView(props: {
                 {props.inventoryItems.map((item) => {
                   const goods = props.state.goods.find((entry) => entry.id === item.goodsId);
                   const selected = props.selectedBarcode === item.barcode;
+                  const latestMovement = props.state.movements
+                    .filter((movement) => movement.barcode === item.barcode)
+                    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))[0];
                   return (
                     <tr
                       key={item.id}
@@ -3428,6 +3442,14 @@ function InventoryView(props: {
                       </td>
                       <td className="table-cell text-slate-600">
                         {ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)}
+                      </td>
+                      <td className="table-cell text-slate-600">
+                        <div>{item.productionDate ?? "-"}</div>
+                        <div className="mt-1 text-xs text-slate-500">{item.shelfLifeDate ?? "无保质期"}</div>
+                      </td>
+                      <td className="table-cell text-slate-600">
+                        <div>{latestMovement ? formatMovementType(latestMovement.type) : "-"}</div>
+                        <div className="mt-1 font-mono text-xs text-slate-500">{latestMovement?.occurredAt ?? "-"}</div>
                       </td>
                       <td className="table-cell">
                         <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
@@ -3488,14 +3510,14 @@ function InventoryDetailModal({
       role="dialog"
     >
       <section
-        className="flex h-[88vh] max-h-[760px] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+        className="flex h-[88vh] max-h-[760px] w-full max-w-5xl flex-col overflow-hidden rounded-md bg-white shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="shrink-0 border-b border-slate-200 p-5">
+        <div className="shrink-0 border-b border-slate-200 p-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="text-xs font-semibold text-muted">条码详情</p>
-              <p className="mt-1 break-all font-mono text-xl font-semibold text-work">{item.barcode}</p>
+              <p className="mt-1 break-all font-mono text-lg font-semibold text-work">{item.barcode}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
@@ -3506,8 +3528,8 @@ function InventoryDetailModal({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col p-5">
-          <div className="shrink-0 overflow-hidden rounded-lg border border-slate-200">
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <div className="shrink-0 overflow-hidden rounded-md border border-slate-200">
             <div className="grid md:grid-cols-2 lg:grid-cols-5">
               <DetailRow label="货物" value={goods?.name ?? "未知货物"} meta={goods?.code ?? "-"} />
               <DetailRow label="大类" value={goods ? formatCategory(goods.category) : "-"} />
@@ -3520,7 +3542,7 @@ function InventoryDetailModal({
             </div>
           </div>
 
-          <div className="mt-5 flex min-h-0 flex-1 flex-col border-t border-slate-200 pt-4">
+          <div className="mt-4 flex min-h-0 flex-1 flex-col border-t border-slate-200 pt-4">
             <div className="flex shrink-0 items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold text-ink">库存流转</p>
