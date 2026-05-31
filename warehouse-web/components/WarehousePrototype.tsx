@@ -1180,8 +1180,12 @@ function DashboardView({
               </tbody>
             </table>
             {recentMovements.length === 0 ? (
-              <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-                暂无库存流转记录。
+              <div className="border-t border-slate-200 p-4">
+                <EmptyState
+                  icon={ClipboardList}
+                  title="暂无库存流转"
+                  detail="完成入库、出库或退回操作后，最近流转会显示在这里。"
+                />
               </div>
             ) : null}
           </div>
@@ -1394,6 +1398,26 @@ function OperationSubmitBar({
           {submitLabel}
         </button>
       </div>
+    </div>
+  );
+}
+
+function EmptyState({
+  icon: Icon,
+  title,
+  detail
+}: {
+  icon: typeof Home;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div className="flex min-h-[180px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
+      <div className="flex h-11 w-11 items-center justify-center rounded-md bg-white text-work shadow-sm">
+        <Icon className="h-5 w-5" />
+      </div>
+      <p className="mt-3 text-sm font-semibold text-ink">{title}</p>
+      <p className="mt-1 max-w-md text-xs leading-5 text-muted">{detail}</p>
     </div>
   );
 }
@@ -2921,8 +2945,12 @@ function OrdersView({
               })}
               {orders.length === 0 ? (
                 <tr>
-                  <td className="table-cell text-center text-slate-500" colSpan={6}>
-                    {loading ? "正在读取单据..." : "暂无符合条件的单据"}
+                  <td className="table-cell" colSpan={6}>
+                    <EmptyState
+                      icon={ClipboardList}
+                      title={loading ? "正在读取单据" : "没有符合条件的单据"}
+                      detail={loading ? "系统正在从数据库读取业务单据。" : "调整业务类型筛选或刷新后再查看。"}
+                    />
                   </td>
                 </tr>
               ) : null}
@@ -3150,8 +3178,12 @@ function SystemMaintenanceView({
             </tbody>
           </table>
           {logs.length === 0 ? (
-            <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-              暂无操作日志。
+            <div className="border-t border-slate-200 p-4">
+              <EmptyState
+                icon={ClipboardList}
+                title="暂无操作日志"
+                detail="账号、基础资料和库存业务发生操作后，会在这里留下记录。"
+              />
             </div>
           ) : null}
         </div>
@@ -3236,67 +3268,67 @@ function InventoryView(props: {
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_160px_180px_180px] xl:items-end">
-            <div>
-              <label className="label" htmlFor="inventory-keyword">
-                关键字
-              </label>
-              <input
-                id="inventory-keyword"
-                className="field"
-                placeholder="货物名称、编码或条码"
-                value={props.filters.keyword}
-                onChange={(event) => props.setFilters({ ...props.filters, keyword: event.target.value })}
-              />
-            </div>
+          <div>
+            <label className="label" htmlFor="inventory-keyword">
+              关键字
+            </label>
+            <input
+              id="inventory-keyword"
+              className="field"
+              placeholder="货物名称、编码或条码"
+              value={props.filters.keyword}
+              onChange={(event) => props.setFilters({ ...props.filters, keyword: event.target.value })}
+            />
+          </div>
+          <FieldSelect
+            label="归属类型"
+            value={props.filters.ownerScope}
+            onChange={(value) =>
+              props.setFilters({
+                ...props.filters,
+                ownerScope: value as InventoryOwnerScope,
+                warehouseId: "all",
+                salespersonId: "all"
+              })
+            }
+            options={[
+              { value: "all", label: "全部库存" },
+              { value: "warehouse", label: "仓库库存" },
+              { value: "salesperson", label: "销售人员名下" }
+            ]}
+          />
+          {props.filters.ownerScope === "warehouse" ? (
             <FieldSelect
-              label="归属类型"
-              value={props.filters.ownerScope}
-              onChange={(value) =>
-                props.setFilters({
-                  ...props.filters,
-                  ownerScope: value as InventoryOwnerScope,
-                  warehouseId: "all",
-                  salespersonId: "all"
-                })
-              }
+              label="具体仓库"
+              value={props.filters.warehouseId}
+              onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value })}
               options={[
-                { value: "all", label: "全部库存" },
-                { value: "warehouse", label: "仓库库存" },
-                { value: "salesperson", label: "销售人员名下" }
+                { value: "all", label: "全部仓库" },
+                ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
               ]}
             />
-            {props.filters.ownerScope === "warehouse" ? (
-              <FieldSelect
-                label="具体仓库"
-                value={props.filters.warehouseId}
-                onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value })}
-                options={[
-                  { value: "all", label: "全部仓库" },
-                  ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
-                ]}
-              />
-            ) : props.filters.ownerScope === "salesperson" ? (
-              <FieldSelect
-                label="具体销售人员"
-                value={props.filters.salespersonId}
-                onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
-                options={[
-                  { value: "all", label: "全部销售人员" },
-                  ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
-                ]}
-              />
-            ) : (
-              <ReadOnlyField label="具体范围" value="全部仓库与销售人员" />
-            )}
+          ) : props.filters.ownerScope === "salesperson" ? (
             <FieldSelect
-              label="货物"
-              value={props.filters.goodsId}
-              onChange={(value) => props.setFilters({ ...props.filters, goodsId: value })}
+              label="具体销售人员"
+              value={props.filters.salespersonId}
+              onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
               options={[
-                { value: "all", label: "全部货物" },
-                ...props.state.goods.map((goods) => ({ value: goods.id, label: goods.name }))
+                { value: "all", label: "全部销售人员" },
+                ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
               ]}
             />
+          ) : (
+            <ReadOnlyField label="具体范围" value="全部仓库与销售人员" />
+          )}
+          <FieldSelect
+            label="货物"
+            value={props.filters.goodsId}
+            onChange={(value) => props.setFilters({ ...props.filters, goodsId: value })}
+            options={[
+              { value: "all", label: "全部货物" },
+              ...props.state.goods.map((goods) => ({ value: goods.id, label: goods.name }))
+            ]}
+          />
         </div>
         <div className="mt-3 flex flex-wrap justify-end gap-2">
           <button className="secondary-button whitespace-nowrap" onClick={props.refreshData} disabled={props.refreshing}>
@@ -3364,8 +3396,12 @@ function InventoryView(props: {
               </tbody>
             </table>
             {props.inventoryItems.length === 0 ? (
-              <div className="border-t border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-                没有匹配的库存记录。
+              <div className="border-t border-slate-200 p-4">
+                <EmptyState
+                  icon={Search}
+                  title="没有匹配的库存记录"
+                  detail="可以调整归属、仓库、销售人员、货物或关键字后重新查询。"
+                />
               </div>
             ) : null}
           </div>
@@ -3415,16 +3451,16 @@ function InventoryDetailModal({
       >
         <div className="shrink-0 border-b border-slate-200 p-5">
           <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-muted">条码详情</p>
-            <p className="mt-1 break-all font-mono text-xl font-semibold text-work">{item.barcode}</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
-            <button className="icon-button" onClick={onClose} aria-label="关闭条码详情">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-muted">条码详情</p>
+              <p className="mt-1 break-all font-mono text-xl font-semibold text-work">{item.barcode}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
+              <button className="icon-button" onClick={onClose} aria-label="关闭条码详情">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -3474,9 +3510,11 @@ function InventoryDetailModal({
                 </div>
               ))}
               {movements.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-400">
-                  暂无流转记录。
-                </div>
+                <EmptyState
+                  icon={ClipboardList}
+                  title="暂无流转记录"
+                  detail="该条码发生入库、出库、挪仓或退回后，会显示完整流转时间线。"
+                />
               ) : null}
             </div>
           </div>
