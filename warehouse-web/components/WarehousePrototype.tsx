@@ -2901,10 +2901,11 @@ function InventoryDetailModal({
       role="dialog"
     >
       <section
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+        className="flex h-[88vh] max-h-[760px] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
+        <div className="shrink-0 border-b border-slate-200 p-5">
+          <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="text-xs font-semibold text-muted">条码详情</p>
             <p className="mt-1 break-all font-mono text-xl font-semibold text-work">{item.barcode}</p>
@@ -2915,11 +2916,12 @@ function InventoryDetailModal({
               <X className="h-4 w-4" />
             </button>
           </div>
+          </div>
         </div>
 
-        <div className="overflow-y-auto p-5">
-          <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
-            <div className="overflow-hidden rounded-lg border border-slate-200 self-start">
+        <div className="flex min-h-0 flex-1 flex-col p-5">
+          <div className="shrink-0 overflow-hidden rounded-lg border border-slate-200">
+            <div className="grid md:grid-cols-2 lg:grid-cols-5">
               <DetailRow label="货物" value={goods?.name ?? "未知货物"} meta={goods?.code ?? "-"} />
               <DetailRow label="大类" value={goods ? formatCategory(goods.category) : "-"} />
               <DetailRow
@@ -2929,44 +2931,44 @@ function InventoryDetailModal({
               <DetailRow label="生产日期" value={item.productionDate ?? "-"} />
               <DetailRow label="保质期" value={item.shelfLifeDate ?? "无"} />
             </div>
+          </div>
 
-            <div>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-ink">库存流转</p>
-                  <p className="mt-1 text-xs text-muted">{movements.length} 条记录</p>
-                </div>
-                <button className="secondary-button h-9 px-3" onClick={onExport} disabled={movements.length === 0}>
-                  <Download className="h-4 w-4" />
-                  导出
-                </button>
+          <div className="mt-5 flex min-h-0 flex-1 flex-col border-t border-slate-200 pt-4">
+            <div className="flex shrink-0 items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-ink">库存流转</p>
+                <p className="mt-1 text-xs text-muted">{movements.length} 条记录</p>
               </div>
+              <button className="secondary-button h-9 px-3" onClick={onExport} disabled={movements.length === 0}>
+                <Download className="h-4 w-4" />
+                导出
+              </button>
+            </div>
 
-              <div className="mt-4 space-y-3">
-                {movements.map((movement, index) => (
-                  <div key={movement.id} className="relative pl-5">
-                    <span className="absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full bg-work" />
-                    {index < movements.length - 1 ? (
-                      <span className="absolute bottom-[-18px] left-[4px] top-5 w-px bg-slate-200" />
-                    ) : null}
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-ink">{formatMovementType(movement.type)}</p>
-                        <span className="font-mono text-xs text-slate-500">{movement.occurredAt}</span>
-                      </div>
-                      <p className="mt-2 text-sm text-slate-700">
-                        {movement.fromLabel} → {movement.toLabel}
-                      </p>
-                      <p className="mt-2 text-xs text-slate-500">{movement.note}</p>
+            <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
+              {movements.map((movement, index) => (
+                <div key={movement.id} className="relative pl-5">
+                  <span className="absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full bg-work" />
+                  {index < movements.length - 1 ? (
+                    <span className="absolute bottom-[-18px] left-[4px] top-5 w-px bg-slate-200" />
+                  ) : null}
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-ink">{formatMovementType(movement.type)}</p>
+                      <span className="font-mono text-xs text-slate-500">{movement.occurredAt}</span>
                     </div>
+                    <p className="mt-2 text-sm text-slate-700">
+                      {movement.fromLabel} → {movement.toLabel}
+                    </p>
+                    <p className="mt-2 text-xs text-slate-500">{movement.note}</p>
                   </div>
-                ))}
-                {movements.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-400">
-                    暂无流转记录。
-                  </div>
-                ) : null}
-              </div>
+                </div>
+              ))}
+              {movements.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-400">
+                  暂无流转记录。
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -2977,7 +2979,7 @@ function InventoryDetailModal({
 
 function DetailRow({ label, value, meta }: { label: string; value: string; meta?: string }) {
   return (
-    <div className="grid gap-1 border-b border-slate-200 px-3 py-2.5 last:border-b-0 sm:grid-cols-[78px_1fr] xl:grid-cols-1">
+    <div className="border-b border-slate-200 px-3 py-2.5 md:border-b-0 md:border-r md:last:border-r-0">
       <p className="text-xs text-muted">{label}</p>
       <div>
         <p className="break-words text-sm font-semibold text-ink">{value}</p>
