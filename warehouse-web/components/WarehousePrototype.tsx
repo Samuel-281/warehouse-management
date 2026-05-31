@@ -84,6 +84,25 @@ type OperationCheck = {
 
 type ApiResponse<T> = { data: T } | { error: string };
 
+class ClientApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "ClientApiError";
+  }
+}
+
+function apiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ClientApiError) {
+    if (error.message) return error.message;
+    if (error.status === 401) return "登录状态已过期，请重新登录";
+    if (error.status === 403) return "当前账号没有该操作权限";
+  }
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
@@ -94,7 +113,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   const payload = (await response.json()) as ApiResponse<T>;
 
   if (!response.ok || !("data" in payload)) {
-    throw new Error("error" in payload ? payload.error : "操作失败");
+    throw new ClientApiError("error" in payload ? payload.error : "操作失败", response.status);
   }
 
   return payload.data;
@@ -105,7 +124,7 @@ async function getJson<T>(path: string): Promise<T> {
   const payload = (await response.json()) as ApiResponse<T>;
 
   if (!response.ok || !("data" in payload)) {
-    throw new Error("error" in payload ? payload.error : "读取数据失败");
+    throw new ClientApiError("error" in payload ? payload.error : "读取数据失败", response.status);
   }
 
   return payload.data;
@@ -146,6 +165,12 @@ const roleLabels: Record<UserRoleCode, string> = {
   WAREHOUSE_ADMIN: "仓库管理员",
   INVENTORY_VIEWER: "只读查询人员"
 };
+
+function accessSummaryForRoles(roleCodes: UserRoleCode[]) {
+  if (hasAnyRole(roleCodes, ["SUPER_ADMIN"])) return "全部入口与系统维护权限";
+  if (hasAnyRole(roleCodes, ["WAREHOUSE_ADMIN"])) return "可操作仓库业务与基础资料";
+  return "仅可查看首页、单据和库存";
+}
 
 export default function WarehousePrototype() {
   const [hydrated, setHydrated] = useState(false);
@@ -196,6 +221,7 @@ export default function WarehousePrototype() {
   const canManageMasterData = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
   const canOperateWarehouse = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
   const canMaintainSystem = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN"]);
+  const currentAccessSummary = useMemo(() => accessSummaryForRoles(currentRoleCodes), [currentRoleCodes]);
   const allowedNavItems = useMemo(
     () =>
       navItems.filter((item) => {
@@ -212,6 +238,17 @@ export default function WarehousePrototype() {
   const showToast = useCallback((nextToast: Toast) => {
     setToast(nextToast);
     window.setTimeout(() => setToast(null), 3200);
+  }, []);
+
+  const handleRequestError = useCallback((error: unknown, fallback: string) => {
+    if (error instanceof ClientApiError && error.status === 401) {
+      setCurrentUser(null);
+      setLoggedIn(false);
+      setActiveView("dashboard");
+      return "登录状态已过期，请重新登录";
+    }
+
+    return apiErrorMessage(error, fallback);
   }, []);
 
   const applyDatabaseState = useCallback((masterData: WarehouseState, options: { preserveSelection?: boolean } = {}) => {
@@ -263,16 +300,16 @@ export default function WarehousePrototype() {
       } catch (error) {
         setMasterDataSource("local");
         if (options.notify) {
-          showToast({ tone: "error", message: error instanceof Error ? error.message : "刷新数据失败" });
+          showToast({ tone: "error", message: handleRequestError(error, "刷新数据失败") });
         } else {
-          console.info(error instanceof Error ? error.message : "基础资料接口暂不可用");
+          console.info(apiErrorMessage(error, "基础资料接口暂不可用"));
         }
         return null;
       } finally {
         setRefreshing(false);
       }
     },
-    [applyDatabaseState, showToast]
+    [applyDatabaseState, handleRequestError, showToast]
   );
 
   useEffect(() => {
@@ -311,7 +348,7 @@ export default function WarehousePrototype() {
       .catch((error) => {
         if (cancelled) return;
         setMasterDataSource("local");
-        console.info(error instanceof Error ? error.message : "基础资料接口暂不可用");
+        console.info(apiErrorMessage(error, "基础资料接口暂不可用"));
       });
 
     return () => {
@@ -398,11 +435,11 @@ export default function WarehousePrototype() {
     try {
       setOrders(await getJson<OrderSummary[]>("/api/orders"));
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "读取单据失败" });
+      showToast({ tone: "error", message: handleRequestError(error, "读取单据失败") });
     } finally {
       setOrdersLoading(false);
     }
-  }, [showToast]);
+  }, [handleRequestError, showToast]);
 
   useEffect(() => {
     if (activeView === "orders" && loggedIn) {
@@ -525,7 +562,7 @@ export default function WarehousePrototype() {
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: "入库已写入数据库，库存已更新" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "入库提交失败" });
+      showToast({ tone: "error", message: handleRequestError(error, "入库提交失败") });
     }
   }
 
@@ -597,7 +634,7 @@ export default function WarehousePrototype() {
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: outboundType === "transfer" ? "挪仓已写入数据库" : "销售出库已写入数据库" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "出库提交失败" });
+      showToast({ tone: "error", message: handleRequestError(error, "出库提交失败") });
     }
   }
 
@@ -641,7 +678,7 @@ export default function WarehousePrototype() {
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: "销售退回已写入数据库，未修改生产日期或保质期" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "销售退回提交失败" });
+      showToast({ tone: "error", message: handleRequestError(error, "销售退回提交失败") });
     }
   }
 
@@ -715,6 +752,7 @@ export default function WarehousePrototype() {
                 <p className="truncate text-xs text-slate-400">
                   {currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
                 </p>
+                <p className="mt-1 truncate text-xs text-slate-500">{currentAccessSummary}</p>
               </div>
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
@@ -736,8 +774,11 @@ export default function WarehousePrototype() {
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <div className="hidden rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 md:block">
-                {currentUser?.displayName ?? "仓库用户"} ·{" "}
-                {currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
+                <p>
+                  {currentUser?.displayName ?? "仓库用户"} ·{" "}
+                  {currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">{currentAccessSummary}</p>
               </div>
               <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
                 {masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
@@ -931,7 +972,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
       const user = await postJson<CurrentUser>("/api/auth/login", { username, password });
       onLogin(user);
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : "登录失败");
+      setError(apiErrorMessage(loginError, "登录失败"));
     } finally {
       setSubmitting(false);
     }
@@ -1574,7 +1615,7 @@ function MastersView({
       setCreatingMaster(null);
       showToast({ tone: "success", message: "货物资料已写入数据库" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "新增货物失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "新增货物失败") });
     }
   }
 
@@ -1605,7 +1646,7 @@ function MastersView({
       setCreatingMaster(null);
       showToast({ tone: "success", message: "分仓资料已写入数据库，并已生成默认库位" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "新增分仓失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "新增分仓失败") });
     }
   }
 
@@ -1638,7 +1679,7 @@ function MastersView({
       setCreatingMaster(null);
       showToast({ tone: "success", message: "销售人员已写入数据库" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "新增销售人员失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "新增销售人员失败") });
     }
   }
 
@@ -1667,7 +1708,7 @@ function MastersView({
       setCreatingMaster(null);
       showToast({ tone: "success", message: "终端店铺已写入数据库" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "新增终端店铺失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "新增终端店铺失败") });
     }
   }
 
@@ -1683,7 +1724,7 @@ function MastersView({
       setEditingGoods(null);
       showToast({ tone: "success", message: "货物资料已更新" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "更新货物失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "更新货物失败") });
     }
   }
 
@@ -1699,7 +1740,7 @@ function MastersView({
       setEditingWarehouse(null);
       showToast({ tone: "success", message: "仓库资料已更新" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "更新仓库失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "更新仓库失败") });
     }
   }
 
@@ -1715,7 +1756,7 @@ function MastersView({
       setEditingSalesperson(null);
       showToast({ tone: "success", message: "销售人员资料已更新" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "更新销售人员失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "更新销售人员失败") });
     }
   }
 
@@ -1731,7 +1772,7 @@ function MastersView({
       setEditingStore(null);
       showToast({ tone: "success", message: "终端店铺资料已更新" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "更新终端店铺失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "更新终端店铺失败") });
     }
   }
 
@@ -1745,7 +1786,7 @@ function MastersView({
       replaceRecord(key, updated);
       showToast({ tone: "success", message: status === "enabled" ? "资料已启用" : "资料已停用" });
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "状态更新失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "状态更新失败") });
     }
   }
 
@@ -3041,7 +3082,7 @@ function SystemMaintenanceView({
       showToast({ tone: "success", message: "账号已创建" });
       setLogs(await getJson<OperationLog[]>("/api/operation-logs"));
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "创建账号失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "创建账号失败") });
     }
   }
 
@@ -3057,7 +3098,7 @@ function SystemMaintenanceView({
       showToast({ tone: "success", message: "演示数据库已重置，请重新登录" });
       onResetComplete();
     } catch (error) {
-      showToast({ tone: "error", message: error instanceof Error ? error.message : "重置演示数据库失败" });
+      showToast({ tone: "error", message: apiErrorMessage(error, "重置演示数据库失败") });
     } finally {
       setSubmitting(false);
     }
