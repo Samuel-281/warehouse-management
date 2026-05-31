@@ -1792,8 +1792,8 @@ function MastersView({
   }
 
   return (
-    <div className="grid gap-5">
-      <section className="panel p-5">
+    <div className="grid gap-4">
+      <section className="panel p-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <SectionHeader icon={Building2} title="基础资料维护" compact />
@@ -1801,31 +1801,23 @@ function MastersView({
               数据来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
             </p>
           </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <DashboardAction
-              icon={Boxes}
-              title="新增货物"
-              description="编码、名称、大类、规格"
-              onClick={() => setCreatingMaster("goods")}
-            />
-            <DashboardAction
-              icon={Warehouse}
-              title="新增分仓"
-              description="分仓资料与默认库位"
-              onClick={() => setCreatingMaster("warehouse")}
-            />
-            <DashboardAction
-              icon={Users}
-              title="新增销售人员"
-              description="人员编码、区域、电话"
-              onClick={() => setCreatingMaster("salesperson")}
-            />
-            <DashboardAction
-              icon={Building2}
-              title="新增终端店铺"
-              description="退换货来源店铺"
-              onClick={() => setCreatingMaster("store")}
-            />
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button" onClick={() => setCreatingMaster("goods")}>
+              <Boxes className="h-4 w-4" />
+              新增货物
+            </button>
+            <button className="secondary-button" onClick={() => setCreatingMaster("warehouse")}>
+              <Warehouse className="h-4 w-4" />
+              新增分仓
+            </button>
+            <button className="secondary-button" onClick={() => setCreatingMaster("salesperson")}>
+              <Users className="h-4 w-4" />
+              新增销售人员
+            </button>
+            <button className="secondary-button" onClick={() => setCreatingMaster("store")}>
+              <Building2 className="h-4 w-4" />
+              新增终端店铺
+            </button>
           </div>
         </div>
       </section>
@@ -2053,7 +2045,7 @@ function MastersView({
           />
         </div>
       </MasterEditDialog>
-      <div className="grid gap-5 xl:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-2">
         <MasterTable
           title="货物资料"
           icon={Boxes}
@@ -2387,7 +2379,7 @@ function InboundView(props: {
   ];
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <OperationPageHeader
         icon={Truck}
         eyebrow="入库管理"
@@ -2399,7 +2391,7 @@ function InboundView(props: {
         ]}
       />
 
-      <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
+      <div className="grid gap-4 xl:grid-cols-[0.82fr_1.18fr]">
         <OperationPanel step="1" icon={ClipboardList} title="入库参数">
           <div>
             <SegmentedControl
@@ -2412,7 +2404,7 @@ function InboundView(props: {
             />
           </div>
 
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
             <FieldSelect
               label="入库仓库"
               value={props.inboundWarehouseId}
@@ -2601,7 +2593,7 @@ function OutboundView(props: {
   ];
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <OperationPageHeader
         icon={ArrowLeftRight}
         eyebrow="出库管理"
@@ -2613,7 +2605,7 @@ function OutboundView(props: {
         ]}
       />
 
-      <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
+      <div className="grid gap-4 xl:grid-cols-[0.82fr_1.18fr]">
         <OperationPanel step="1" icon={ClipboardList} title="出库参数">
           <div>
             <SegmentedControl
@@ -2625,7 +2617,7 @@ function OutboundView(props: {
               onChange={(value) => props.setOutboundType(value as OutboundType)}
             />
           </div>
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
             <FieldSelect
               label="出库仓库"
               value={props.sourceWarehouseId}
@@ -2754,7 +2746,7 @@ function SalesReturnView(props: {
   ];
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <OperationPageHeader
         icon={Undo2}
         eyebrow="销售退回"
@@ -2766,7 +2758,7 @@ function SalesReturnView(props: {
         ]}
       />
 
-      <div className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
+      <div className="grid gap-4 xl:grid-cols-[0.82fr_1.18fr]">
         <OperationPanel step="1" icon={ClipboardList} title="退回设置">
           <div className="grid gap-4 md:grid-cols-2">
             <FieldSelect
@@ -2876,16 +2868,16 @@ function OrdersView({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <section className="panel p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
             <p className="mt-2 text-xs text-muted">
               全部 {orders.length} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-[220px_auto_auto_auto] sm:items-end">
+          <div className="grid gap-2 sm:grid-cols-[200px_auto_auto_auto] sm:items-end">
             <div>
               <FieldSelect
                 label="业务类型"
@@ -2922,9 +2914,12 @@ function OrdersView({
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <SectionHeader icon={ClipboardList} title="单据列表" compact />
-          <p className="text-xs text-muted">
-            当前 {formatOrderFilterLabel(kindFilter)} · {orders.length} 张 · 已选 {selectedOrders.length} 张
-          </p>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+            <span>当前 {formatOrderFilterLabel(kindFilter)} · {orders.length} 张</span>
+            <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
+              已选 {selectedOrders.length} 张
+            </span>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1040px]">
@@ -3627,10 +3622,10 @@ function BarcodeCollector({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-white text-work shadow-sm">
+            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-white text-work shadow-sm">
               <ScanLine className="h-5 w-5" />
             </div>
             <div>
@@ -3648,7 +3643,7 @@ function BarcodeCollector({
         </div>
         <div className="mt-4 flex flex-col gap-2 sm:flex-row">
           <textarea
-            className="field h-12 min-h-12 resize-none py-3 font-mono text-base"
+            className="field h-14 min-h-14 resize-none py-4 font-mono text-base"
             placeholder={placeholder}
             rows={1}
             value={input}
@@ -3660,16 +3655,16 @@ function BarcodeCollector({
               }
             }}
           />
-          <button className="secondary-button h-12 shrink-0 sm:min-w-[104px]" onClick={() => onAdd(input)}>
+          <button className="primary-button h-14 shrink-0 sm:min-w-[104px]" onClick={() => onAdd(input)}>
             <Barcode className="h-4 w-4" />
             加入
           </button>
         </div>
       </div>
 
-      <div className="min-h-[260px] rounded-lg border border-slate-200 bg-white">
+      <div className="min-h-[260px] rounded-md border border-slate-200 bg-white">
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-          <p className="text-sm font-semibold text-slate-700">条码清单</p>
+          <p className="text-sm font-semibold text-slate-700">条码清单 · {barcodes.length} 件</p>
           {barcodes.length > 0 ? (
             <button className="secondary-button h-8 px-2 text-xs" onClick={() => setBarcodes([])}>
               <Trash2 className="h-3.5 w-3.5" />
@@ -3682,7 +3677,7 @@ function BarcodeCollector({
             等待扫码录入
           </div>
         ) : (
-          <div className="grid max-h-[360px] gap-2 overflow-y-auto p-4 sm:grid-cols-2">
+          <div className="grid max-h-[380px] gap-2 overflow-y-auto p-4 sm:grid-cols-2">
             {barcodes.map((barcode) => {
               const review = reviewBarcode?.(barcode);
               return (
