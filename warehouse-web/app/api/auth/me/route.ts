@@ -5,6 +5,6 @@ export async function GET(request: Request) {
   try {
     return ok(await requireCurrentUser(request));
   } catch (error) {
-    return fail(error, 401);
+    return fail(error);
   }
 }

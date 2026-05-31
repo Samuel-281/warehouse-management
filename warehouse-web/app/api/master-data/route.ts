@@ -7,6 +7,6 @@ export async function GET(request: Request) {
     await requireCurrentUser(request);
     return ok(await listMasterData());
   } catch (error) {
-    return fail(error, 401);
+    return fail(error);
   }
 }

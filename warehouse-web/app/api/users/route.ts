@@ -8,7 +8,7 @@ export async function GET(request: Request) {
     await assertSuperAdminAllowed(request);
     return ok(await listUsers());
   } catch (error) {
-    return fail(error, 403);
+    return fail(error);
   }
 }
 

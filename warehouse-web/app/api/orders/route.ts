@@ -7,6 +7,6 @@ export async function GET(request: Request) {
     await requireCurrentUser(request);
     return ok(await listOrderSummaries());
   } catch (error) {
-    return fail(error, 400);
+    return fail(error);
   }
 }
