@@ -873,6 +873,7 @@ export default function WarehousePrototype() {
               kindFilter={orderKindFilter}
               setKindFilter={setOrderKindFilter}
               refreshOrders={loadOrders}
+              showToast={showToast}
             />
           ) : null}
           {activeView === "inventory" ? (
@@ -2756,13 +2757,15 @@ function OrdersView({
   loading,
   kindFilter,
   setKindFilter,
-  refreshOrders
+  refreshOrders,
+  showToast
 }: {
   orders: OrderSummary[];
   loading: boolean;
   kindFilter: OrderKind | "all";
   setKindFilter: (value: OrderKind | "all") => void;
   refreshOrders: () => void;
+  showToast: (toast: Toast) => void;
 }) {
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const inboundCount = orders.filter((order) => order.kind === "inbound").length;
@@ -2803,6 +2806,7 @@ function OrdersView({
     ]);
     const timestamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
     downloadCsv(`业务单据导出-${timestamp}.csv`, [header, ...rows]);
+    showToast({ tone: "success", message: `已导出 ${selectedOrders.length} 张单据` });
   }
 
   return (
@@ -2815,7 +2819,7 @@ function OrdersView({
               全部 {orders.length} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-[220px_auto_auto] sm:items-end">
+          <div className="grid gap-3 sm:grid-cols-[220px_auto_auto_auto] sm:items-end">
             <div>
               <FieldSelect
                 label="业务类型"
@@ -2836,6 +2840,14 @@ function OrdersView({
             <button className="primary-button" onClick={exportSelectedOrders} disabled={selectedOrders.length === 0}>
               <Download className="h-4 w-4" />
               导出已选
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => setSelectedOrderIds([])}
+              disabled={selectedOrders.length === 0}
+            >
+              <X className="h-4 w-4" />
+              清空选择
             </button>
           </div>
         </div>
