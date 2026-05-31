@@ -154,7 +154,7 @@ export default function WarehousePrototype() {
 
   const [inventoryFilters, setInventoryFilters] = useState({
     keyword: "",
-    warehouseId: "all",
+    warehouseId: "all_owners",
     salespersonId: "all",
     goodsId: "all"
   });
@@ -209,7 +209,7 @@ export default function WarehousePrototype() {
     setSalespersonId(masterData.salespeople[0]?.id ?? "");
     setReturnWarehouseId(mainWarehouse?.id ?? "");
     setReturnLocationId(mainLocation?.id ?? "");
-    setInventoryFilters({ keyword: "", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+    setInventoryFilters({ keyword: "", warehouseId: "all_owners", salespersonId: "all", goodsId: "all" });
     setSelectedBarcode((current) => {
       if (options.preserveSelection && masterData.inventoryItems.some((item) => item.barcode === current)) {
         return current;
@@ -334,10 +334,12 @@ export default function WarehousePrototype() {
         goods?.name.toLowerCase().includes(keyword) ||
         goods?.code.toLowerCase().includes(keyword);
       const warehouseMatch =
-        inventoryFilters.warehouseId === "all" || item.warehouseId === inventoryFilters.warehouseId;
+        inventoryFilters.warehouseId === "all_owners" ||
+        (inventoryFilters.warehouseId === "all" && item.ownerType === "warehouse") ||
+        (item.ownerType === "warehouse" && item.warehouseId === inventoryFilters.warehouseId);
       const salespersonMatch =
         inventoryFilters.salespersonId === "all" ||
-        item.salespersonId === inventoryFilters.salespersonId;
+        (item.ownerType === "salesperson" && item.salespersonId === inventoryFilters.salespersonId);
       const goodsMatch = inventoryFilters.goodsId === "all" || item.goodsId === inventoryFilters.goodsId;
 
       return keywordMatch && warehouseMatch && salespersonMatch && goodsMatch;
@@ -2808,7 +2810,7 @@ function InventoryView(props: {
   }
 
   function clearInventoryFilters() {
-    props.setFilters({ keyword: "", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+    props.setFilters({ keyword: "", warehouseId: "all_owners", salespersonId: "all", goodsId: "all" });
   }
 
   const warehouseResultCount = props.inventoryItems.filter((item) => item.ownerType === "warehouse").length;
@@ -2839,10 +2841,11 @@ function InventoryView(props: {
               />
             </div>
             <FieldSelect
-              label="仓库"
+              label="归属范围"
               value={props.filters.warehouseId}
-              onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value })}
+              onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value, salespersonId: "all" })}
               options={[
+                { value: "all_owners", label: "全部归属" },
                 { value: "all", label: "全部仓库" },
                 ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
               ]}
@@ -2850,7 +2853,13 @@ function InventoryView(props: {
             <FieldSelect
               label="销售人员"
               value={props.filters.salespersonId}
-              onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
+              onChange={(value) =>
+                props.setFilters({
+                  ...props.filters,
+                  salespersonId: value,
+                  warehouseId: value === "all" ? props.filters.warehouseId : "all_owners"
+                })
+              }
               options={[
                 { value: "all", label: "全部销售人员" },
                 ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
