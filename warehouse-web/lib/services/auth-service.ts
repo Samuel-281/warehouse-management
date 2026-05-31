@@ -3,6 +3,8 @@ import { randomBytes } from "node:crypto";
 import { getPrisma } from "@/lib/db";
 import type { CurrentUser, UserRoleCode } from "@/lib/types";
 
+const defaultDemoPassword = "demo123456";
+
 type DbRole = {
   role: {
     code: string;
@@ -42,6 +44,14 @@ export async function login(input: LoginInput): Promise<LoginResult> {
 
   if (!user || user.status !== "ENABLED" || user.passwordHash !== password) {
     throw new Error("账号或密码不正确");
+  }
+
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_DEMO_PASSWORD_LOGIN !== "true" &&
+    user.passwordHash === defaultDemoPassword
+  ) {
+    throw new Error("试运行/生产环境已禁止默认演示密码登录，请先修改初始化账号密码");
   }
 
   const roles = (user.roles as DbRole[])

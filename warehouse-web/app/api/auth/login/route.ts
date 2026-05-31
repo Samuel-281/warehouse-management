@@ -13,6 +13,7 @@ export async function POST(request: Request) {
       httpOnly: true,
       sameSite: "lax",
       path: "/",
+      secure: process.env.NODE_ENV === "production",
       expires: result.expiresAt
     });
     await logOperation({
