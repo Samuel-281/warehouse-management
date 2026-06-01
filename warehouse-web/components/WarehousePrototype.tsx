@@ -500,8 +500,9 @@ export default function WarehousePrototype() {
   async function submitInbound() {
     const qty = Number(inboundQty);
     const barcodes = uniqueBarcodes(inboundBarcodes);
-    const goods = state.goods.find((item) => item.id === inboundGoodsId);
-    const warehouse = state.warehouses.find((item) => item.id === inboundWarehouseId);
+    const latestState = (await refreshWarehouseState({ preserveSelection: true })) ?? state;
+    const goods = latestState.goods.find((item) => item.id === inboundGoodsId);
+    const warehouse = latestState.warehouses.find((item) => item.id === inboundWarehouseId);
 
     if (!goods || !warehouse) {
       showToast({ tone: "error", message: "请选择有效的货物和仓库" });
@@ -524,19 +525,19 @@ export default function WarehousePrototype() {
       return;
     }
     const duplicated = barcodes.find((barcode) =>
-      state.inventoryItems.some((item) => item.barcode === barcode)
+      latestState.inventoryItems.some((item) => item.barcode === barcode)
     );
     if (inboundSource === "factory" && duplicated) {
-      showToast({ tone: "error", message: `条码 ${duplicated} 已存在` });
+      showToast({ tone: "error", message: `条码 ${duplicated} 已被其他设备入库，请从清单移除后再提交` });
       return;
     }
     if (inboundSource === "terminal_return") {
       const invalid = barcodes.find((barcode) => {
-        const item = state.inventoryItems.find((entry) => entry.barcode === barcode);
+        const item = latestState.inventoryItems.find((entry) => entry.barcode === barcode);
         return item && item.ownerType !== "salesperson";
       });
       if (invalid) {
-        showToast({ tone: "error", message: `条码 ${invalid} 已在仓库库存中，不能作为终端店铺退换货入库` });
+        showToast({ tone: "error", message: `条码 ${invalid} 当前已不符合入库条件，请从清单移除后再提交` });
         return;
       }
     }
@@ -576,9 +577,10 @@ export default function WarehousePrototype() {
       return;
     }
 
-    const sourceWarehouse = state.warehouses.find((warehouse) => warehouse.id === sourceWarehouseId);
-    const targetWarehouse = state.warehouses.find((warehouse) => warehouse.id === targetWarehouseId);
-    const salesperson = state.salespeople.find((person) => person.id === salespersonId);
+    const latestState = (await refreshWarehouseState({ preserveSelection: true })) ?? state;
+    const sourceWarehouse = latestState.warehouses.find((warehouse) => warehouse.id === sourceWarehouseId);
+    const targetWarehouse = latestState.warehouses.find((warehouse) => warehouse.id === targetWarehouseId);
+    const salesperson = latestState.salespeople.find((person) => person.id === salespersonId);
 
     if (!sourceWarehouse) {
       showToast({ tone: "error", message: "请选择有效的出库仓库" });
@@ -600,7 +602,7 @@ export default function WarehousePrototype() {
     }
 
     const movingItems = barcodes.map((barcode) =>
-      state.inventoryItems.find((item) => item.barcode === barcode)
+      latestState.inventoryItems.find((item) => item.barcode === barcode)
     );
     const missing = barcodes.find((_, index) => !movingItems[index]);
     if (missing) {
@@ -611,7 +613,7 @@ export default function WarehousePrototype() {
       (item) => item?.ownerType !== "warehouse" || item.warehouseId !== sourceWarehouseId
     );
     if (invalid) {
-      showToast({ tone: "error", message: `条码 ${invalid.barcode} 不在所选仓库库存中` });
+      showToast({ tone: "error", message: `条码 ${invalid.barcode} 当前已不在所选仓库库存中，请从清单移除后再提交` });
       return;
     }
 
@@ -648,8 +650,9 @@ export default function WarehousePrototype() {
       return;
     }
 
+    const latestState = (await refreshWarehouseState({ preserveSelection: true })) ?? state;
     const movingItems = barcodes.map((barcode) =>
-      state.inventoryItems.find((item) => item.barcode === barcode)
+      latestState.inventoryItems.find((item) => item.barcode === barcode)
     );
     const missing = barcodes.find((_, index) => !movingItems[index]);
     if (missing) {
@@ -658,7 +661,7 @@ export default function WarehousePrototype() {
     }
     const invalid = movingItems.find((item) => item?.ownerType !== "salesperson");
     if (invalid) {
-      showToast({ tone: "error", message: `条码 ${invalid.barcode} 当前不在销售人员名下` });
+      showToast({ tone: "error", message: `条码 ${invalid.barcode} 当前已不在销售人员名下，请从清单移除后再提交` });
       return;
     }
 
