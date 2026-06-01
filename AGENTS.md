@@ -2,7 +2,7 @@
 
 ## Project Background
 
-This workspace is for a warehouse goods management software project. The product has completed the initial requirements and documentation stage, and now includes a first interactive Next.js prototype for desktop web plus a low-fidelity PDA sketch.
+This workspace is for a warehouse goods management software project. The product has completed the initial requirements and documentation stage, and now includes a Next.js desktop web app plus a low-fidelity PDA sketch.
 
 The software will help manage goods across a two-level warehouse structure:
 
@@ -11,7 +11,7 @@ The software will help manage goods across a two-level warehouse structure:
 
 The system's core tracking model is one unique barcode per physical item. Each individual item has a single, non-repeatable `单件条形码编号`. All inbound, outbound, transfer, sales allocation, and return operations should be traceable by this barcode.
 
-The first version should focus on practical warehouse operations for desktop web and PDA usage. The business values are fewer manual recording errors, clearer ownership of goods, real-time stock visibility, and full item-level movement history.
+Version 1.0 focuses on practical desktop web warehouse operations. PDA remains a sketch until the user has the physical device and confirms the scanning workflow.
 
 ## Current Artifacts
 
@@ -30,7 +30,7 @@ The interactive prototype lives in `warehouse-web/` and uses:
 2. TypeScript.
 3. Tailwind CSS.
 4. `lucide-react`.
-5. Local mock data and browser `localStorage` for prototype state.
+5. PostgreSQL + Prisma for persisted business data, with local mock data retained only as a fallback/demo reference.
 
 ## Confirmed Business Scope
 
@@ -44,7 +44,7 @@ The MVP scope includes:
 6. Stock query.
 7. Item barcode movement query.
 8. Sales return from salesperson custody back to warehouse.
-9. PDA scanning for inbound, outbound, sales return, and stock query.
+9. PDA scanning for inbound, outbound, sales return, and stock query as a later follow-up.
 10. Operation logs.
 
 The first version should prioritize these workflows:
@@ -66,7 +66,7 @@ Warehouses are only two levels:
 
 Do not introduce city-county-town three-level warehouse logic unless the user explicitly changes the requirement.
 
-`挪仓` means goods move from the main warehouse to a branch warehouse. Branch warehouse confirmation is not required. Once submitted, the item is immediately considered to be in the target branch warehouse.
+`挪仓` means goods move between the main warehouse and branch warehouses. Receiver confirmation is not required. Once submitted, the item is immediately considered to be in the target warehouse.
 
 ## Barcode Rules
 

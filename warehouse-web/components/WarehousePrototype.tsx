@@ -159,6 +159,7 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
 
 const operator = "仓库操作员";
 const resetConfirmationText = "确定重置";
+const productionBuild = process.env.NODE_ENV === "production";
 
 const roleLabels: Record<UserRoleCode, string> = {
   SUPER_ADMIN: "超级管理员",
@@ -781,7 +782,7 @@ export default function WarehousePrototype() {
                 <p className="mt-0.5 text-xs text-slate-500">{currentAccessSummary}</p>
               </div>
               <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-                {masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
+                {masterDataSource === "database" ? "PostgreSQL 数据库" : "本地系统数据"}
               </div>
               <button
                 className="icon-button"
@@ -961,8 +962,8 @@ function titleForView(view: ViewKey) {
 }
 
 function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
-  const [username, setUsername] = useState("warehouse_admin");
-  const [password, setPassword] = useState("demo123456");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -1008,7 +1009,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
           <div className="mb-6">
             <p className="text-xs font-semibold text-work">账号登录</p>
             <h2 className="mt-1 text-2xl font-semibold text-ink">进入仓库管理系统</h2>
-            <p className="mt-2 text-sm text-slate-500">请使用分配的账号登录。当前版本保留演示账号用于测试。</p>
+            <p className="mt-2 text-sm text-slate-500">请使用管理员分配的账号和密码登录。</p>
           </div>
           <label className="label" htmlFor="username">
             账号
@@ -1019,9 +1020,6 @@ function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
           </label>
           <input className="field mb-4" id="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
           {error ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-          <div className="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-            可测试账号：`super_admin`、`warehouse_admin`、`inventory_viewer`，密码均为 `demo123456`。
-          </div>
           <button className="primary-button w-full" type="submit" disabled={submitting}>
             <LogIn className="h-4 w-4" />
             {submitting ? "登录中" : "登录"}
@@ -1798,7 +1796,7 @@ function MastersView({
           <div>
             <SectionHeader icon={Building2} title="基础资料维护" compact />
             <p className="mt-2 text-xs text-muted">
-              数据来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地演示数据"}
+              数据来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地系统数据"}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -3044,7 +3042,7 @@ function SystemMaintenanceView({
   const [userDraft, setUserDraft] = useState({
     username: "",
     displayName: "",
-    password: "demo123456",
+    password: "",
     roleCode: "WAREHOUSE_ADMIN" as UserRoleCode
   });
 
@@ -3074,7 +3072,7 @@ function SystemMaintenanceView({
         roleCode: userDraft.roleCode
       });
       setUsers((previous) => [created, ...previous]);
-      setUserDraft({ username: "", displayName: "", password: "demo123456", roleCode: "WAREHOUSE_ADMIN" });
+      setUserDraft({ username: "", displayName: "", password: "", roleCode: "WAREHOUSE_ADMIN" });
       showToast({ tone: "success", message: "账号已创建" });
       setLogs(await getJson<OperationLog[]>("/api/operation-logs"));
     } catch (error) {
@@ -3091,10 +3089,10 @@ function SystemMaintenanceView({
     setSubmitting(true);
     try {
       await postJson<{ reset: boolean }>("/api/system/reset-demo", { confirmation });
-      showToast({ tone: "success", message: "演示数据库已重置，请重新登录" });
+      showToast({ tone: "success", message: "系统测试数据已重置，请重新登录" });
       onResetComplete();
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "重置演示数据库失败") });
+      showToast({ tone: "error", message: apiErrorMessage(error, "重置系统测试数据失败") });
     } finally {
       setSubmitting(false);
     }
@@ -3167,23 +3165,31 @@ function SystemMaintenanceView({
 
         <section className="panel p-5">
           <SectionHeader icon={ShieldCheck} title="高危维护" compact />
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
-            该操作会清空本地演示数据库并重新写入初始演示数据。执行后当前登录会话会失效，需要重新登录。
-          </div>
-          <label className="label mt-5" htmlFor="reset-confirmation">
-            输入确认文字
-          </label>
-          <input
-            className="field"
-            id="reset-confirmation"
-            placeholder={resetConfirmationText}
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-          />
-          <button className="primary-button mt-4 w-full" disabled={submitting} onClick={resetDemoDatabaseFromWeb}>
-            <RotateCcw className="h-4 w-4" />
-            {submitting ? "正在重置" : "重置演示数据库"}
-          </button>
+          {productionBuild ? (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
+              当前为正式运行模式，网页端数据重置入口已关闭。如确需处理测试库，请先备份数据库，并由服务器管理员临时开启维护开关。
+            </div>
+          ) : (
+            <>
+              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
+                该操作会清空本地系统测试数据并重新写入初始数据。执行后当前登录会话会失效，需要重新登录。
+              </div>
+              <label className="label mt-5" htmlFor="reset-confirmation">
+                输入确认文字
+              </label>
+              <input
+                className="field"
+                id="reset-confirmation"
+                placeholder={resetConfirmationText}
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+              />
+              <button className="primary-button mt-4 w-full" disabled={submitting} onClick={resetDemoDatabaseFromWeb}>
+                <RotateCcw className="h-4 w-4" />
+                {submitting ? "正在重置" : "重置系统测试数据"}
+              </button>
+            </>
+          )}
         </section>
       </div>
 

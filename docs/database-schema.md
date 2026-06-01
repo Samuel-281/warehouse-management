@@ -227,7 +227,7 @@
 | `orderNo` | String, Unique | 出库单号 |
 | `type` | OutboundType | 挪仓或销售出库 |
 | `sourceWarehouseId` | UUID | 出库仓库 |
-| `targetWarehouseId` | UUID, Nullable | 挪仓目标分仓 |
+| `targetWarehouseId` | UUID, Nullable | 挪仓目标仓库 |
 | `targetLocationId` | UUID, Nullable | 挪仓目标库位 |
 | `salespersonId` | UUID, Nullable | 销售人员 |
 | `operatorId` | UUID, Nullable | 操作人 |

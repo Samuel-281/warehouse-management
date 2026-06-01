@@ -20,7 +20,7 @@ if (answer.trim() !== confirmationText) {
 run("prisma", ["db", "execute", "--file", "prisma/reset-demo.sql"]);
 run("npm", ["run", "db:seed"]);
 
-console.log("演示数据库已重置完成。");
+console.log("系统测试数据已重置完成。");
 
 function run(command, args) {
   const result = spawnSync(commandForPlatform(command), args, {

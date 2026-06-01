@@ -6,7 +6,7 @@
 .env.*
 !.env.example
 !warehouse-web/.env.example
-!warehouse-web/.env.production.example
+!warehouse-web/.env.ecs.example
 *.log
 
 # Local dependency/bootstrap tooling

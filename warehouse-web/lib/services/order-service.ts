@@ -65,7 +65,7 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
         businessType: isTransfer ? "挪仓" : "销售出库",
         primaryTarget: order.sourceWarehouse.name,
         counterparty: isTransfer
-          ? `${order.targetWarehouse?.name ?? "目标分仓"} / ${order.targetLocation?.name ?? "默认库位"}`
+          ? `${order.targetWarehouse?.name ?? "目标仓库"} / ${order.targetLocation?.name ?? "默认库位"}`
           : `销售人员：${order.salesperson?.name ?? "未知"}`,
         operator: order.operatorName,
         createdAt: formatDateTime(order.createdAt),

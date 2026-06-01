@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   try {
     user = await assertSuperAdminAllowed(request);
     if (!resetAllowed) {
-      throw new ApiError("试运行/生产环境默认禁用演示数据库重置", 403);
+      throw new ApiError("正式运行环境默认禁用系统测试数据重置", 403);
     }
 
     const input = (await request.json()) as { confirmation?: string };
