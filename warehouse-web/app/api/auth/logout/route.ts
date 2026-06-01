@@ -2,6 +2,7 @@ import { fail, ok } from "@/lib/api-response";
 import { currentUserFromRequest, sessionCookieName, sessionTokenFromRequest } from "@/lib/auth-permissions";
 import { deleteSession } from "@/lib/services/auth-service";
 import { logOperation } from "@/lib/services/operation-log-service";
+import { shouldUseSecureSessionCookie } from "@/lib/session-cookie";
 
 export async function POST(request: Request) {
   try {
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
       httpOnly: true,
       sameSite: "lax",
       path: "/",
-      secure: process.env.NODE_ENV === "production",
+      secure: shouldUseSecureSessionCookie(),
       maxAge: 0
     });
 

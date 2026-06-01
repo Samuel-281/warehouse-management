@@ -2,6 +2,7 @@ import { fail, ok } from "@/lib/api-response";
 import { sessionCookieName } from "@/lib/auth-permissions";
 import { login, type LoginInput } from "@/lib/services/auth-service";
 import { logOperation } from "@/lib/services/operation-log-service";
+import { shouldUseSecureSessionCookie } from "@/lib/session-cookie";
 
 export async function POST(request: Request) {
   let input: LoginInput | null = null;
@@ -13,7 +14,7 @@ export async function POST(request: Request) {
       httpOnly: true,
       sameSite: "lax",
       path: "/",
-      secure: process.env.NODE_ENV === "production",
+      secure: shouldUseSecureSessionCookie(),
       expires: result.expiresAt
     });
     await logOperation({

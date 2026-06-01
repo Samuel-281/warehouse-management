@@ -1,6 +1,7 @@
 import { ApiError, fail, ok } from "@/lib/api-response";
 import { assertSuperAdminAllowed, sessionCookieName } from "@/lib/auth-permissions";
 import { logOperation } from "@/lib/services/operation-log-service";
+import { shouldUseSecureSessionCookie } from "@/lib/session-cookie";
 import { resetDemoDatabase } from "@/lib/services/system-maintenance-service";
 
 const confirmationText = "确定重置";
@@ -34,7 +35,7 @@ export async function POST(request: Request) {
       httpOnly: true,
       sameSite: "lax",
       path: "/",
-      secure: process.env.NODE_ENV === "production",
+      secure: shouldUseSecureSessionCookie(),
       maxAge: 0
     });
     return response;
