@@ -1,4 +1,5 @@
 import { getPrisma } from "@/lib/db";
+import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { CurrentUser, OperationLog } from "@/lib/types";
 
 export type OperationResult = "SUCCESS" | "FAILURE";
@@ -51,7 +52,7 @@ export async function listOperationLogs(limit = 50): Promise<OperationLog[]> {
     detail: log.detail ?? undefined,
     ipAddress: log.ipAddress ?? undefined,
     userAgent: log.userAgent ?? undefined,
-    createdAt: log.createdAt.toISOString().slice(0, 16).replace("T", " ")
+    createdAt: formatAppDateTime(log.createdAt)
   }));
 }
 

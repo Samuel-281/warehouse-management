@@ -1,4 +1,5 @@
 import { getPrisma } from "@/lib/db";
+import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { OrderSummary } from "@/lib/types";
 
 export async function listOrderSummaries(): Promise<OrderSummary[]> {
@@ -114,5 +115,5 @@ function summarizeBarcodes(barcodes: string[]) {
 }
 
 function formatDateTime(date: Date) {
-  return date.toISOString().slice(0, 16).replace("T", " ");
+  return formatAppDateTime(date);
 }

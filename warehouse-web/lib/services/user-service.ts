@@ -1,4 +1,5 @@
 import { getPrisma } from "@/lib/db";
+import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { ManagedUser, UserRoleCode } from "@/lib/types";
 
 export type CreateUserInput = {
@@ -20,7 +21,7 @@ export async function listUsers(): Promise<ManagedUser[]> {
     username: user.username,
     displayName: user.displayName,
     status: user.status === "ENABLED" ? "enabled" : "disabled",
-    createdAt: user.createdAt.toISOString().slice(0, 16).replace("T", " "),
+    createdAt: formatAppDateTime(user.createdAt),
     roles: user.roles
       .filter((entry) => entry.role.status === "ENABLED" && isRoleCode(entry.role.code))
       .map((entry) => ({ code: entry.role.code as UserRoleCode, name: entry.role.name }))
@@ -65,7 +66,7 @@ export async function createUser(input: CreateUserInput): Promise<ManagedUser> {
       username: user.username,
       displayName: user.displayName,
       status: "enabled",
-      createdAt: user.createdAt.toISOString().slice(0, 16).replace("T", " "),
+      createdAt: formatAppDateTime(user.createdAt),
       roles: [{ code: input.roleCode, name: role.name }]
     };
   });

@@ -1,5 +1,5 @@
 import { getPrisma } from "@/lib/db";
-import { addYears } from "@/lib/warehouse-utils";
+import { addYears, formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InboundSource, InventoryItem, MovementType, StockMovement } from "@/lib/types";
 
 type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
@@ -220,7 +220,7 @@ function formatDate(date: Date | null) {
 }
 
 function formatDateTime(date: Date) {
-  return date.toISOString().slice(0, 16).replace("T", " ");
+  return formatAppDateTime(date);
 }
 
 function mapInventoryItem(item: DbInventoryItem): InventoryItem {

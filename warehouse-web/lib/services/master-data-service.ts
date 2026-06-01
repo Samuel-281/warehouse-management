@@ -1,4 +1,5 @@
 import { getPrisma } from "@/lib/db";
+import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type {
   Goods,
   GoodsCategory,
@@ -460,7 +461,7 @@ function formatDate(date: Date | null) {
 }
 
 function formatDateTime(date: Date) {
-  return date.toISOString().slice(0, 16).replace("T", " ");
+  return formatAppDateTime(date);
 }
 
 function mapGoods(goods: DbGoods): Goods {

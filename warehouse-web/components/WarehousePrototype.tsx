@@ -160,6 +160,7 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
 const operator = "仓库操作员";
 const resetConfirmationText = "确定重置";
 const productionBuild = process.env.NODE_ENV === "production";
+const pageSizeOptions = [20, 50, 100];
 
 const roleLabels: Record<UserRoleCode, string> = {
   SUPER_ADMIN: "超级管理员",
@@ -217,6 +218,7 @@ export default function WarehousePrototype() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orderKindFilter, setOrderKindFilter] = useState<OrderKind | "all">("all");
+  const [orderBarcodeFilter, setOrderBarcodeFilter] = useState("");
 
   const currentRoleCodes = useMemo(() => currentUser?.roles.map((role) => role.code) ?? [], [currentUser]);
   const canManageMasterData = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
@@ -762,6 +764,10 @@ export default function WarehousePrototype() {
                 {masterDataSource === "database" ? "PostgreSQL" : "本地数据"}
               </span>
             </div>
+            <button className="secondary-button mt-3 w-full justify-center" onClick={logout}>
+              <LogOut className="h-4 w-4" />
+              退出登录
+            </button>
           </div>
         </div>
       </aside>
@@ -774,16 +780,6 @@ export default function WarehousePrototype() {
               <h1 className="mt-0.5 text-xl font-semibold text-ink">{titleForView(activeView)}</h1>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <div className="hidden rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-slate-600 md:block">
-                <p>
-                  {currentUser?.displayName ?? "仓库用户"} ·{" "}
-                  {currentUser?.roles.map((role) => roleLabels[role.code]).join("、") ?? "-"}
-                </p>
-                <p className="mt-0.5 text-xs text-slate-500">{currentAccessSummary}</p>
-              </div>
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-                {masterDataSource === "database" ? "PostgreSQL 数据库" : "本地系统数据"}
-              </div>
               <button
                 className="icon-button"
                 onClick={() => void refreshWarehouseState({ preserveSelection: true, notify: true })}
@@ -792,10 +788,6 @@ export default function WarehousePrototype() {
                 title={refreshing ? "刷新中" : "刷新数据"}
               >
                 <RotateCcw className="h-4 w-4" />
-              </button>
-              <button className="secondary-button" onClick={logout}>
-                <LogOut className="h-4 w-4" />
-                退出
               </button>
             </div>
           </div>
@@ -915,6 +907,8 @@ export default function WarehousePrototype() {
               loading={ordersLoading}
               kindFilter={orderKindFilter}
               setKindFilter={setOrderKindFilter}
+              barcodeFilter={orderBarcodeFilter}
+              setBarcodeFilter={setOrderBarcodeFilter}
               refreshOrders={loadOrders}
               showToast={showToast}
             />
@@ -1557,6 +1551,7 @@ function MastersView({
   const [editingSalesperson, setEditingSalesperson] = useState<WarehouseState["salespeople"][number] | null>(null);
   const [editingStore, setEditingStore] = useState<WarehouseState["terminalStores"][number] | null>(null);
   const [creatingMaster, setCreatingMaster] = useState<MasterCreateKey | null>(null);
+  const [masterDialogError, setMasterDialogError] = useState("");
 
   async function requestApi<T>(path: string, body: unknown, method = "POST"): Promise<T> {
     const response = await fetch(path, {
@@ -1585,16 +1580,17 @@ function MastersView({
   }
 
   async function addGoods() {
+    setMasterDialogError("");
     const code = goodsDraft.code.trim();
     const name = goodsDraft.name.trim();
     const unit = goodsDraft.unit.trim();
     const spec = goodsDraft.spec.trim();
     if (!code || !name || !unit || !spec) {
-      showToast({ tone: "error", message: "请完整填写货物资料" });
+      setMasterDialogError("请完整填写货物资料");
       return;
     }
     if (state.goods.some((goods) => goods.code === code)) {
-      showToast({ tone: "error", message: "货物编码已存在" });
+      setMasterDialogError("货物编码已存在");
       return;
     }
 
@@ -1614,20 +1610,21 @@ function MastersView({
       setCreatingMaster(null);
       showToast({ tone: "success", message: "货物资料已写入数据库" });
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "新增货物失败") });
+      setMasterDialogError(apiErrorMessage(error, "新增货物失败"));
     }
   }
 
   async function addWarehouse() {
+    setMasterDialogError("");
     const code = warehouseDraft.code.trim();
     const name = warehouseDraft.name.trim();
     const manager = warehouseDraft.manager.trim();
     if (!code || !name || !manager) {
-      showToast({ tone: "error", message: "请完整填写分仓资料" });
+      setMasterDialogError("请完整填写分仓资料");
       return;
     }
     if (state.warehouses.some((warehouse) => warehouse.code === code)) {
-      showToast({ tone: "error", message: "仓库编码已存在" });
+      setMasterDialogError("仓库编码已存在");
       return;
     }
 
@@ -1645,21 +1642,22 @@ function MastersView({
       setCreatingMaster(null);
       showToast({ tone: "success", message: "分仓资料已写入数据库，并已生成默认库位" });
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "新增分仓失败") });
+      setMasterDialogError(apiErrorMessage(error, "新增分仓失败"));
     }
   }
 
   async function addSalesperson() {
+    setMasterDialogError("");
     const code = salespersonDraft.code.trim();
     const name = salespersonDraft.name.trim();
     const phone = salespersonDraft.phone.trim();
     const region = salespersonDraft.region.trim();
     if (!code || !name || !phone || !region) {
-      showToast({ tone: "error", message: "请完整填写销售人员资料" });
+      setMasterDialogError("请完整填写销售人员资料");
       return;
     }
     if (state.salespeople.some((person) => person.code === code)) {
-      showToast({ tone: "error", message: "销售人员编码已存在" });
+      setMasterDialogError("销售人员编码已存在");
       return;
     }
 
@@ -1678,17 +1676,18 @@ function MastersView({
       setCreatingMaster(null);
       showToast({ tone: "success", message: "销售人员已写入数据库" });
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "新增销售人员失败") });
+      setMasterDialogError(apiErrorMessage(error, "新增销售人员失败"));
     }
   }
 
   async function addTerminalStore() {
+    setMasterDialogError("");
     const name = storeDraft.name.trim();
     const contact = storeDraft.contact.trim();
     const phone = storeDraft.phone.trim();
     const address = storeDraft.address.trim();
     if (!name || !contact || !phone || !address) {
-      showToast({ tone: "error", message: "请完整填写终端店铺资料" });
+      setMasterDialogError("请完整填写终端店铺资料");
       return;
     }
 
@@ -1707,7 +1706,7 @@ function MastersView({
       setCreatingMaster(null);
       showToast({ tone: "success", message: "终端店铺已写入数据库" });
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "新增终端店铺失败") });
+      setMasterDialogError(apiErrorMessage(error, "新增终端店铺失败"));
     }
   }
 
@@ -1800,19 +1799,43 @@ function MastersView({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="secondary-button" onClick={() => setCreatingMaster("goods")}>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setMasterDialogError("");
+                setCreatingMaster("goods");
+              }}
+            >
               <Boxes className="h-4 w-4" />
               新增货物
             </button>
-            <button className="secondary-button" onClick={() => setCreatingMaster("warehouse")}>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setMasterDialogError("");
+                setCreatingMaster("warehouse");
+              }}
+            >
               <Warehouse className="h-4 w-4" />
               新增分仓
             </button>
-            <button className="secondary-button" onClick={() => setCreatingMaster("salesperson")}>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setMasterDialogError("");
+                setCreatingMaster("salesperson");
+              }}
+            >
               <Users className="h-4 w-4" />
               新增销售人员
             </button>
-            <button className="secondary-button" onClick={() => setCreatingMaster("store")}>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setMasterDialogError("");
+                setCreatingMaster("store");
+              }}
+            >
               <Building2 className="h-4 w-4" />
               新增终端店铺
             </button>
@@ -1900,7 +1923,11 @@ function MastersView({
         open={creatingMaster === "goods"}
         title="新增货物资料"
         icon={Boxes}
-        onClose={() => setCreatingMaster(null)}
+        error={masterDialogError}
+        onClose={() => {
+          setMasterDialogError("");
+          setCreatingMaster(null);
+        }}
         onSave={addGoods}
         saveLabel="新增货物"
       >
@@ -1946,7 +1973,11 @@ function MastersView({
         open={creatingMaster === "warehouse"}
         title="新增分仓资料"
         icon={Warehouse}
-        onClose={() => setCreatingMaster(null)}
+        error={masterDialogError}
+        onClose={() => {
+          setMasterDialogError("");
+          setCreatingMaster(null);
+        }}
         onSave={addWarehouse}
         saveLabel="新增分仓"
       >
@@ -1977,7 +2008,11 @@ function MastersView({
         open={creatingMaster === "salesperson"}
         title="新增销售人员"
         icon={Users}
-        onClose={() => setCreatingMaster(null)}
+        error={masterDialogError}
+        onClose={() => {
+          setMasterDialogError("");
+          setCreatingMaster(null);
+        }}
         onSave={addSalesperson}
         saveLabel="新增销售人员"
       >
@@ -2012,7 +2047,11 @@ function MastersView({
         open={creatingMaster === "store"}
         title="新增终端店铺"
         icon={Building2}
-        onClose={() => setCreatingMaster(null)}
+        error={masterDialogError}
+        onClose={() => {
+          setMasterDialogError("");
+          setCreatingMaster(null);
+        }}
         onSave={addTerminalStore}
         saveLabel="新增店铺"
       >
@@ -2215,6 +2254,7 @@ function MasterEditDialog({
   title,
   icon: Icon,
   saveLabel = "保存修改",
+  error,
   children,
   onClose,
   onSave
@@ -2223,6 +2263,7 @@ function MasterEditDialog({
   title: string;
   icon: typeof Home;
   saveLabel?: string;
+  error?: string;
   children: ReactNode;
   onClose: () => void;
   onSave: () => void;
@@ -2250,6 +2291,12 @@ function MasterEditDialog({
           </button>
         </div>
         <div className="mt-5">{children}</div>
+        {error ? (
+          <div className="mt-4 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : null}
         <div className="mt-5 flex flex-wrap justify-end gap-3">
           <button className="secondary-button" onClick={onClose}>
             <X className="h-4 w-4" />
@@ -2813,6 +2860,8 @@ function OrdersView({
   loading,
   kindFilter,
   setKindFilter,
+  barcodeFilter,
+  setBarcodeFilter,
   refreshOrders,
   showToast
 }: {
@@ -2820,19 +2869,44 @@ function OrdersView({
   loading: boolean;
   kindFilter: OrderKind | "all";
   setKindFilter: (value: OrderKind | "all") => void;
+  barcodeFilter: string;
+  setBarcodeFilter: (value: string) => void;
   refreshOrders: () => void;
   showToast: (toast: Toast) => void;
 }) {
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
-  const inboundCount = orders.filter((order) => order.kind === "inbound").length;
-  const outboundCount = orders.filter((order) => order.kind === "outbound").length;
-  const returnCount = orders.filter((order) => order.kind === "sales_return").length;
-  const selectedOrders = orders.filter((order) => selectedOrderIds.includes(order.id));
-  const allVisibleSelected = orders.length > 0 && selectedOrders.length === orders.length;
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
+  const barcodeKeyword = barcodeFilter.trim().toLowerCase();
+  const barcodeFilteredOrders = useMemo(
+    () =>
+      orders.filter(
+        (order) =>
+          !barcodeKeyword || order.barcodes.some((barcode) => barcode.toLowerCase().includes(barcodeKeyword))
+      ),
+    [barcodeKeyword, orders]
+  );
+  const inboundCount = barcodeFilteredOrders.filter((order) => order.kind === "inbound").length;
+  const outboundCount = barcodeFilteredOrders.filter((order) => order.kind === "outbound").length;
+  const returnCount = barcodeFilteredOrders.filter((order) => order.kind === "sales_return").length;
+  const totalPages = Math.max(1, Math.ceil(barcodeFilteredOrders.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageOrders = barcodeFilteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const selectedOrders = barcodeFilteredOrders.filter((order) => selectedOrderIds.includes(order.id));
+  const pageSelectedOrders = pageOrders.filter((order) => selectedOrderIds.includes(order.id));
+  const allVisibleSelected = pageOrders.length > 0 && pageSelectedOrders.length === pageOrders.length;
 
   useEffect(() => {
-    setSelectedOrderIds((previous) => previous.filter((id) => orders.some((order) => order.id === id)));
-  }, [orders]);
+    setSelectedOrderIds((previous) => previous.filter((id) => barcodeFilteredOrders.some((order) => order.id === id)));
+  }, [barcodeFilteredOrders]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [barcodeFilter, kindFilter, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   function toggleOrderSelection(orderId: string, checked: boolean) {
     setSelectedOrderIds((previous) =>
@@ -2841,25 +2915,33 @@ function OrdersView({
   }
 
   function toggleAllVisibleOrders(checked: boolean) {
-    setSelectedOrderIds(checked ? orders.map((order) => order.id) : []);
+    const pageOrderIds = pageOrders.map((order) => order.id);
+    setSelectedOrderIds((previous) =>
+      checked
+        ? [...new Set([...previous, ...pageOrderIds])]
+        : previous.filter((orderId) => !pageOrderIds.includes(orderId))
+    );
   }
 
   function exportSelectedOrders() {
     if (selectedOrders.length === 0) return;
 
     const header = ["单据号", "单据类型", "业务类型", "来源 / 去向", "往来方", "数量", "货物", "条码", "操作人", "创建时间"];
-    const rows = selectedOrders.map((order) => [
-      order.orderNo,
-      formatOrderKind(order.kind),
-      order.businessType,
-      order.primaryTarget,
-      order.counterparty ?? "-",
-      `${order.itemCount}`,
-      order.goodsSummary || "-",
-      order.barcodes.length > 0 ? order.barcodes.join("、") : order.barcodePreview || "-",
-      order.operator,
-      order.createdAt
-    ]);
+    const rows = selectedOrders.flatMap((order) => {
+      const barcodes = order.barcodes.length > 0 ? order.barcodes : ["-"];
+      return barcodes.map((barcode) => [
+        order.orderNo,
+        formatOrderKind(order.kind),
+        order.businessType,
+        order.primaryTarget,
+        order.counterparty ?? "-",
+        `${order.itemCount}`,
+        order.goodsSummary || "-",
+        barcode,
+        order.operator,
+        order.createdAt
+      ]);
+    });
     const timestamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
     downloadCsv(`业务单据导出-${timestamp}.csv`, [header, ...rows]);
     showToast({ tone: "success", message: `已导出 ${selectedOrders.length} 张单据` });
@@ -2872,10 +2954,10 @@ function OrdersView({
           <div>
             <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
             <p className="mt-2 text-xs text-muted">
-              全部 {orders.length} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
+              当前 {barcodeFilteredOrders.length} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-[200px_auto_auto_auto] sm:items-end">
+          <div className="grid gap-2 sm:grid-cols-[180px_220px_120px_auto_auto_auto] sm:items-end">
             <div>
               <FieldSelect
                 label="业务类型"
@@ -2889,6 +2971,24 @@ function OrdersView({
                 ]}
               />
             </div>
+            <div>
+              <label className="label" htmlFor="order-barcode-filter">
+                条码
+              </label>
+              <input
+                id="order-barcode-filter"
+                className="field"
+                placeholder="输入条码查单据"
+                value={barcodeFilter}
+                onChange={(event) => setBarcodeFilter(event.target.value)}
+              />
+            </div>
+            <FieldSelect
+              label="单页显示"
+              value={String(pageSize)}
+              onChange={(value) => setPageSize(Number(value))}
+              options={pageSizeOptions.map((size) => ({ value: String(size), label: `${size} 张` }))}
+            />
             <button className="secondary-button" onClick={refreshOrders} disabled={loading}>
               <RotateCcw className="h-4 w-4" />
               {loading ? "刷新中" : "刷新单据"}
@@ -2913,7 +3013,10 @@ function OrdersView({
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <SectionHeader icon={ClipboardList} title="单据列表" compact />
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-            <span>当前 {formatOrderFilterLabel(kindFilter)} · {orders.length} 张</span>
+            <span>
+              当前 {formatOrderFilterLabel(kindFilter)} · {barcodeFilteredOrders.length} 张 · 第 {currentPage} /{" "}
+              {totalPages} 页
+            </span>
             <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
               已选 {selectedOrders.length} 张
             </span>
@@ -2928,7 +3031,7 @@ function OrdersView({
                     aria-label="选择当前列表全部单据"
                     checked={allVisibleSelected}
                     className="h-4 w-4 rounded border-slate-300 text-work"
-                    disabled={orders.length === 0}
+                    disabled={pageOrders.length === 0}
                     onChange={(event) => toggleAllVisibleOrders(event.target.checked)}
                     type="checkbox"
                   />
@@ -2941,7 +3044,7 @@ function OrdersView({
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => {
+              {pageOrders.map((order) => {
                 const selected = selectedOrderIds.includes(order.id);
                 return (
                   <tr key={order.id} className={`${selected ? "bg-emerald-50" : ""} hover:bg-slate-50`}>
@@ -2978,7 +3081,7 @@ function OrdersView({
                   </tr>
                 );
               })}
-              {orders.length === 0 ? (
+              {barcodeFilteredOrders.length === 0 ? (
                 <tr>
                   <td className="table-cell" colSpan={6}>
                     <EmptyState
@@ -2992,6 +3095,14 @@ function OrdersView({
             </tbody>
           </table>
         </div>
+        {barcodeFilteredOrders.length > 0 ? (
+          <PaginationBar
+            page={currentPage}
+            pageSize={pageSize}
+            total={barcodeFilteredOrders.length}
+            onPageChange={setPage}
+          />
+        ) : null}
       </section>
     </div>
   );
@@ -3009,6 +3120,45 @@ function formatOrderKind(kind: OrderKind) {
 function formatOrderFilterLabel(kind: OrderKind | "all") {
   if (kind === "all") return "全部单据";
   return formatOrderKind(kind);
+}
+
+function PaginationBar({
+  page,
+  pageSize,
+  total,
+  onPageChange
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const end = Math.min(total, page * pageSize);
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm">
+      <span className="text-xs text-muted">
+        显示 {start}-{end} / {total}
+      </span>
+      <div className="flex items-center gap-2">
+        <button className="secondary-button h-9 px-3" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
+          上一页
+        </button>
+        <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+          {page} / {totalPages}
+        </span>
+        <button
+          className="secondary-button h-9 px-3"
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages}
+        >
+          下一页
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function downloadCsv(filename: string, rows: string[][]) {
@@ -3246,6 +3396,8 @@ function InventoryView(props: {
   refreshData: () => void;
 }) {
   const [detailBarcode, setDetailBarcode] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
   const detailItem = detailBarcode
     ? props.state.inventoryItems.find((item) => item.barcode === detailBarcode)
     : undefined;
@@ -3305,6 +3457,17 @@ function InventoryView(props: {
     props.filters.salespersonId !== "all" ? props.filters.salespersonId : "",
     props.filters.goodsId !== "all" ? props.filters.goodsId : ""
   ].filter(Boolean).length;
+  const totalPages = Math.max(1, Math.ceil(props.inventoryItems.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageItems = props.inventoryItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [props.filters, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   return (
     <div className="grid gap-4">
@@ -3329,7 +3492,7 @@ function InventoryView(props: {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.2fr)_160px_190px_190px_190px] xl:items-end">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.2fr)_150px_180px_180px_180px_130px] xl:items-end">
           <div>
             <label className="label" htmlFor="inventory-keyword">
               关键字
@@ -3391,6 +3554,12 @@ function InventoryView(props: {
               ...props.state.goods.map((goods) => ({ value: goods.id, label: goods.name }))
             ]}
           />
+          <FieldSelect
+            label="单页显示"
+            value={String(pageSize)}
+            onChange={(value) => setPageSize(Number(value))}
+            options={pageSizeOptions.map((size) => ({ value: String(size), label: `${size} 件` }))}
+          />
         </div>
       </section>
 
@@ -3398,7 +3567,9 @@ function InventoryView(props: {
         <section className="panel overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
             <SectionHeader icon={Boxes} title="库存列表" compact />
-            <p className="text-xs text-muted">点击任意条码查看详情和完整流转</p>
+            <p className="text-xs text-muted">
+              共 {props.inventoryItems.length} 件 · 第 {currentPage} / {totalPages} 页 · 点击条码查看详情
+            </p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px]">
@@ -3412,7 +3583,7 @@ function InventoryView(props: {
                 </tr>
               </thead>
               <tbody>
-                {props.inventoryItems.map((item) => {
+                {pageItems.map((item) => {
                   const goods = props.state.goods.find((entry) => entry.id === item.goodsId);
                   const selected = props.selectedBarcode === item.barcode;
                   const latestMovement = props.state.movements
@@ -3470,6 +3641,14 @@ function InventoryView(props: {
               </div>
             ) : null}
           </div>
+          {props.inventoryItems.length > 0 ? (
+            <PaginationBar
+              page={currentPage}
+              pageSize={pageSize}
+              total={props.inventoryItems.length}
+              onPageChange={setPage}
+            />
+          ) : null}
         </section>
       </div>
 
