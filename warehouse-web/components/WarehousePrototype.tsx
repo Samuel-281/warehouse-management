@@ -1299,6 +1299,7 @@ function DashboardView({
             <MiniDistributionTable
               title="仓库库存分布"
               rows={warehouseRows.map(({ warehouse, count }) => ({
+                id: warehouse.id,
                 label: warehouse.name,
                 meta: warehouse.type === "main" ? "总仓" : "分仓",
                 count
@@ -1307,6 +1308,7 @@ function DashboardView({
             <MiniDistributionTable
               title="销售人员持有"
               rows={salespersonRows.map(({ person, count }) => ({
+                id: person.id,
                 label: person.name,
                 meta: person.region,
                 count
@@ -1439,14 +1441,14 @@ function MiniDistributionTable({
   rows
 }: {
   title: string;
-  rows: Array<{ label: string; meta: string; count: number }>;
+  rows: Array<{ id: string; label: string; meta: string; count: number }>;
 }) {
   return (
     <div className="rounded-md border border-slate-200">
       <div className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">{title}</div>
       <div className="divide-y divide-slate-200">
         {rows.map((row) => (
-          <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm" key={`${row.label}-${row.meta}`}>
+          <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm" key={row.id}>
             <div className="min-w-0">
               <p className="truncate font-medium text-ink">{row.label}</p>
               <p className="truncate text-xs text-muted">{row.meta}</p>
