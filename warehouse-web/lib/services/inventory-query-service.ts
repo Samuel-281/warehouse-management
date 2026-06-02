@@ -123,12 +123,11 @@ export async function getInventoryDetail(barcode: string): Promise<InventoryDeta
 
 export async function getInventorySummary(): Promise<InventorySummary> {
   const prisma = getPrisma();
-  const [totalItems, inStock, withSales, mainWarehouses, warehouseGroups, salespersonGroups, recentMovements] =
+  const [totalItems, inStock, withSales, warehouseGroups, salespersonGroups, recentMovements] =
     await Promise.all([
       prisma.inventoryItem.count(),
       prisma.inventoryItem.count({ where: { ownerType: "WAREHOUSE" } }),
       prisma.inventoryItem.count({ where: { ownerType: "SALESPERSON" } }),
-      prisma.warehouse.findMany({ where: { type: "MAIN" }, select: { id: true } }),
       prisma.inventoryItem.groupBy({
         by: ["warehouseId"],
         where: { ownerType: "WAREHOUSE", warehouseId: { not: null } },
@@ -144,21 +143,14 @@ export async function getInventorySummary(): Promise<InventorySummary> {
         take: 8
       })
     ]);
-  const mainWarehouseIds = new Set(mainWarehouses.map((warehouse) => warehouse.id));
   const warehouseCounts = warehouseGroups
     .filter((group) => group.warehouseId)
     .map((group) => ({ warehouseId: group.warehouseId as string, count: group._count._all }));
-  const mainCount = warehouseCounts
-    .filter((row) => mainWarehouseIds.has(row.warehouseId))
-    .reduce((sum, row) => sum + row.count, 0);
-  const branchCount = inStock - mainCount;
 
   return {
     totalItems,
     inStock,
     withSales,
-    mainCount,
-    branchCount,
     warehouseCounts,
     salespersonCounts: salespersonGroups
       .filter((group) => group.salespersonId)

@@ -42,27 +42,25 @@ export const goods: Goods[] = [
 export const warehouses: Warehouse[] = [
   {
     id: "wh-main",
-    code: "ZC-001",
-    name: "市区总仓",
-    type: "main",
+    code: "CK-001",
+    name: "市区仓库",
+    type: "warehouse",
     manager: "周主管",
     status: "enabled"
   },
   {
     id: "wh-county-a",
-    code: "FC-101",
-    name: "东山县分仓",
-    type: "branch",
-    parentId: "wh-main",
+    code: "CK-101",
+    name: "东山县仓库",
+    type: "warehouse",
     manager: "刘库管",
     status: "enabled"
   },
   {
     id: "wh-town-b",
-    code: "FC-202",
-    name: "南河镇分仓",
-    type: "branch",
-    parentId: "wh-main",
+    code: "CK-202",
+    name: "南河镇仓库",
+    type: "warehouse",
     manager: "陈库管",
     status: "enabled"
   }
@@ -218,7 +216,7 @@ export const movements: StockMovement[] = [
     goodsId: "goods-hj-001",
     type: "factory_inbound",
     fromLabel: "无库存",
-    toLabel: "市区总仓 / A区一排一层",
+    toLabel: "市区仓库 / A区一排一层",
     operator: "仓库操作员",
     occurredAt: now,
     note: "厂家到货入库"
@@ -229,11 +227,11 @@ export const movements: StockMovement[] = [
     barcode: "HJ202605290002",
     goodsId: "goods-hj-001",
     type: "transfer",
-    fromLabel: "市区总仓",
-    toLabel: "东山县分仓 / 东山常温一号位",
+    fromLabel: "市区仓库",
+    toLabel: "东山县仓库 / 东山常温一号位",
     operator: "仓库操作员",
     occurredAt: "2026-05-29 09:30",
-    note: "挪仓到分仓"
+    note: "仓库之间挪动"
   },
   {
     id: "mv-003",
@@ -242,7 +240,7 @@ export const movements: StockMovement[] = [
     goodsId: "goods-bj-001",
     type: "factory_inbound",
     fromLabel: "无库存",
-    toLabel: "市区总仓 / B区二排一层",
+    toLabel: "市区仓库 / B区二排一层",
     operator: "仓库操作员",
     occurredAt: "2026-05-29 10:00",
     note: "厂家到货入库"
@@ -254,7 +252,7 @@ export const movements: StockMovement[] = [
     goodsId: "goods-hj-002",
     type: "terminal_return_inbound",
     fromLabel: "东山惠民烟酒店",
-    toLabel: "市区总仓 / A区一排一层",
+    toLabel: "市区仓库 / A区一排一层",
     operator: "仓库操作员",
     occurredAt: "2026-05-29 10:20",
     note: "终端店铺退换货入库，生产日期 2025-11-12"
@@ -265,7 +263,7 @@ export const movements: StockMovement[] = [
     barcode: "XS202605290001",
     goodsId: "goods-bj-001",
     type: "sales_outbound",
-    fromLabel: "市区总仓",
+    fromLabel: "市区仓库",
     toLabel: "销售人员：王明",
     operator: "仓库操作员",
     occurredAt: "2026-05-29 11:00",

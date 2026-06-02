@@ -4,10 +4,7 @@
 
 This workspace is for a warehouse goods management software project. The product has completed the initial requirements, documentation, desktop web implementation, deployment preparation, and first production-hardening passes. The desktop web app is usable enough for the current stage, and the next major workstream is mobile/PDA-oriented development.
 
-The software will help manage goods across a two-level warehouse structure:
-
-1. A city-level main warehouse, called the `总仓`.
-2. County/town branch warehouses, called `分仓`.
+The software now manages goods across a flat warehouse structure. The previous `总仓` / `分仓` distinction has been removed from user-facing business logic. All physical storage sites should be treated uniformly as `仓库`.
 
 The system's core tracking model is one unique barcode per physical item. Each individual item has a single, non-repeatable `单件条形码编号`. All inbound, outbound, transfer, sales allocation, and return operations should be traceable by this barcode.
 
@@ -27,6 +24,7 @@ The current product state is:
 6. The web maintenance reset must clear operational/business data without re-seeding demo or test data.
 7. User accounts and roles should remain after the web maintenance clear operation so the administrator can log back in.
 8. The desktop app has been stress-tested with large inventory counts; future list pages should avoid loading unbounded records into the browser.
+9. Warehouse master data is now single-level. Do not require a main warehouse before creating a warehouse.
 
 When handling future requests, be careful not to reintroduce demo data during production maintenance operations unless the user explicitly asks for a demo/testing database.
 
@@ -61,7 +59,7 @@ The MVP scope includes:
 
 1. Login and role-based access.
 2. Goods master data.
-3. Warehouse master data for `总仓` and `分仓`.
+3. Warehouse master data.
 4. Inbound management.
 5. Outbound management.
 6. Stock query.
@@ -82,14 +80,9 @@ The first version should prioritize these workflows:
 
 ## Warehouse Rules
 
-Warehouses are only two levels:
+Warehouses are single-level. Do not introduce `总仓`, `分仓`, city-county-town hierarchy, or parent-child warehouse logic unless the user explicitly changes the requirement again.
 
-1. `总仓`
-2. `分仓`
-
-Do not introduce city-county-town three-level warehouse logic unless the user explicitly changes the requirement.
-
-`挪仓` means goods move between warehouses. The current confirmed rule allows movement between the main warehouse and branch warehouses in either direction, and branch-to-branch transfer should also be handled through the same warehouse-to-warehouse transfer model unless the user later narrows the rule. Receiver confirmation is not required. Once submitted, the item is immediately considered to be in the target warehouse.
+`挪仓` means goods move between any two different warehouses. Receiver confirmation is not required. Once submitted, the item is immediately considered to be in the target warehouse.
 
 ## Barcode Rules
 
@@ -108,7 +101,7 @@ There are two inbound sources:
 
 For `厂家到货`:
 
-1. Goods may enter the main warehouse or a branch warehouse.
+1. Goods may enter any enabled warehouse.
 2. Production date is not mandatory.
 3. Shelf life does not need to be calculated by default.
 4. Every item still needs its unique barcode.
@@ -132,15 +125,15 @@ There are two outbound types:
 
 For `挪仓`:
 
-1. Source warehouse can be the main warehouse or a branch warehouse.
-2. Target warehouse can be the main warehouse or a branch warehouse.
+1. Source warehouse can be any enabled warehouse.
+2. Target warehouse can be any enabled warehouse.
 3. Source and target warehouses must be different.
-4. No approval and no branch confirmation are required.
+4. No approval and no receiver confirmation are required.
 5. The scanned barcodes must currently belong to the selected source warehouse.
 
 For `销售出库`:
 
-1. Goods may be shipped out from the main warehouse or a branch warehouse.
+1. Goods may be shipped out from any enabled warehouse.
 2. Goods are assigned to a salesperson.
 3. Goods are not assigned to a specific terminal store.
 4. The scanned barcodes must currently belong to the selected warehouse.
@@ -240,7 +233,7 @@ When updating requirements or manuals:
 1. Keep project documents under `docs/`.
 2. Preserve the distinction between requirements, user manual, and generated deliverables.
 3. Use Chinese for business-facing documentation unless the user asks otherwise.
-4. Keep terms consistent: `总仓`, `分仓`, `单件条形码编号`, `厂家到货`, `终端店铺退换货`, `挪仓`, `销售出库`, `销售退回`.
+4. Keep terms consistent: `仓库`, `单件条形码编号`, `厂家到货`, `终端店铺退换货`, `挪仓`, `销售出库`, `销售退回`.
 5. If a new business rule changes an existing rule, update both the requirements document and user manual when appropriate.
 
 ## Development Guidance For Future Agents

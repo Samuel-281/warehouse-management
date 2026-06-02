@@ -52,7 +52,7 @@ try {
   await client.query("COMMIT");
   console.log("压测数据写入完成：");
   console.log(`- 新增货物：${context.goods.length} 个`);
-  console.log(`- 新增分仓：${context.branches.length} 个`);
+  console.log(`- 新增仓库：${context.branches.length} 个`);
   console.log(`- 新增销售人员：${context.salespeople.length} 个`);
   console.log(`- 新增终端店铺：${context.stores.length} 个`);
   console.log(`- 厂家到货入库：${records.length} 件`);
@@ -86,7 +86,7 @@ async function createStressMasterData(runPrefix) {
     id: randomUUID(),
     locationId: randomUUID(),
     code: `${runPrefix}-WH${String(index + 1).padStart(2, "0")}`,
-    name: `压测分仓${String(index + 1).padStart(2, "0")}`,
+    name: `压测仓库${String(index + 1).padStart(2, "0")}`,
     manager: `压测库管${index + 1}`,
     locationCode: "DEFAULT",
     locationName: "默认库位"
@@ -117,7 +117,7 @@ async function createStressMasterData(runPrefix) {
   await bulkInsert(
     "warehouses",
     ["id", "code", "name", "type", "parentId", "manager", "createdAt", "updatedAt"],
-    branches.map((item) => [item.id, item.code, item.name, "BRANCH", base.mainWarehouseId, item.manager, now, now])
+    branches.map((item) => [item.id, item.code, item.name, "MAIN", null, item.manager, now, now])
   );
 
   await bulkInsert(
@@ -162,7 +162,6 @@ async function loadBaseContext() {
     JOIN storage_locations ON storage_locations."warehouseId" = warehouses.id
     LEFT JOIN users ON users.username = 'super_admin'
     WHERE warehouses.status = 'ENABLED'
-      AND warehouses.type = 'MAIN'
       AND storage_locations.status = 'ENABLED'
     ORDER BY storage_locations.code ASC
     LIMIT 1
@@ -170,7 +169,7 @@ async function loadBaseContext() {
 
   const row = result.rows[0];
   if (!row) {
-    throw new Error("缺少启用的总仓或默认库位。请先初始化基础资料。");
+    throw new Error("缺少启用的仓库或默认库位。请先初始化基础资料。");
   }
 
   return {

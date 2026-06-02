@@ -187,8 +187,6 @@ const emptyInventorySummary: InventorySummary = {
   totalItems: 0,
   inStock: 0,
   withSales: 0,
-  mainCount: 0,
-  branchCount: 0,
   warehouseCounts: [],
   salespersonCounts: [],
   recentMovements: []
@@ -297,30 +295,27 @@ export default function WarehousePrototype() {
   }, []);
 
   const applyDatabaseState = useCallback((masterData: WarehouseState, options: { preserveSelection?: boolean } = {}) => {
-    const mainWarehouse =
-      masterData.warehouses.find((warehouse) => warehouse.type === "main" && warehouse.status === "enabled") ??
-      masterData.warehouses[0];
-    const branchWarehouse =
-      masterData.warehouses.find((warehouse) => warehouse.type === "branch" && warehouse.status === "enabled") ??
-      masterData.warehouses.find((warehouse) => warehouse.id !== mainWarehouse?.id);
-    const mainLocation = masterData.locations.find(
-      (location) => location.warehouseId === mainWarehouse?.id && location.status === "enabled"
+    const enabledWarehouses = masterData.warehouses.filter((warehouse) => warehouse.status === "enabled");
+    const firstWarehouse = enabledWarehouses[0] ?? masterData.warehouses[0];
+    const secondWarehouse = enabledWarehouses.find((warehouse) => warehouse.id !== firstWarehouse?.id);
+    const firstLocation = masterData.locations.find(
+      (location) => location.warehouseId === firstWarehouse?.id && location.status === "enabled"
     );
-    const branchLocation = masterData.locations.find(
-      (location) => location.warehouseId === branchWarehouse?.id && location.status === "enabled"
+    const secondLocation = masterData.locations.find(
+      (location) => location.warehouseId === secondWarehouse?.id && location.status === "enabled"
     );
 
     setState(masterData);
     setInboundGoodsId(masterData.goods[0]?.id ?? "");
-    setInboundWarehouseId(mainWarehouse?.id ?? "");
-    setInboundLocationId(mainLocation?.id ?? "");
+    setInboundWarehouseId(firstWarehouse?.id ?? "");
+    setInboundLocationId(firstLocation?.id ?? "");
     setTerminalStoreId(masterData.terminalStores[0]?.id ?? "");
-    setSourceWarehouseId(mainWarehouse?.id ?? "");
-    setTargetWarehouseId(branchWarehouse?.id ?? "");
-    setTargetLocationId(branchLocation?.id ?? "");
+    setSourceWarehouseId(firstWarehouse?.id ?? "");
+    setTargetWarehouseId(secondWarehouse?.id ?? "");
+    setTargetLocationId(secondLocation?.id ?? "");
     setSalespersonId(masterData.salespeople[0]?.id ?? "");
-    setReturnWarehouseId(mainWarehouse?.id ?? "");
-    setReturnLocationId(mainLocation?.id ?? "");
+    setReturnWarehouseId(firstWarehouse?.id ?? "");
+    setReturnLocationId(firstLocation?.id ?? "");
     setInventoryFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
     setSelectedBarcode((current) => {
       if (options.preserveSelection && current) {
@@ -1119,11 +1114,11 @@ function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
           </div>
           <h1 className="text-4xl font-semibold">仓库货物管理系统</h1>
           <p className="mt-4 max-w-xl text-lg leading-8 text-slate-300">
-            以单件条码为核心，管理总仓、分仓和销售人员名下货物的入库、出库、退回与库存流转。
+            以单件条码为核心，管理仓库和销售人员名下货物的入库、出库、退回与库存流转。
           </p>
           <div className="mt-8 grid max-w-xl gap-3 text-sm text-slate-300">
             <div className="rounded-md border border-white/10 bg-white/5 p-3">条码唯一追踪，每件货物有完整流转记录</div>
-            <div className="rounded-md border border-white/10 bg-white/5 p-3">总仓与分仓库存、销售人员名下货物统一查询</div>
+            <div className="rounded-md border border-white/10 bg-white/5 p-3">仓库库存、销售人员名下货物统一查询</div>
             <div className="rounded-md border border-white/10 bg-white/5 p-3">按角色控制业务操作、基础资料和系统维护权限</div>
           </div>
         </div>
@@ -1237,8 +1232,7 @@ function DashboardView({
     count: salespersonCountById.get(person.id) ?? 0
   }));
   const distributionRows = [
-    { label: "总仓库存", value: summary.mainCount },
-    { label: "分仓库存", value: summary.branchCount },
+    { label: "仓库在库", value: summary.inStock },
     { label: "销售人员名下", value: summary.withSales }
   ];
 
@@ -1268,8 +1262,8 @@ function DashboardView({
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="全部条码" value={totalItems} detail="当前系统内可追踪货物" icon={Barcode} />
           <MetricCard label="仓库在库" value={summary.inStock} detail={`${formatPercent(summary.inStock, totalItems)}% 留存在仓库`} icon={Boxes} />
-          <MetricCard label="分仓库存" value={summary.branchCount} detail={`${formatPercent(summary.branchCount, summary.inStock)}% 在库库存`} icon={Building2} />
           <MetricCard label="销售人员名下" value={summary.withSales} detail={`${formatPercent(summary.withSales, totalItems)}% 总条码`} icon={Users} />
+          <MetricCard label="仓库数量" value={state.warehouses.length} detail="启用或停用的仓库资料" icon={Building2} />
         </div>
       </section>
 
@@ -1300,7 +1294,7 @@ function DashboardView({
               rows={warehouseRows.map(({ warehouse, count }) => ({
                 id: warehouse.id,
                 label: warehouse.name,
-                meta: warehouse.type === "main" ? "总仓" : "分仓",
+                meta: "仓库",
                 count
               }))}
             />
@@ -1796,7 +1790,7 @@ function MastersView({
     const name = warehouseDraft.name.trim();
     const manager = warehouseDraft.manager.trim();
     if (!code || !name || !manager) {
-      setMasterDialogError("请完整填写分仓资料");
+      setMasterDialogError("请完整填写仓库资料");
       return;
     }
     if (state.warehouses.some((warehouse) => warehouse.code === code)) {
@@ -1816,9 +1810,9 @@ function MastersView({
       }));
       setWarehouseDraft({ code: "", name: "", manager: "" });
       setCreatingMaster(null);
-      showToast({ tone: "success", message: "分仓资料已写入数据库，并已生成默认库位" });
+      showToast({ tone: "success", message: "仓库资料已写入数据库，并已生成默认库位" });
     } catch (error) {
-      setMasterDialogError(apiErrorMessage(error, "新增分仓失败"));
+      setMasterDialogError(apiErrorMessage(error, "新增仓库失败"));
     }
   }
 
@@ -1993,7 +1987,7 @@ function MastersView({
               }}
             >
               <Warehouse className="h-4 w-4" />
-              新增分仓
+              新增仓库
             </button>
             <button
               className="secondary-button"
@@ -2056,10 +2050,6 @@ function MastersView({
             <TextField label="仓库编码" value={editingWarehouse.code} onChange={(code) => setEditingWarehouse({ ...editingWarehouse, code })} />
             <TextField label="仓库名称" value={editingWarehouse.name} onChange={(name) => setEditingWarehouse({ ...editingWarehouse, name })} />
             <TextField label="负责人" value={editingWarehouse.manager} onChange={(manager) => setEditingWarehouse({ ...editingWarehouse, manager })} />
-            <div>
-              <label className="label">仓库类型</label>
-              <div className="field bg-slate-50 text-slate-500">{editingWarehouse.type === "main" ? "总仓" : "分仓"}</div>
-            </div>
           </div>
         ) : null}
       </MasterEditDialog>
@@ -2147,7 +2137,7 @@ function MastersView({
       </MasterEditDialog>
       <MasterEditDialog
         open={creatingMaster === "warehouse"}
-        title="新增分仓资料"
+        title="新增仓库资料"
         icon={Warehouse}
         error={masterDialogError}
         onClose={() => {
@@ -2155,20 +2145,20 @@ function MastersView({
           setCreatingMaster(null);
         }}
         onSave={addWarehouse}
-        saveLabel="新增分仓"
+        saveLabel="新增仓库"
       >
         <div className="grid gap-4 md:grid-cols-2">
           <TextField
-            label="分仓编码"
+            label="仓库编码"
             value={warehouseDraft.code}
             onChange={(value) => setWarehouseDraft({ ...warehouseDraft, code: value })}
-            placeholder="如 FC-303"
+            placeholder="如 CK-001"
           />
           <TextField
-            label="分仓名称"
+            label="仓库名称"
             value={warehouseDraft.name}
             onChange={(value) => setWarehouseDraft({ ...warehouseDraft, name: value })}
-            placeholder="如 西城区分仓"
+            placeholder="如 一号仓库"
           />
           <div className="md:col-span-2">
             <TextField
@@ -2280,11 +2270,10 @@ function MastersView({
         <MasterTable
           title="仓库资料"
           icon={Warehouse}
-          headers={["编码", "名称", "类型", "负责人", "状态", "操作"]}
+          headers={["编码", "名称", "负责人", "状态", "操作"]}
           rows={state.warehouses.map((item) => [
             item.code,
             item.name,
-            item.type === "main" ? "总仓" : "分仓",
             item.manager,
             <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
             <MasterActions
@@ -2846,8 +2835,8 @@ function OutboundView(props: {
             title={props.outboundType === "transfer" ? "挪仓规则" : "销售出库规则"}
             detail={
               props.outboundType === "transfer"
-                ? "总仓与分仓可互相挪动，目标仓库不能与出库仓库相同。"
-                : "总仓与分仓均可销售出库，货物只分配到销售人员名下。"
+                ? "仓库之间可互相挪动，目标仓库不能与出库仓库相同。"
+                : "任一仓库均可销售出库，货物只分配到销售人员名下。"
             }
           />
         </OperationPanel>

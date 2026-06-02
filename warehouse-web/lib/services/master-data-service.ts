@@ -9,8 +9,7 @@ import type {
   StockMovement,
   TerminalStore,
   Warehouse,
-  WarehouseState,
-  WarehouseType
+  WarehouseState
 } from "@/lib/types";
 
 type DbRecordStatus = "ENABLED" | "DISABLED";
@@ -131,7 +130,7 @@ export async function listMasterData(): Promise<WarehouseState> {
   const prisma = getPrisma();
   const [goods, warehouses, locations, salespeople, terminalStores, movements] = await Promise.all([
     prisma.goods.findMany({ orderBy: { code: "asc" } }),
-    prisma.warehouse.findMany({ orderBy: [{ type: "asc" }, { code: "asc" }] }),
+    prisma.warehouse.findMany({ orderBy: { code: "asc" } }),
     prisma.storageLocation.findMany({ orderBy: [{ warehouseId: "asc" }, { code: "asc" }] }),
     prisma.salesperson.findMany({ orderBy: { code: "asc" } }),
     prisma.terminalStore.findMany({ orderBy: { name: "asc" } }),
@@ -205,30 +204,21 @@ export async function updateGoods(id: string, input: UpdateGoodsInput) {
   return mapGoods(updated);
 }
 
-export async function createBranchWarehouse(input: CreateWarehouseInput) {
-  assertRequired(input.code, "分仓编码");
-  assertRequired(input.name, "分仓名称");
+export async function createWarehouse(input: CreateWarehouseInput) {
+  assertRequired(input.code, "仓库编码");
+  assertRequired(input.name, "仓库名称");
   assertRequired(input.manager, "负责人");
 
   const prisma = getPrisma();
   return prisma.$transaction(async (tx) => {
-    const mainWarehouse = await tx.warehouse.findFirst({
-      where: { type: "MAIN", status: "ENABLED" },
-      orderBy: { code: "asc" }
-    });
-
-    if (!mainWarehouse) {
-      throw new Error("请先创建启用状态的总仓");
-    }
-
     const code = input.code.trim();
     const name = input.name.trim();
     const warehouse = await tx.warehouse.create({
       data: {
         code,
         name,
-        type: "BRANCH",
-        parentId: mainWarehouse.id,
+        type: "MAIN",
+        parentId: null,
         manager: input.manager.trim(),
         status: "ENABLED"
       }
@@ -407,10 +397,6 @@ function toDbGoodsCategory(category: GoodsCategory): DbGoodsCategory {
   return category === "health_wine" ? "HEALTH_WINE" : "BAIJIU";
 }
 
-function mapWarehouseType(type: DbWarehouseType): WarehouseType {
-  return type === "MAIN" ? "main" : "branch";
-}
-
 function mapMovementType(type: DbMovementType): MovementType {
   const movementTypes: Record<DbMovementType, MovementType> = {
     FACTORY_INBOUND: "factory_inbound",
@@ -444,7 +430,7 @@ function mapWarehouse(warehouse: DbWarehouse): Warehouse {
     id: warehouse.id,
     code: warehouse.code,
     name: warehouse.name,
-    type: mapWarehouseType(warehouse.type),
+    type: "warehouse",
     parentId: warehouse.parentId ?? undefined,
     manager: warehouse.manager,
     status: mapStatus(warehouse.status)

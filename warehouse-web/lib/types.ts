@@ -1,5 +1,5 @@
 export type GoodsCategory = "health_wine" | "baijiu";
-export type WarehouseType = "main" | "branch";
+export type WarehouseType = "warehouse";
 export type OwnerType = "warehouse" | "salesperson";
 export type ItemStatus = "in_stock" | "with_salesperson";
 export type InboundSource = "factory" | "terminal_return";
@@ -107,8 +107,6 @@ export type InventorySummary = {
   totalItems: number;
   inStock: number;
   withSales: number;
-  mainCount: number;
-  branchCount: number;
   warehouseCounts: Array<{
     warehouseId: string;
     count: number;
