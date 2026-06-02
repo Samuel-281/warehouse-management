@@ -93,6 +93,11 @@ type BarcodeValidationResult = {
   detail: string;
   item?: InventoryItem;
 };
+type ResultDialog = {
+  tone: "success" | "error";
+  title: string;
+  message: string;
+};
 
 type ApiResponse<T> = { data: T } | { error: string };
 
@@ -209,6 +214,7 @@ export default function WarehousePrototype() {
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
   const [state, setState] = useState<WarehouseState>(() => cloneInitialState(initialState));
   const [toast, setToast] = useState<Toast | null>(null);
+  const [resultDialog, setResultDialog] = useState<ResultDialog | null>(null);
   const [selectedBarcode, setSelectedBarcode] = useState("HJ202605290001");
   const [masterDataSource, setMasterDataSource] = useState<"local" | "database">("local");
   const [refreshing, setRefreshing] = useState(false);
@@ -273,6 +279,11 @@ export default function WarehousePrototype() {
   const showToast = useCallback((nextToast: Toast) => {
     setToast(nextToast);
     window.setTimeout(() => setToast(null), 3200);
+  }, []);
+
+  const showResultDialog = useCallback((nextDialog: ResultDialog) => {
+    setResultDialog(nextDialog);
+    window.setTimeout(() => setResultDialog(null), 2600);
   }, []);
 
   const handleRequestError = useCallback((error: unknown, fallback: string) => {
@@ -634,23 +645,23 @@ export default function WarehousePrototype() {
     const warehouse = state.warehouses.find((item) => item.id === inboundWarehouseId);
 
     if (!goods || !warehouse) {
-      showToast({ tone: "error", message: "请选择有效的货物和仓库" });
+      showResultDialog({ tone: "error", title: "入库未提交", message: "请选择有效的货物和仓库" });
       return;
     }
     if (!inboundLocationId) {
-      showToast({ tone: "error", message: "请选择有效的入库库位" });
+      showResultDialog({ tone: "error", title: "入库未提交", message: "请选择有效的入库库位" });
       return;
     }
     if (!Number.isInteger(qty) || qty <= 0) {
-      showToast({ tone: "error", message: "入库数量必须为正整数" });
+      showResultDialog({ tone: "error", title: "入库未提交", message: "入库数量必须为正整数" });
       return;
     }
     if (barcodes.length !== qty) {
-      showToast({ tone: "error", message: "入库数量必须与条码数量一致" });
+      showResultDialog({ tone: "error", title: "入库未提交", message: "入库数量必须与条码数量一致" });
       return;
     }
     if (inboundSource === "terminal_return" && !productionDate) {
-      showToast({ tone: "error", message: "终端店铺退换货入库必须登记生产日期" });
+      showResultDialog({ tone: "error", title: "入库未提交", message: "终端店铺退换货入库必须登记生产日期" });
       return;
     }
     try {
@@ -684,16 +695,16 @@ export default function WarehousePrototype() {
       setInboundQty("1");
       setProductionDate("");
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
-      showToast({ tone: "success", message: "入库已写入数据库，库存已更新" });
+      showResultDialog({ tone: "success", title: "入库成功", message: `已写入 ${result.items.length} 件货物，库存已更新` });
     } catch (error) {
-      showToast({ tone: "error", message: handleRequestError(error, "入库提交失败") });
+      showResultDialog({ tone: "error", title: "入库失败", message: handleRequestError(error, "入库提交失败") });
     }
   }
 
   async function submitOutbound() {
     const barcodes = uniqueBarcodes(outboundBarcodes);
     if (barcodes.length === 0) {
-      showToast({ tone: "error", message: "请先扫描或录入条码" });
+      showResultDialog({ tone: "error", title: "出库未提交", message: "请先扫描或录入条码" });
       return;
     }
 
@@ -702,21 +713,21 @@ export default function WarehousePrototype() {
     const salesperson = state.salespeople.find((person) => person.id === salespersonId);
 
     if (!sourceWarehouse) {
-      showToast({ tone: "error", message: "请选择有效的出库仓库" });
+      showResultDialog({ tone: "error", title: "出库未提交", message: "请选择有效的出库仓库" });
       return;
     }
     if (outboundType === "transfer") {
       if (!targetWarehouse) {
-        showToast({ tone: "error", message: "请选择有效的目标仓库" });
+        showResultDialog({ tone: "error", title: "出库未提交", message: "请选择有效的目标仓库" });
         return;
       }
       if (targetWarehouse.id === sourceWarehouse.id) {
-        showToast({ tone: "error", message: "目标仓库不能与出库仓库相同" });
+        showResultDialog({ tone: "error", title: "出库未提交", message: "目标仓库不能与出库仓库相同" });
         return;
       }
     }
     if (outboundType === "sales" && !salesperson) {
-      showToast({ tone: "error", message: "销售出库必须选择销售人员" });
+      showResultDialog({ tone: "error", title: "出库未提交", message: "销售出库必须选择销售人员" });
       return;
     }
 
@@ -748,16 +759,20 @@ export default function WarehousePrototype() {
       setOutboundBarcodes([]);
       setOutboundBarcodeReviews({});
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
-      showToast({ tone: "success", message: outboundType === "transfer" ? "挪仓已写入数据库" : "销售出库已写入数据库" });
+      showResultDialog({
+        tone: "success",
+        title: outboundType === "transfer" ? "挪仓成功" : "销售出库成功",
+        message: `已处理 ${result.items.length} 件货物，并写入库存流水`
+      });
     } catch (error) {
-      showToast({ tone: "error", message: handleRequestError(error, "出库提交失败") });
+      showResultDialog({ tone: "error", title: "出库失败", message: handleRequestError(error, "出库提交失败") });
     }
   }
 
   async function submitSalesReturn() {
     const barcodes = uniqueBarcodes(returnBarcodes);
     if (barcodes.length === 0) {
-      showToast({ tone: "error", message: "请先扫描或录入销售人员名下条码" });
+      showResultDialog({ tone: "error", title: "销售退回未提交", message: "请先扫描或录入销售人员名下条码" });
       return;
     }
 
@@ -785,9 +800,13 @@ export default function WarehousePrototype() {
       setReturnBarcodes([]);
       setReturnBarcodeReviews({});
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
-      showToast({ tone: "success", message: "销售退回已写入数据库，未修改生产日期或保质期" });
+      showResultDialog({
+        tone: "success",
+        title: "销售退回成功",
+        message: `已退回 ${result.items.length} 件货物，未修改生产日期或保质期`
+      });
     } catch (error) {
-      showToast({ tone: "error", message: handleRequestError(error, "销售退回提交失败") });
+      showResultDialog({ tone: "error", title: "销售退回失败", message: handleRequestError(error, "销售退回提交失败") });
     }
   }
 
@@ -921,6 +940,7 @@ export default function WarehousePrototype() {
 
         <div className="p-4 md:p-6">
           {toast ? <ToastBox toast={toast} /> : null}
+          {resultDialog ? <ResultDialogBox dialog={resultDialog} onClose={() => setResultDialog(null)} /> : null}
           {activeView === "dashboard" ? (
             <DashboardView
               summary={dashboardSummary}
@@ -978,6 +998,7 @@ export default function WarehousePrototype() {
           {activeView === "outbound" ? (
             <OutboundView
               state={state}
+              inventorySummary={dashboardSummary}
               outboundType={outboundType}
               setOutboundType={setOutboundType}
               sourceWarehouseId={sourceWarehouseId}
@@ -1151,6 +1172,42 @@ function ToastBox({ toast }: { toast: Toast }) {
     <div className={`mb-4 flex items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-sm ${toneClass}`}>
       {toast.tone === "success" ? <Check className="h-4 w-4" /> : <Info className="h-4 w-4" />}
       {toast.message}
+    </div>
+  );
+}
+
+function ResultDialogBox({ dialog, onClose }: { dialog: ResultDialog; onClose: () => void }) {
+  const isSuccess = dialog.tone === "success";
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/20 px-4 pt-20">
+      <section
+        className={`w-full max-w-md rounded-md border bg-white p-5 shadow-2xl ${
+          isSuccess ? "border-emerald-200" : "border-red-200"
+        }`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex items-start gap-3">
+          <div
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${
+              isSuccess ? "bg-emerald-50 text-work" : "bg-red-50 text-danger"
+            }`}
+          >
+            {isSuccess ? <Check className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-ink">{dialog.title}</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-600">{dialog.message}</p>
+          </div>
+          <button
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            onClick={onClose}
+            aria-label="关闭提示"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2650,6 +2707,7 @@ function InboundView(props: {
 
 function OutboundView(props: {
   state: WarehouseState;
+  inventorySummary: InventorySummary;
   outboundType: OutboundType;
   setOutboundType: (value: OutboundType) => void;
   sourceWarehouseId: string;
@@ -2672,6 +2730,8 @@ function OutboundView(props: {
   const sourceWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.sourceWarehouseId);
   const targetWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.targetWarehouseId);
   const salesperson = enabledSalespeople.find((person) => person.id === props.salespersonId);
+  const sourceWarehouseAvailableCount =
+    props.inventorySummary.warehouseCounts.find((row) => row.warehouseId === props.sourceWarehouseId)?.count ?? 0;
   const validBarcodeCount = props.outboundBarcodes.length;
   const targetLabel =
     props.outboundType === "transfer" ? targetWarehouse?.name ?? "未选择" : salesperson?.name ?? "未选择";
@@ -2766,7 +2826,10 @@ function OutboundView(props: {
                 }))}
               />
             )}
-            <ReadOnlyField label="仓库可用库存" value="按库存查询查看" />
+            <ReadOnlyField
+              label="仓库可用库存"
+              value={sourceWarehouse ? `${sourceWarehouseAvailableCount.toLocaleString("zh-CN")} 件` : "未选择仓库"}
+            />
             <ReadOnlyField label="条码校验" value={`${validBarcodeCount} 件待提交校验`} />
           </div>
 
