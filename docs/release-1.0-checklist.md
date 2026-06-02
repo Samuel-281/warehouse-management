@@ -4,7 +4,7 @@
 
 - [ ] 登录页不展示测试账号和默认密码。
 - [ ] 生产环境 `.env` 未提交到 Git。
-- [ ] `ALLOW_DEMO_DATABASE_RESET` 保持为 `false`。
+- [ ] 网页端数据重置入口仅超级管理员可见，且必须输入确认文字。
 - [ ] `ALLOW_DEMO_PASSWORD_LOGIN` 保持为 `false`。
 - [ ] 已运行 `npm run lint`。
 - [ ] 已运行 `npm run build`。

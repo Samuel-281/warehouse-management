@@ -181,7 +181,6 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
 
 const operator = "仓库操作员";
 const resetConfirmationText = "确定重置";
-const productionBuild = process.env.NODE_ENV === "production";
 const pageSizeOptions = [20, 50, 100];
 
 const emptyInventorySummary: InventorySummary = {
@@ -3447,31 +3446,23 @@ function SystemMaintenanceView({
 
         <section className="panel p-5">
           <SectionHeader icon={ShieldCheck} title="高危维护" compact />
-          {productionBuild ? (
-            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
-              当前为正式运行模式，网页端数据重置入口已关闭。如确需处理测试库，请先备份数据库，并由服务器管理员临时开启维护开关。
-            </div>
-          ) : (
-            <>
-              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
-                该操作会清空本地系统测试数据并重新写入初始数据。执行后当前登录会话会失效，需要重新登录。
-              </div>
-              <label className="label mt-5" htmlFor="reset-confirmation">
-                输入确认文字
-              </label>
-              <input
-                className="field"
-                id="reset-confirmation"
-                placeholder={resetConfirmationText}
-                value={confirmation}
-                onChange={(event) => setConfirmation(event.target.value)}
-              />
-              <button className="primary-button mt-4 w-full" disabled={submitting} onClick={resetDemoDatabaseFromWeb}>
-                <RotateCcw className="h-4 w-4" />
-                {submitting ? "正在重置" : "重置系统测试数据"}
-              </button>
-            </>
-          )}
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
+            该入口已常设开放，仅超级管理员可执行。操作会清空业务数据并重新写入初始化数据，执行后当前登录会话会失效，需要重新登录。
+          </div>
+          <label className="label mt-5" htmlFor="reset-confirmation">
+            输入确认文字
+          </label>
+          <input
+            className="field"
+            id="reset-confirmation"
+            placeholder={resetConfirmationText}
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+          />
+          <button className="primary-button mt-4 w-full" disabled={submitting} onClick={resetDemoDatabaseFromWeb}>
+            <RotateCcw className="h-4 w-4" />
+            {submitting ? "正在重置" : "重置系统测试数据"}
+          </button>
         </section>
       </div>
 

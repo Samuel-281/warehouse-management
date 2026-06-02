@@ -1,19 +1,15 @@
-import { ApiError, fail, ok } from "@/lib/api-response";
+import { fail, ok } from "@/lib/api-response";
 import { assertSuperAdminAllowed, sessionCookieName } from "@/lib/auth-permissions";
 import { logOperation } from "@/lib/services/operation-log-service";
 import { shouldUseSecureSessionCookie } from "@/lib/session-cookie";
 import { resetDemoDatabase } from "@/lib/services/system-maintenance-service";
 
 const confirmationText = "确定重置";
-const resetAllowed = process.env.NODE_ENV !== "production" || process.env.ALLOW_DEMO_DATABASE_RESET === "true";
 
 export async function POST(request: Request) {
   let user = null;
   try {
     user = await assertSuperAdminAllowed(request);
-    if (!resetAllowed) {
-      throw new ApiError("正式运行环境默认禁用系统测试数据重置", 403);
-    }
 
     const input = (await request.json()) as { confirmation?: string };
     if (input.confirmation?.trim() !== confirmationText) {
