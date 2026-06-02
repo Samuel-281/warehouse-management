@@ -79,6 +79,7 @@ type BarcodeReview = {
   label: string;
   detail?: string;
 };
+type BarcodeReviewMap = Record<string, BarcodeReview>;
 type OperationCheck = {
   label: string;
   passed: boolean;
@@ -150,6 +151,18 @@ function countInvalidReviews(barcodes: string[], reviewBarcode?: (barcode: strin
   return barcodes.filter((barcode) => reviewBarcode(barcode).tone === "error").length;
 }
 
+function validationResultToReview(result: BarcodeValidationResult): BarcodeReview {
+  return {
+    tone: result.ok ? "success" : "error",
+    label: result.label,
+    detail: result.detail
+  };
+}
+
+function validationResultsToReviewMap(results: BarcodeValidationResult[]): BarcodeReviewMap {
+  return Object.fromEntries(results.map((result) => [result.barcode, validationResultToReview(result)]));
+}
+
 const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
   { key: "dashboard", label: "首页", icon: Home },
   { key: "masters", label: "基础资料", icon: Building2 },
@@ -208,6 +221,7 @@ export default function WarehousePrototype() {
   const [inboundQty, setInboundQty] = useState("1");
   const [inboundBarcodeInput, setInboundBarcodeInput] = useState("");
   const [inboundBarcodes, setInboundBarcodes] = useState<string[]>([]);
+  const [inboundBarcodeReviews, setInboundBarcodeReviews] = useState<BarcodeReviewMap>({});
   const [productionDate, setProductionDate] = useState("");
   const [terminalStoreId, setTerminalStoreId] = useState("store-001");
 
@@ -218,11 +232,13 @@ export default function WarehousePrototype() {
   const [salespersonId, setSalespersonId] = useState("sp-001");
   const [outboundBarcodeInput, setOutboundBarcodeInput] = useState("");
   const [outboundBarcodes, setOutboundBarcodes] = useState<string[]>([]);
+  const [outboundBarcodeReviews, setOutboundBarcodeReviews] = useState<BarcodeReviewMap>({});
 
   const [returnWarehouseId, setReturnWarehouseId] = useState("wh-main");
   const [returnLocationId, setReturnLocationId] = useState("loc-main-a1");
   const [returnBarcodeInput, setReturnBarcodeInput] = useState("");
   const [returnBarcodes, setReturnBarcodes] = useState<string[]>([]);
+  const [returnBarcodeReviews, setReturnBarcodeReviews] = useState<BarcodeReviewMap>({});
 
   const [inventoryFilters, setInventoryFilters] = useState<InventoryFilters>({
     keyword: "",
@@ -495,6 +511,97 @@ export default function WarehousePrototype() {
     }
   }
 
+  async function refreshBarcodeReviews(
+    input: {
+      mode: "factory_inbound" | "terminal_return_inbound" | "warehouse_outbound" | "sales_return";
+      barcodes: string[];
+      goodsId?: string;
+      warehouseId?: string;
+    },
+    setReviews: (reviews: BarcodeReviewMap) => void
+  ) {
+    if (input.barcodes.length === 0) {
+      setReviews({});
+      return;
+    }
+
+    try {
+      const results = await postJson<BarcodeValidationResult[]>("/api/barcodes/validate", input);
+      setReviews(validationResultsToReviewMap(results));
+    } catch {
+      setReviews(
+        Object.fromEntries(
+          input.barcodes.map((barcode) => [
+            barcode,
+            { tone: "warning", label: "未校验", detail: "暂时无法连接数据库校验，提交前会再次确认" }
+          ])
+        )
+      );
+    }
+  }
+
+  useEffect(() => {
+    const barcodes = uniqueBarcodes(inboundBarcodes);
+    if (barcodes.length === 0) {
+      setInboundBarcodeReviews({});
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void refreshBarcodeReviews(
+        {
+          mode: inboundSource === "factory" ? "factory_inbound" : "terminal_return_inbound",
+          barcodes,
+          goodsId: inboundGoodsId
+        },
+        setInboundBarcodeReviews
+      );
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [inboundBarcodes, inboundGoodsId, inboundSource]);
+
+  useEffect(() => {
+    const barcodes = uniqueBarcodes(outboundBarcodes);
+    if (barcodes.length === 0) {
+      setOutboundBarcodeReviews({});
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void refreshBarcodeReviews(
+        {
+          mode: "warehouse_outbound",
+          barcodes,
+          warehouseId: sourceWarehouseId
+        },
+        setOutboundBarcodeReviews
+      );
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [outboundBarcodes, sourceWarehouseId]);
+
+  useEffect(() => {
+    const barcodes = uniqueBarcodes(returnBarcodes);
+    if (barcodes.length === 0) {
+      setReturnBarcodeReviews({});
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void refreshBarcodeReviews(
+        {
+          mode: "sales_return",
+          barcodes
+        },
+        setReturnBarcodeReviews
+      );
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [returnBarcodes]);
+
   async function validateBarcodeList(
     input: {
       mode: "factory_inbound" | "terminal_return_inbound" | "warehouse_outbound" | "sales_return";
@@ -502,12 +609,14 @@ export default function WarehousePrototype() {
       goodsId?: string;
       warehouseId?: string;
     },
-    fallback: string
+    fallback: string,
+    setReviews?: (reviews: BarcodeReviewMap) => void
   ) {
     const results = await postJson<BarcodeValidationResult[]>("/api/barcodes/validate", input);
+    setReviews?.(validationResultsToReviewMap(results));
     const invalid = results.find((result) => !result.ok);
     if (invalid) {
-      throw new Error(`${invalid.barcode}：${invalid.label}，${invalid.detail}`);
+      throw new Error("条码清单中存在异常，请先处理标红条码");
     }
     if (results.length !== input.barcodes.length) {
       throw new Error("条码清单中存在无效或空白条码，请重新检查");
@@ -551,7 +660,8 @@ export default function WarehousePrototype() {
           barcodes,
           goodsId: inboundGoodsId
         },
-        "请先扫描或录入条码"
+        "请先扫描或录入条码",
+        setInboundBarcodeReviews
       );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/inbound", {
         source: inboundSource,
@@ -570,6 +680,7 @@ export default function WarehousePrototype() {
       }));
       await loadDashboardSummary();
       setInboundBarcodes([]);
+      setInboundBarcodeReviews({});
       setInboundQty("1");
       setProductionDate("");
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
@@ -616,7 +727,8 @@ export default function WarehousePrototype() {
           barcodes,
           warehouseId: sourceWarehouseId
         },
-        "请先扫描或录入条码"
+        "请先扫描或录入条码",
+        setOutboundBarcodeReviews
       );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/outbound", {
         type: outboundType,
@@ -634,6 +746,7 @@ export default function WarehousePrototype() {
       }));
       await loadDashboardSummary();
       setOutboundBarcodes([]);
+      setOutboundBarcodeReviews({});
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: outboundType === "transfer" ? "挪仓已写入数据库" : "销售出库已写入数据库" });
     } catch (error) {
@@ -654,7 +767,8 @@ export default function WarehousePrototype() {
           mode: "sales_return",
           barcodes
         },
-        "请先扫描或录入销售人员名下条码"
+        "请先扫描或录入销售人员名下条码",
+        setReturnBarcodeReviews
       );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/sales-return", {
         returnWarehouseId,
@@ -669,6 +783,7 @@ export default function WarehousePrototype() {
       }));
       await loadDashboardSummary();
       setReturnBarcodes([]);
+      setReturnBarcodeReviews({});
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: "销售退回已写入数据库，未修改生产日期或保质期" });
     } catch (error) {
@@ -837,7 +952,11 @@ export default function WarehousePrototype() {
               inboundBarcodeInput={inboundBarcodeInput}
               setInboundBarcodeInput={setInboundBarcodeInput}
               inboundBarcodes={inboundBarcodes}
-              setInboundBarcodes={setInboundBarcodes}
+              setInboundBarcodes={(nextBarcodes) => {
+                setInboundBarcodes(nextBarcodes);
+                if (nextBarcodes.length === 0) setInboundBarcodeReviews({});
+              }}
+              inboundBarcodeReviews={inboundBarcodeReviews}
               productionDate={productionDate}
               setProductionDate={setProductionDate}
               terminalStoreId={terminalStoreId}
@@ -870,7 +989,11 @@ export default function WarehousePrototype() {
               outboundBarcodeInput={outboundBarcodeInput}
               setOutboundBarcodeInput={setOutboundBarcodeInput}
               outboundBarcodes={outboundBarcodes}
-              setOutboundBarcodes={setOutboundBarcodes}
+              setOutboundBarcodes={(nextBarcodes) => {
+                setOutboundBarcodes(nextBarcodes);
+                if (nextBarcodes.length === 0) setOutboundBarcodeReviews({});
+              }}
+              outboundBarcodeReviews={outboundBarcodeReviews}
               addBarcode={(input) =>
                 addBarcode(input, outboundBarcodes, setOutboundBarcodeInput, setOutboundBarcodes)
               }
@@ -885,7 +1008,11 @@ export default function WarehousePrototype() {
               returnBarcodeInput={returnBarcodeInput}
               setReturnBarcodeInput={setReturnBarcodeInput}
               returnBarcodes={returnBarcodes}
-              setReturnBarcodes={setReturnBarcodes}
+              setReturnBarcodes={(nextBarcodes) => {
+                setReturnBarcodes(nextBarcodes);
+                if (nextBarcodes.length === 0) setReturnBarcodeReviews({});
+              }}
+              returnBarcodeReviews={returnBarcodeReviews}
               addBarcode={(input) =>
                 addBarcode(input, returnBarcodes, setReturnBarcodeInput, setReturnBarcodes)
               }
@@ -2188,10 +2315,15 @@ function MasterTable({
 }) {
   return (
     <section className="panel overflow-hidden">
-      <SectionHeader icon={Icon} title={title} />
-      <div className="overflow-x-auto">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
+        <SectionHeader icon={Icon} title={title} compact />
+        <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-500">
+          {rows.length} 条
+        </span>
+      </div>
+      <div className="max-h-[520px] overflow-auto">
         <table className="w-full min-w-[620px]">
-          <thead className="table-head">
+          <thead className="table-head sticky top-0 z-[1]">
             <tr>
               {headers.map((header) => (
                 <th className="px-4 py-3" key={header}>
@@ -2317,6 +2449,7 @@ function InboundView(props: {
   setInboundBarcodeInput: (value: string) => void;
   inboundBarcodes: string[];
   setInboundBarcodes: (value: string[]) => void;
+  inboundBarcodeReviews: BarcodeReviewMap;
   productionDate: string;
   setProductionDate: (value: string) => void;
   terminalStoreId: string;
@@ -2346,12 +2479,15 @@ function InboundView(props: {
     props.productionDate
       ? addYears(props.productionDate, 3)
       : "无";
-  const reviewInboundBarcode = (): BarcodeReview => {
+  const reviewInboundBarcode = (barcode: string): BarcodeReview => {
+    const review = props.inboundBarcodeReviews[barcode];
+    if (review) return review;
+
     if (props.inboundSource === "factory") {
-      return { tone: "neutral", label: "待校验", detail: "提交时由数据库确认是否重复" };
+      return { tone: "neutral", label: "校验中", detail: "正在确认该条码是否已存在" };
     }
 
-    return { tone: "neutral", label: "待校验", detail: "提交时由数据库确认条码归属与货物是否匹配" };
+    return { tone: "neutral", label: "校验中", detail: "正在确认条码归属与货物是否匹配" };
   };
   const invalidBarcodeCount = countInvalidReviews(props.inboundBarcodes, reviewInboundBarcode);
   const submitDisabled =
@@ -2526,6 +2662,7 @@ function OutboundView(props: {
   setOutboundBarcodeInput: (value: string) => void;
   outboundBarcodes: string[];
   setOutboundBarcodes: (value: string[]) => void;
+  outboundBarcodeReviews: BarcodeReviewMap;
   addBarcode: (input: string) => void;
   submitOutbound: () => void;
 }) {
@@ -2538,11 +2675,14 @@ function OutboundView(props: {
   const validBarcodeCount = props.outboundBarcodes.length;
   const targetLabel =
     props.outboundType === "transfer" ? targetWarehouse?.name ?? "未选择" : salesperson?.name ?? "未选择";
-  const reviewOutboundBarcode = (): BarcodeReview => {
+  const reviewOutboundBarcode = (barcode: string): BarcodeReview => {
+    const review = props.outboundBarcodeReviews[barcode];
+    if (review) return review;
+
     return {
       tone: "neutral",
-      label: "待校验",
-      detail: "提交时由数据库确认条码是否在所选仓库"
+      label: "校验中",
+      detail: "正在确认条码是否在所选仓库"
     };
   };
   const invalidBarcodeCount = countInvalidReviews(props.outboundBarcodes, reviewOutboundBarcode);
@@ -2682,17 +2822,21 @@ function SalesReturnView(props: {
   setReturnBarcodeInput: (value: string) => void;
   returnBarcodes: string[];
   setReturnBarcodes: (value: string[]) => void;
+  returnBarcodeReviews: BarcodeReviewMap;
   addBarcode: (input: string) => void;
   submitSalesReturn: () => void;
 }) {
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
   const returnWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.returnWarehouseId);
   const validReturnCount = props.returnBarcodes.length;
-  const reviewReturnBarcode = (): BarcodeReview => {
+  const reviewReturnBarcode = (barcode: string): BarcodeReview => {
+    const review = props.returnBarcodeReviews[barcode];
+    if (review) return review;
+
     return {
       tone: "neutral",
-      label: "待校验",
-      detail: "提交时由数据库确认条码是否在销售人员名下"
+      label: "校验中",
+      detail: "正在确认条码是否在销售人员名下"
     };
   };
   const invalidBarcodeCount = countInvalidReviews(props.returnBarcodes, reviewReturnBarcode);
