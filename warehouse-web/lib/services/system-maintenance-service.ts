@@ -4,13 +4,10 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export async function resetDemoDatabase() {
+export async function clearOperationalData() {
   const prismaBin = join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "prisma.cmd" : "prisma");
 
-  await execFileAsync(prismaBin, ["db", "execute", "--file", "prisma/reset-demo.sql"], {
-    cwd: process.cwd()
-  });
-  await execFileAsync(prismaBin, ["db", "execute", "--file", "prisma/seed.sql"], {
+  await execFileAsync(prismaBin, ["db", "execute", "--file", "prisma/clear-operational-data.sql"], {
     cwd: process.cwd()
   });
 }

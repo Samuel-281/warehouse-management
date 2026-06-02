@@ -3361,7 +3361,7 @@ function SystemMaintenanceView({
     }
   }
 
-  async function resetDemoDatabaseFromWeb() {
+  async function clearOperationalDataFromWeb() {
     if (confirmation.trim() !== resetConfirmationText) {
       showToast({ tone: "error", message: "请输入正确确认文字" });
       return;
@@ -3370,10 +3370,10 @@ function SystemMaintenanceView({
     setSubmitting(true);
     try {
       await postJson<{ reset: boolean }>("/api/system/reset-demo", { confirmation });
-      showToast({ tone: "success", message: "系统测试数据已重置，请重新登录" });
+      showToast({ tone: "success", message: "业务数据已清空，请重新登录" });
       onResetComplete();
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "重置系统测试数据失败") });
+      showToast({ tone: "error", message: apiErrorMessage(error, "清空业务数据失败") });
     } finally {
       setSubmitting(false);
     }
@@ -3447,7 +3447,7 @@ function SystemMaintenanceView({
         <section className="panel p-5">
           <SectionHeader icon={ShieldCheck} title="高危维护" compact />
           <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
-            该入口已常设开放，仅超级管理员可执行。操作会清空业务数据并重新写入初始化数据，执行后当前登录会话会失效，需要重新登录。
+            该入口已常设开放，仅超级管理员可执行。操作会清空库存、单据、流水和基础资料，不会写入测试数据；用户账号和角色会保留，执行后当前登录会话会失效，需要重新登录。
           </div>
           <label className="label mt-5" htmlFor="reset-confirmation">
             输入确认文字
@@ -3459,9 +3459,9 @@ function SystemMaintenanceView({
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}
           />
-          <button className="primary-button mt-4 w-full" disabled={submitting} onClick={resetDemoDatabaseFromWeb}>
+          <button className="primary-button mt-4 w-full" disabled={submitting} onClick={clearOperationalDataFromWeb}>
             <RotateCcw className="h-4 w-4" />
-            {submitting ? "正在重置" : "重置系统测试数据"}
+            {submitting ? "正在清空" : "清空业务数据"}
           </button>
         </section>
       </div>
