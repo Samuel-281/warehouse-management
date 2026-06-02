@@ -255,6 +255,9 @@ model InventoryItem {
   @@index([warehouseId])
   @@index([salespersonId])
   @@index([lastMovedAt])
+  @@index([ownerType, warehouseId, lastMovedAt])
+  @@index([ownerType, salespersonId, lastMovedAt])
+  @@index([goodsId, lastMovedAt])
   @@map("inventory_items")
 }
 
@@ -279,6 +282,7 @@ model StockMovement {
   @@index([itemId])
   @@index([goodsId])
   @@index([occurredAt])
+  @@index([barcode, occurredAt])
   @@map("stock_movements")
 }
 

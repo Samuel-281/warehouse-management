@@ -3,8 +3,6 @@ import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type {
   Goods,
   GoodsCategory,
-  InboundSource,
-  InventoryItem,
   MovementType,
   Salesperson,
   StorageLocation,
@@ -18,9 +16,6 @@ import type {
 type DbRecordStatus = "ENABLED" | "DISABLED";
 type DbGoodsCategory = "HEALTH_WINE" | "BAIJIU";
 type DbWarehouseType = "MAIN" | "BRANCH";
-type DbOwnerType = "WAREHOUSE" | "SALESPERSON";
-type DbItemStatus = "IN_STOCK" | "WITH_SALESPERSON";
-type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
 type DbMovementType =
   | "FACTORY_INBOUND"
   | "TERMINAL_RETURN_INBOUND"
@@ -73,21 +68,6 @@ type DbTerminalStore = {
   phone: string;
   address: string;
   status: DbRecordStatus;
-};
-
-type DbInventoryItem = {
-  id: string;
-  barcode: string;
-  goodsId: string;
-  ownerType: DbOwnerType;
-  warehouseId: string | null;
-  locationId: string | null;
-  salespersonId: string | null;
-  status: DbItemStatus;
-  productionDate: Date | null;
-  shelfLifeDate: Date | null;
-  inboundSource: DbInboundSource;
-  lastMovedAt: Date;
 };
 
 type DbStockMovement = {
@@ -149,14 +129,13 @@ export type UpdateTerminalStoreInput = Partial<CreateTerminalStoreInput> & {
 
 export async function listMasterData(): Promise<WarehouseState> {
   const prisma = getPrisma();
-  const [goods, warehouses, locations, salespeople, terminalStores, inventoryItems, movements] = await Promise.all([
+  const [goods, warehouses, locations, salespeople, terminalStores, movements] = await Promise.all([
     prisma.goods.findMany({ orderBy: { code: "asc" } }),
     prisma.warehouse.findMany({ orderBy: [{ type: "asc" }, { code: "asc" }] }),
     prisma.storageLocation.findMany({ orderBy: [{ warehouseId: "asc" }, { code: "asc" }] }),
     prisma.salesperson.findMany({ orderBy: { code: "asc" } }),
     prisma.terminalStore.findMany({ orderBy: { name: "asc" } }),
-    prisma.inventoryItem.findMany({ orderBy: { lastMovedAt: "desc" } }),
-    prisma.stockMovement.findMany({ orderBy: { occurredAt: "desc" } })
+    prisma.stockMovement.findMany({ orderBy: { occurredAt: "desc" }, take: 8 })
   ]);
 
   return {
@@ -165,7 +144,7 @@ export async function listMasterData(): Promise<WarehouseState> {
     locations: locations.map(mapStorageLocation),
     salespeople: salespeople.map(mapSalesperson),
     terminalStores: terminalStores.map(mapTerminalStore),
-    inventoryItems: inventoryItems.map(mapInventoryItem),
+    inventoryItems: [],
     movements: movements.map(mapStockMovement)
   };
 }
@@ -432,18 +411,6 @@ function mapWarehouseType(type: DbWarehouseType): WarehouseType {
   return type === "MAIN" ? "main" : "branch";
 }
 
-function mapOwnerType(type: DbOwnerType) {
-  return type === "WAREHOUSE" ? "warehouse" : "salesperson";
-}
-
-function mapItemStatus(status: DbItemStatus) {
-  return status === "IN_STOCK" ? "in_stock" : "with_salesperson";
-}
-
-function mapInboundSource(source: DbInboundSource): InboundSource {
-  return source === "FACTORY" ? "factory" : "terminal_return";
-}
-
 function mapMovementType(type: DbMovementType): MovementType {
   const movementTypes: Record<DbMovementType, MovementType> = {
     FACTORY_INBOUND: "factory_inbound",
@@ -454,10 +421,6 @@ function mapMovementType(type: DbMovementType): MovementType {
   };
 
   return movementTypes[type];
-}
-
-function formatDate(date: Date | null) {
-  return date ? date.toISOString().slice(0, 10) : undefined;
 }
 
 function formatDateTime(date: Date) {
@@ -518,23 +481,6 @@ function mapTerminalStore(store: DbTerminalStore): TerminalStore {
     phone: store.phone,
     address: store.address,
     status: mapStatus(store.status)
-  };
-}
-
-function mapInventoryItem(item: DbInventoryItem): InventoryItem {
-  return {
-    id: item.id,
-    barcode: item.barcode,
-    goodsId: item.goodsId,
-    ownerType: mapOwnerType(item.ownerType),
-    warehouseId: item.warehouseId ?? undefined,
-    locationId: item.locationId ?? undefined,
-    salespersonId: item.salespersonId ?? undefined,
-    status: mapItemStatus(item.status),
-    productionDate: formatDate(item.productionDate),
-    shelfLifeDate: formatDate(item.shelfLifeDate),
-    inboundSource: mapInboundSource(item.inboundSource),
-    lastMovedAt: formatDateTime(item.lastMovedAt)
   };
 }
 

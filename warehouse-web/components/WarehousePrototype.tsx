@@ -34,7 +34,10 @@ import { hasAnyRole } from "@/lib/role-utils";
 import type {
   CurrentUser,
   InboundSource,
+  InventoryDetailResult,
   InventoryItem,
+  InventoryListResult,
+  InventorySummary,
   ManagedUser,
   OperationLog,
   OrderKind,
@@ -80,6 +83,14 @@ type OperationCheck = {
   label: string;
   passed: boolean;
   detail: string;
+};
+
+type BarcodeValidationResult = {
+  barcode: string;
+  ok: boolean;
+  label: string;
+  detail: string;
+  item?: InventoryItem;
 };
 
 type ApiResponse<T> = { data: T } | { error: string };
@@ -130,13 +141,6 @@ async function getJson<T>(path: string): Promise<T> {
   return payload.data;
 }
 
-function mergeInventoryItems(currentItems: InventoryItem[], updatedItems: InventoryItem[]) {
-  const updatedByBarcode = new Map(updatedItems.map((item) => [item.barcode, item]));
-  const merged = currentItems.map((item) => updatedByBarcode.get(item.barcode) ?? item);
-  const existingBarcodes = new Set(currentItems.map((item) => item.barcode));
-  return [...updatedItems.filter((item) => !existingBarcodes.has(item.barcode)), ...merged];
-}
-
 function parseBarcodeInput(input: string) {
   return uniqueBarcodes(input.split(/[\s,，;；]+/));
 }
@@ -162,6 +166,17 @@ const resetConfirmationText = "确定重置";
 const productionBuild = process.env.NODE_ENV === "production";
 const pageSizeOptions = [20, 50, 100];
 
+const emptyInventorySummary: InventorySummary = {
+  totalItems: 0,
+  inStock: 0,
+  withSales: 0,
+  mainCount: 0,
+  branchCount: 0,
+  warehouseCounts: [],
+  salespersonCounts: [],
+  recentMovements: []
+};
+
 const roleLabels: Record<UserRoleCode, string> = {
   SUPER_ADMIN: "超级管理员",
   WAREHOUSE_ADMIN: "仓库管理员",
@@ -184,6 +199,7 @@ export default function WarehousePrototype() {
   const [selectedBarcode, setSelectedBarcode] = useState("HJ202605290001");
   const [masterDataSource, setMasterDataSource] = useState<"local" | "database">("local");
   const [refreshing, setRefreshing] = useState(false);
+  const [dashboardSummary, setDashboardSummary] = useState<InventorySummary>(emptyInventorySummary);
 
   const [inboundSource, setInboundSource] = useState<InboundSource>("factory");
   const [inboundWarehouseId, setInboundWarehouseId] = useState("wh-main");
@@ -281,23 +297,38 @@ export default function WarehousePrototype() {
     setReturnLocationId(mainLocation?.id ?? "");
     setInventoryFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
     setSelectedBarcode((current) => {
-      if (options.preserveSelection && masterData.inventoryItems.some((item) => item.barcode === current)) {
+      if (options.preserveSelection && current) {
         return current;
       }
-      return masterData.inventoryItems[0]?.barcode ?? "";
+      return "";
     });
     setMasterDataSource("database");
     window.localStorage.removeItem(STORAGE_KEY);
+  }, []);
+
+  const loadDashboardSummary = useCallback(async () => {
+    try {
+      const summary = await getJson<InventorySummary>("/api/inventory/summary");
+      setDashboardSummary(summary);
+      setState((previous) => ({ ...previous, movements: summary.recentMovements }));
+      return summary;
+    } catch (error) {
+      console.info(apiErrorMessage(error, "库存统计接口暂不可用"));
+      return null;
+    }
   }, []);
 
   const refreshWarehouseState = useCallback(
     async (options: { preserveSelection?: boolean; notify?: boolean } = {}) => {
       setRefreshing(true);
       try {
-        const masterData = await getJson<WarehouseState>("/api/master-data");
+        const [masterData] = await Promise.all([
+          getJson<WarehouseState>("/api/master-data"),
+          loadDashboardSummary()
+        ]);
         applyDatabaseState(masterData, { preserveSelection: options.preserveSelection ?? true });
         if (options.notify) {
-          showToast({ tone: "success", message: "已从数据库刷新库存与流水" });
+          showToast({ tone: "success", message: "已从数据库刷新基础资料与库存统计" });
         }
         return masterData;
       } catch (error) {
@@ -312,7 +343,7 @@ export default function WarehousePrototype() {
         setRefreshing(false);
       }
     },
-    [applyDatabaseState, handleRequestError, showToast]
+    [applyDatabaseState, handleRequestError, loadDashboardSummary, showToast]
   );
 
   useEffect(() => {
@@ -343,10 +374,12 @@ export default function WarehousePrototype() {
 
     let cancelled = false;
 
-    getJson<MasterDataPayload>("/api/master-data")
-      .then((masterData) => {
+    Promise.all([getJson<MasterDataPayload>("/api/master-data"), getJson<InventorySummary>("/api/inventory/summary")])
+      .then(([masterData, summary]) => {
         if (cancelled) return;
         applyDatabaseState(masterData, { preserveSelection: true });
+        setDashboardSummary(summary);
+        setState((previous) => ({ ...previous, movements: summary.recentMovements }));
       })
       .catch((error) => {
         if (cancelled) return;
@@ -394,44 +427,10 @@ export default function WarehousePrototype() {
     setReturnLocationId(firstLocation?.id ?? "");
   }, [returnWarehouseId, state.locations]);
 
-  const filteredInventory = useMemo(() => {
-    return state.inventoryItems.filter((item) => {
-      const goods = state.goods.find((entry) => entry.id === item.goodsId);
-      const keyword = inventoryFilters.keyword.trim().toLowerCase();
-      const keywordMatch =
-        !keyword ||
-        item.barcode.toLowerCase().includes(keyword) ||
-        goods?.name.toLowerCase().includes(keyword) ||
-        goods?.code.toLowerCase().includes(keyword);
-      const ownerMatch =
-        inventoryFilters.ownerScope === "all" ||
-        (inventoryFilters.ownerScope === "warehouse" &&
-          item.ownerType === "warehouse" &&
-          (inventoryFilters.warehouseId === "all" || item.warehouseId === inventoryFilters.warehouseId)) ||
-        (inventoryFilters.ownerScope === "salesperson" &&
-          item.ownerType === "salesperson" &&
-          (inventoryFilters.salespersonId === "all" || item.salespersonId === inventoryFilters.salespersonId));
-      const goodsMatch = inventoryFilters.goodsId === "all" || item.goodsId === inventoryFilters.goodsId;
-
-      return keywordMatch && ownerMatch && goodsMatch;
-    });
-  }, [inventoryFilters, state.goods, state.inventoryItems]);
-
   const filteredOrders = useMemo(() => {
     if (orderKindFilter === "all") return orders;
     return orders.filter((order) => order.kind === orderKindFilter);
   }, [orderKindFilter, orders]);
-
-  const stats = useMemo(() => {
-    const inStock = state.inventoryItems.filter((item) => item.ownerType === "warehouse");
-    const withSales = state.inventoryItems.filter((item) => item.ownerType === "salesperson");
-    const mainWarehouseIds = new Set(
-      state.warehouses.filter((warehouse) => warehouse.type === "main").map((warehouse) => warehouse.id)
-    );
-    const mainCount = inStock.filter((item) => item.warehouseId && mainWarehouseIds.has(item.warehouseId)).length;
-    const branchCount = inStock.filter((item) => item.warehouseId && !mainWarehouseIds.has(item.warehouseId)).length;
-    return { inStock: inStock.length, withSales: withSales.length, mainCount, branchCount };
-  }, [state.inventoryItems, state.warehouses]);
 
   const loadOrders = useCallback(async () => {
     setOrdersLoading(true);
@@ -474,7 +473,6 @@ export default function WarehousePrototype() {
 
     const accepted = candidates.filter((barcode) => {
       if (currentList.includes(barcode)) return false;
-      if (options.mustBeNew && state.inventoryItems.some((item) => item.barcode === barcode)) return false;
       return true;
     });
 
@@ -497,12 +495,34 @@ export default function WarehousePrototype() {
     }
   }
 
+  async function validateBarcodeList(
+    input: {
+      mode: "factory_inbound" | "terminal_return_inbound" | "warehouse_outbound" | "sales_return";
+      barcodes: string[];
+      goodsId?: string;
+      warehouseId?: string;
+    },
+    fallback: string
+  ) {
+    const results = await postJson<BarcodeValidationResult[]>("/api/barcodes/validate", input);
+    const invalid = results.find((result) => !result.ok);
+    if (invalid) {
+      throw new Error(`${invalid.barcode}：${invalid.label}，${invalid.detail}`);
+    }
+    if (results.length !== input.barcodes.length) {
+      throw new Error("条码清单中存在无效或空白条码，请重新检查");
+    }
+    if (results.length === 0) {
+      throw new Error(fallback);
+    }
+    return results;
+  }
+
   async function submitInbound() {
     const qty = Number(inboundQty);
     const barcodes = uniqueBarcodes(inboundBarcodes);
-    const latestState = (await refreshWarehouseState({ preserveSelection: true })) ?? state;
-    const goods = latestState.goods.find((item) => item.id === inboundGoodsId);
-    const warehouse = latestState.warehouses.find((item) => item.id === inboundWarehouseId);
+    const goods = state.goods.find((item) => item.id === inboundGoodsId);
+    const warehouse = state.warehouses.find((item) => item.id === inboundWarehouseId);
 
     if (!goods || !warehouse) {
       showToast({ tone: "error", message: "请选择有效的货物和仓库" });
@@ -524,25 +544,15 @@ export default function WarehousePrototype() {
       showToast({ tone: "error", message: "终端店铺退换货入库必须登记生产日期" });
       return;
     }
-    const duplicated = barcodes.find((barcode) =>
-      latestState.inventoryItems.some((item) => item.barcode === barcode)
-    );
-    if (inboundSource === "factory" && duplicated) {
-      showToast({ tone: "error", message: `条码 ${duplicated} 已被其他设备入库，请从清单移除后再提交` });
-      return;
-    }
-    if (inboundSource === "terminal_return") {
-      const invalid = barcodes.find((barcode) => {
-        const item = latestState.inventoryItems.find((entry) => entry.barcode === barcode);
-        return item && item.ownerType !== "salesperson";
-      });
-      if (invalid) {
-        showToast({ tone: "error", message: `条码 ${invalid} 当前已不符合入库条件，请从清单移除后再提交` });
-        return;
-      }
-    }
-
     try {
+      await validateBarcodeList(
+        {
+          mode: inboundSource === "factory" ? "factory_inbound" : "terminal_return_inbound",
+          barcodes,
+          goodsId: inboundGoodsId
+        },
+        "请先扫描或录入条码"
+      );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/inbound", {
         source: inboundSource,
         warehouseId: inboundWarehouseId,
@@ -556,10 +566,9 @@ export default function WarehousePrototype() {
 
       setState((previous) => ({
         ...previous,
-        inventoryItems: mergeInventoryItems(previous.inventoryItems, result.items),
-        movements: [...result.movements, ...previous.movements]
+        movements: [...result.movements, ...previous.movements].slice(0, 8)
       }));
-      await refreshWarehouseState({ preserveSelection: true });
+      await loadDashboardSummary();
       setInboundBarcodes([]);
       setInboundQty("1");
       setProductionDate("");
@@ -577,10 +586,9 @@ export default function WarehousePrototype() {
       return;
     }
 
-    const latestState = (await refreshWarehouseState({ preserveSelection: true })) ?? state;
-    const sourceWarehouse = latestState.warehouses.find((warehouse) => warehouse.id === sourceWarehouseId);
-    const targetWarehouse = latestState.warehouses.find((warehouse) => warehouse.id === targetWarehouseId);
-    const salesperson = latestState.salespeople.find((person) => person.id === salespersonId);
+    const sourceWarehouse = state.warehouses.find((warehouse) => warehouse.id === sourceWarehouseId);
+    const targetWarehouse = state.warehouses.find((warehouse) => warehouse.id === targetWarehouseId);
+    const salesperson = state.salespeople.find((person) => person.id === salespersonId);
 
     if (!sourceWarehouse) {
       showToast({ tone: "error", message: "请选择有效的出库仓库" });
@@ -601,23 +609,15 @@ export default function WarehousePrototype() {
       return;
     }
 
-    const movingItems = barcodes.map((barcode) =>
-      latestState.inventoryItems.find((item) => item.barcode === barcode)
-    );
-    const missing = barcodes.find((_, index) => !movingItems[index]);
-    if (missing) {
-      showToast({ tone: "error", message: `条码 ${missing} 不存在` });
-      return;
-    }
-    const invalid = movingItems.find(
-      (item) => item?.ownerType !== "warehouse" || item.warehouseId !== sourceWarehouseId
-    );
-    if (invalid) {
-      showToast({ tone: "error", message: `条码 ${invalid.barcode} 当前已不在所选仓库库存中，请从清单移除后再提交` });
-      return;
-    }
-
     try {
+      await validateBarcodeList(
+        {
+          mode: "warehouse_outbound",
+          barcodes,
+          warehouseId: sourceWarehouseId
+        },
+        "请先扫描或录入条码"
+      );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/outbound", {
         type: outboundType,
         sourceWarehouseId,
@@ -628,13 +628,11 @@ export default function WarehousePrototype() {
         operatorName: currentUser?.displayName ?? operator
       });
 
-      const updatedByBarcode = new Map(result.items.map((item) => [item.barcode, item]));
       setState((previous) => ({
         ...previous,
-        inventoryItems: previous.inventoryItems.map((item) => updatedByBarcode.get(item.barcode) ?? item),
-        movements: [...result.movements, ...previous.movements]
+        movements: [...result.movements, ...previous.movements].slice(0, 8)
       }));
-      await refreshWarehouseState({ preserveSelection: true });
+      await loadDashboardSummary();
       setOutboundBarcodes([]);
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: outboundType === "transfer" ? "挪仓已写入数据库" : "销售出库已写入数据库" });
@@ -650,22 +648,14 @@ export default function WarehousePrototype() {
       return;
     }
 
-    const latestState = (await refreshWarehouseState({ preserveSelection: true })) ?? state;
-    const movingItems = barcodes.map((barcode) =>
-      latestState.inventoryItems.find((item) => item.barcode === barcode)
-    );
-    const missing = barcodes.find((_, index) => !movingItems[index]);
-    if (missing) {
-      showToast({ tone: "error", message: `条码 ${missing} 不存在` });
-      return;
-    }
-    const invalid = movingItems.find((item) => item?.ownerType !== "salesperson");
-    if (invalid) {
-      showToast({ tone: "error", message: `条码 ${invalid.barcode} 当前已不在销售人员名下，请从清单移除后再提交` });
-      return;
-    }
-
     try {
+      await validateBarcodeList(
+        {
+          mode: "sales_return",
+          barcodes
+        },
+        "请先扫描或录入销售人员名下条码"
+      );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/sales-return", {
         returnWarehouseId,
         returnLocationId,
@@ -673,13 +663,11 @@ export default function WarehousePrototype() {
         operatorName: currentUser?.displayName ?? operator
       });
 
-      const updatedByBarcode = new Map(result.items.map((item) => [item.barcode, item]));
       setState((previous) => ({
         ...previous,
-        inventoryItems: previous.inventoryItems.map((item) => updatedByBarcode.get(item.barcode) ?? item),
-        movements: [...result.movements, ...previous.movements]
+        movements: [...result.movements, ...previous.movements].slice(0, 8)
       }));
-      await refreshWarehouseState({ preserveSelection: true });
+      await loadDashboardSummary();
       setReturnBarcodes([]);
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showToast({ tone: "success", message: "销售退回已写入数据库，未修改生产日期或保质期" });
@@ -820,7 +808,7 @@ export default function WarehousePrototype() {
           {toast ? <ToastBox toast={toast} /> : null}
           {activeView === "dashboard" ? (
             <DashboardView
-              stats={stats}
+              summary={dashboardSummary}
               state={state}
               setActiveView={setActiveView}
               setSelectedBarcode={setSelectedBarcode}
@@ -921,11 +909,9 @@ export default function WarehousePrototype() {
               state={state}
               filters={inventoryFilters}
               setFilters={setInventoryFilters}
-              inventoryItems={filteredInventory}
               selectedBarcode={selectedBarcode}
               setSelectedBarcode={setSelectedBarcode}
-              refreshing={refreshing}
-              refreshData={() => void refreshWarehouseState({ preserveSelection: true, notify: true })}
+              showToast={showToast}
             />
           ) : null}
           {activeView === "system" && canMaintainSystem ? (
@@ -1043,32 +1029,34 @@ function ToastBox({ toast }: { toast: Toast }) {
 }
 
 function DashboardView({
-  stats,
+  summary,
   state,
   setActiveView,
   setSelectedBarcode,
   canOperateWarehouse
 }: {
-  stats: { inStock: number; withSales: number; mainCount: number; branchCount: number };
+  summary: InventorySummary;
   state: WarehouseState;
   setActiveView: (view: ViewKey) => void;
   setSelectedBarcode: (barcode: string) => void;
   canOperateWarehouse: boolean;
 }) {
-  const recentMovements = state.movements.slice(0, 8);
-  const totalItems = state.inventoryItems.length;
+  const recentMovements = summary.recentMovements;
+  const totalItems = summary.totalItems;
+  const warehouseCountById = new Map(summary.warehouseCounts.map((row) => [row.warehouseId, row.count]));
+  const salespersonCountById = new Map(summary.salespersonCounts.map((row) => [row.salespersonId, row.count]));
   const warehouseRows = state.warehouses.map((warehouse) => ({
     warehouse,
-    count: state.inventoryItems.filter((item) => item.ownerType === "warehouse" && item.warehouseId === warehouse.id).length
+    count: warehouseCountById.get(warehouse.id) ?? 0
   }));
   const salespersonRows = state.salespeople.map((person) => ({
     person,
-    count: state.inventoryItems.filter((item) => item.ownerType === "salesperson" && item.salespersonId === person.id).length
+    count: salespersonCountById.get(person.id) ?? 0
   }));
   const distributionRows = [
-    { label: "总仓库存", value: stats.mainCount },
-    { label: "分仓库存", value: stats.branchCount },
-    { label: "销售人员名下", value: stats.withSales }
+    { label: "总仓库存", value: summary.mainCount },
+    { label: "分仓库存", value: summary.branchCount },
+    { label: "销售人员名下", value: summary.withSales }
   ];
 
   return (
@@ -1096,9 +1084,9 @@ function DashboardView({
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="全部条码" value={totalItems} detail="当前系统内可追踪货物" icon={Barcode} />
-          <MetricCard label="仓库在库" value={stats.inStock} detail={`${formatPercent(stats.inStock, totalItems)}% 留存在仓库`} icon={Boxes} />
-          <MetricCard label="分仓库存" value={stats.branchCount} detail={`${formatPercent(stats.branchCount, stats.inStock)}% 在库库存`} icon={Building2} />
-          <MetricCard label="销售人员名下" value={stats.withSales} detail={`${formatPercent(stats.withSales, totalItems)}% 总条码`} icon={Users} />
+          <MetricCard label="仓库在库" value={summary.inStock} detail={`${formatPercent(summary.inStock, totalItems)}% 留存在仓库`} icon={Boxes} />
+          <MetricCard label="分仓库存" value={summary.branchCount} detail={`${formatPercent(summary.branchCount, summary.inStock)}% 在库库存`} icon={Building2} />
+          <MetricCard label="销售人员名下" value={summary.withSales} detail={`${formatPercent(summary.withSales, totalItems)}% 总条码`} icon={Users} />
         </div>
       </section>
 
@@ -2358,39 +2346,12 @@ function InboundView(props: {
     props.productionDate
       ? addYears(props.productionDate, 3)
       : "无";
-  const reviewInboundBarcode = (barcode: string): BarcodeReview => {
-    const existingItem = props.state.inventoryItems.find((item) => item.barcode === barcode);
+  const reviewInboundBarcode = (): BarcodeReview => {
     if (props.inboundSource === "factory") {
-      return existingItem
-        ? {
-            tone: "error",
-            label: "已存在",
-            detail: ownerLabel(existingItem, props.state.warehouses, props.state.salespeople, props.state.locations)
-          }
-        : { tone: "success", label: "新条码", detail: "可作为厂家到货入库" };
+      return { tone: "neutral", label: "待校验", detail: "提交时由数据库确认是否重复" };
     }
 
-    if (!existingItem) {
-      return { tone: "success", label: "新退换货", detail: "可登记为终端退换货入库" };
-    }
-
-    if (existingItem.goodsId !== props.inboundGoodsId) {
-      return { tone: "error", label: "货物不符", detail: "该条码已绑定其他货物" };
-    }
-
-    if (existingItem.ownerType !== "salesperson") {
-      return {
-        tone: "error",
-        label: "已在库",
-        detail: ownerLabel(existingItem, props.state.warehouses, props.state.salespeople, props.state.locations)
-      };
-    }
-
-    return {
-      tone: "success",
-      label: "可回仓",
-      detail: ownerLabel(existingItem, props.state.warehouses, props.state.salespeople, props.state.locations)
-    };
+    return { tone: "neutral", label: "待校验", detail: "提交时由数据库确认条码归属与货物是否匹配" };
   };
   const invalidBarcodeCount = countInvalidReviews(props.inboundBarcodes, reviewInboundBarcode);
   const submitDisabled =
@@ -2574,39 +2535,14 @@ function OutboundView(props: {
   const sourceWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.sourceWarehouseId);
   const targetWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.targetWarehouseId);
   const salesperson = enabledSalespeople.find((person) => person.id === props.salespersonId);
-  const sourceStockCount = props.state.inventoryItems.filter(
-    (item) => item.ownerType === "warehouse" && item.warehouseId === props.sourceWarehouseId
-  ).length;
-  const validBarcodeCount = props.outboundBarcodes.filter((barcode) => {
-    const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
-    return item?.ownerType === "warehouse" && item.warehouseId === props.sourceWarehouseId;
-  }).length;
+  const validBarcodeCount = props.outboundBarcodes.length;
   const targetLabel =
     props.outboundType === "transfer" ? targetWarehouse?.name ?? "未选择" : salesperson?.name ?? "未选择";
-  const reviewOutboundBarcode = (barcode: string): BarcodeReview => {
-    const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
-    if (!item) {
-      return { tone: "error", label: "不存在", detail: "系统内未找到该条码" };
-    }
-    if (item.ownerType !== "warehouse") {
-      return {
-        tone: "error",
-        label: "不在库",
-        detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
-      };
-    }
-    if (item.warehouseId !== props.sourceWarehouseId) {
-      return {
-        tone: "error",
-        label: "仓库不符",
-        detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
-      };
-    }
-
+  const reviewOutboundBarcode = (): BarcodeReview => {
     return {
-      tone: "success",
-      label: "可出库",
-      detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
+      tone: "neutral",
+      label: "待校验",
+      detail: "提交时由数据库确认条码是否在所选仓库"
     };
   };
   const invalidBarcodeCount = countInvalidReviews(props.outboundBarcodes, reviewOutboundBarcode);
@@ -2690,8 +2626,8 @@ function OutboundView(props: {
                 }))}
               />
             )}
-            <ReadOnlyField label="仓库可用库存" value={`${sourceStockCount} 件`} />
-            <ReadOnlyField label="条码校验" value={`${validBarcodeCount} / ${props.outboundBarcodes.length} 可出库`} />
+            <ReadOnlyField label="仓库可用库存" value="按库存查询查看" />
+            <ReadOnlyField label="条码校验" value={`${validBarcodeCount} 件待提交校验`} />
           </div>
 
           <RoutePreview
@@ -2751,28 +2687,12 @@ function SalesReturnView(props: {
 }) {
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
   const returnWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.returnWarehouseId);
-  const salespersonCustodyCount = props.state.inventoryItems.filter((item) => item.ownerType === "salesperson").length;
-  const validReturnCount = props.returnBarcodes.filter((barcode) => {
-    const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
-    return item?.ownerType === "salesperson";
-  }).length;
-  const reviewReturnBarcode = (barcode: string): BarcodeReview => {
-    const item = props.state.inventoryItems.find((entry) => entry.barcode === barcode);
-    if (!item) {
-      return { tone: "error", label: "不存在", detail: "系统内未找到该条码" };
-    }
-    if (item.ownerType !== "salesperson") {
-      return {
-        tone: "error",
-        label: "不在销售名下",
-        detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
-      };
-    }
-
+  const validReturnCount = props.returnBarcodes.length;
+  const reviewReturnBarcode = (): BarcodeReview => {
     return {
-      tone: "success",
-      label: "可退回",
-      detail: ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)
+      tone: "neutral",
+      label: "待校验",
+      detail: "提交时由数据库确认条码是否在销售人员名下"
     };
   };
   const invalidBarcodeCount = countInvalidReviews(props.returnBarcodes, reviewReturnBarcode);
@@ -2801,7 +2721,7 @@ function SalesReturnView(props: {
         title="未售完货物回流仓库"
         summary={[
           { label: "回流仓库", value: returnWarehouse?.name ?? "未选择" },
-          { label: "销售人员名下", value: `${salespersonCustodyCount} 件` },
+          { label: "销售人员名下", value: "按库存查询查看" },
           { label: "待退回条码", value: `${props.returnBarcodes.length} 件` }
         ]}
       />
@@ -3392,23 +3312,77 @@ function InventoryView(props: {
   state: WarehouseState;
   filters: InventoryFilters;
   setFilters: (value: InventoryFilters) => void;
-  inventoryItems: InventoryItem[];
   selectedBarcode: string;
   setSelectedBarcode: (barcode: string) => void;
-  refreshing: boolean;
-  refreshData: () => void;
+  showToast: (toast: Toast) => void;
 }) {
+  const { filters, showToast } = props;
   const [detailBarcode, setDetailBarcode] = useState<string | null>(null);
+  const [detailResult, setDetailResult] = useState<InventoryDetailResult | null>(null);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
-  const detailItem = detailBarcode
-    ? props.state.inventoryItems.find((item) => item.barcode === detailBarcode)
-    : undefined;
-  const detailMovements = detailBarcode
-    ? props.state.movements
-        .filter((movement) => movement.barcode === detailBarcode)
-        .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
-    : [];
+  const [loading, setLoading] = useState(false);
+  const [inventoryResult, setInventoryResult] = useState<InventoryListResult>({
+    items: [],
+    latestMovements: [],
+    total: 0,
+    warehouseResultCount: 0,
+    salesResultCount: 0,
+    page: 1,
+    pageSize: 20
+  });
+  const latestMovementByBarcode = useMemo(
+    () => new Map(inventoryResult.latestMovements.map((movement) => [movement.barcode, movement])),
+    [inventoryResult.latestMovements]
+  );
+
+  const loadInventoryPage = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        keyword: filters.keyword,
+        ownerScope: filters.ownerScope,
+        warehouseId: filters.warehouseId,
+        salespersonId: filters.salespersonId,
+        goodsId: filters.goodsId,
+        page: String(page),
+        pageSize: String(pageSize)
+      });
+      setInventoryResult(await getJson<InventoryListResult>(`/api/inventory?${params.toString()}`));
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "读取库存失败") });
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    page,
+    pageSize,
+    filters.goodsId,
+    filters.keyword,
+    filters.ownerScope,
+    filters.salespersonId,
+    filters.warehouseId,
+    showToast
+  ]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadInventoryPage();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [loadInventoryPage]);
+
+  async function openDetail(barcode: string) {
+    props.setSelectedBarcode(barcode);
+    setDetailBarcode(barcode);
+    setDetailResult(null);
+    try {
+      setDetailResult(await getJson<InventoryDetailResult>(`/api/inventory/${encodeURIComponent(barcode)}`));
+    } catch (error) {
+      setDetailBarcode(null);
+      showToast({ tone: "error", message: apiErrorMessage(error, "读取条码详情失败") });
+    }
+  }
 
   useEffect(() => {
     if (!detailBarcode) return;
@@ -3419,6 +3393,7 @@ function InventoryView(props: {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setDetailBarcode(null);
+        setDetailResult(null);
       }
     }
 
@@ -3451,8 +3426,8 @@ function InventoryView(props: {
     props.setFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
   }
 
-  const warehouseResultCount = props.inventoryItems.filter((item) => item.ownerType === "warehouse").length;
-  const salesResultCount = props.inventoryItems.filter((item) => item.ownerType === "salesperson").length;
+  const warehouseResultCount = inventoryResult.warehouseResultCount;
+  const salesResultCount = inventoryResult.salesResultCount;
   const activeFilterCount = [
     props.filters.keyword.trim(),
     props.filters.ownerScope !== "all" ? props.filters.ownerScope : "",
@@ -3460,9 +3435,9 @@ function InventoryView(props: {
     props.filters.salespersonId !== "all" ? props.filters.salespersonId : "",
     props.filters.goodsId !== "all" ? props.filters.goodsId : ""
   ].filter(Boolean).length;
-  const totalPages = Math.max(1, Math.ceil(props.inventoryItems.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(inventoryResult.total / pageSize));
   const currentPage = Math.min(page, totalPages);
-  const pageItems = props.inventoryItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const pageItems = inventoryResult.items;
 
   useEffect(() => {
     setPage(1);
@@ -3479,14 +3454,14 @@ function InventoryView(props: {
           <div>
             <SectionHeader icon={Search} title="库存查询" compact />
             <p className="mt-2 text-xs text-muted">
-              当前 {props.inventoryItems.length} 件 · 仓库在库 {warehouseResultCount} 件 · 销售人员名下{" "}
+              当前筛选 {inventoryResult.total} 件 · 仓库在库 {warehouseResultCount} 件 · 销售人员名下{" "}
               {salesResultCount} 件 · 已用筛选 {activeFilterCount} 项
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="secondary-button whitespace-nowrap" onClick={props.refreshData} disabled={props.refreshing}>
+            <button className="secondary-button whitespace-nowrap" onClick={() => void loadInventoryPage()} disabled={loading}>
               <RotateCcw className="h-4 w-4" />
-              {props.refreshing ? "刷新中" : "刷新数据"}
+              {loading ? "刷新中" : "刷新数据"}
             </button>
             <button className="secondary-button whitespace-nowrap" onClick={clearInventoryFilters}>
               <X className="h-4 w-4" />
@@ -3571,7 +3546,7 @@ function InventoryView(props: {
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
             <SectionHeader icon={Boxes} title="库存列表" compact />
             <p className="text-xs text-muted">
-              共 {props.inventoryItems.length} 件 · 第 {currentPage} / {totalPages} 页 · 点击条码查看详情
+              共 {inventoryResult.total} 件 · 第 {currentPage} / {totalPages} 页 · 点击条码查看详情
             </p>
           </div>
           <div className="overflow-x-auto">
@@ -3589,21 +3564,17 @@ function InventoryView(props: {
                 {pageItems.map((item) => {
                   const goods = props.state.goods.find((entry) => entry.id === item.goodsId);
                   const selected = props.selectedBarcode === item.barcode;
-                  const latestMovement = props.state.movements
-                    .filter((movement) => movement.barcode === item.barcode)
-                    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))[0];
+                  const latestMovement = latestMovementByBarcode.get(item.barcode);
                   return (
                     <tr
                       key={item.id}
                       className={`cursor-pointer hover:bg-slate-50 ${selected ? "bg-emerald-50" : ""}`}
                       onClick={() => {
-                        props.setSelectedBarcode(item.barcode);
-                        setDetailBarcode(item.barcode);
+                        void openDetail(item.barcode);
                       }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
-                          props.setSelectedBarcode(item.barcode);
-                          setDetailBarcode(item.barcode);
+                          void openDetail(item.barcode);
                         }
                       }}
                       tabIndex={0}
@@ -3634,21 +3605,21 @@ function InventoryView(props: {
                 })}
               </tbody>
             </table>
-            {props.inventoryItems.length === 0 ? (
+            {inventoryResult.total === 0 ? (
               <div className="border-t border-slate-200 p-4">
                 <EmptyState
                   icon={Search}
-                  title="没有匹配的库存记录"
-                  detail="可以调整归属、仓库、销售人员、货物或关键字后重新查询。"
+                  title={loading ? "正在读取库存" : "没有匹配的库存记录"}
+                  detail={loading ? "系统正在按当前筛选读取库存。" : "可以调整归属、仓库、销售人员、货物或关键字后重新查询。"}
                 />
               </div>
             ) : null}
           </div>
-          {props.inventoryItems.length > 0 ? (
+          {inventoryResult.total > 0 ? (
             <PaginationBar
               page={currentPage}
               pageSize={pageSize}
-              total={props.inventoryItems.length}
+              total={inventoryResult.total}
               onPageChange={setPage}
             />
           ) : null}
@@ -3656,11 +3627,14 @@ function InventoryView(props: {
       </div>
 
       <InventoryDetailModal
-        item={detailItem}
-        movements={detailMovements}
+        item={detailResult?.item}
+        movements={detailResult?.movements ?? []}
         state={props.state}
-        onClose={() => setDetailBarcode(null)}
-        onExport={() => exportMovements(detailBarcode ?? "", detailMovements)}
+        onClose={() => {
+          setDetailBarcode(null);
+          setDetailResult(null);
+        }}
+        onExport={() => exportMovements(detailBarcode ?? "", detailResult?.movements ?? [])}
       />
     </div>
   );

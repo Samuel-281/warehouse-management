@@ -103,6 +103,38 @@ export type StockMovement = {
   note: string;
 };
 
+export type InventorySummary = {
+  totalItems: number;
+  inStock: number;
+  withSales: number;
+  mainCount: number;
+  branchCount: number;
+  warehouseCounts: Array<{
+    warehouseId: string;
+    count: number;
+  }>;
+  salespersonCounts: Array<{
+    salespersonId: string;
+    count: number;
+  }>;
+  recentMovements: StockMovement[];
+};
+
+export type InventoryListResult = {
+  items: InventoryItem[];
+  latestMovements: StockMovement[];
+  total: number;
+  warehouseResultCount: number;
+  salesResultCount: number;
+  page: number;
+  pageSize: number;
+};
+
+export type InventoryDetailResult = {
+  item: InventoryItem;
+  movements: StockMovement[];
+};
+
 export type OperationLog = {
   id: string;
   username: string;
