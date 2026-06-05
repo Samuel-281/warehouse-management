@@ -51,6 +51,15 @@ export async function assertMasterDataAllowed(request: Request): Promise<Current
   return user;
 }
 
+export async function assertMasterDataDeleteAllowed(request: Request): Promise<CurrentUser> {
+  const user = await requireCurrentUser(request);
+  if (!hasAnyRole(user.roles.map((role) => role.code), ["SUPER_ADMIN"])) {
+    throw new ApiError("当前账号无权删除基础资料", 403);
+  }
+
+  return user;
+}
+
 function readCookie(request: Request, name: string) {
   const cookies = request.headers.get("cookie");
   if (!cookies) return null;

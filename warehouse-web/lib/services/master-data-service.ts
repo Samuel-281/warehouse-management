@@ -204,6 +204,25 @@ export async function updateGoods(id: string, input: UpdateGoodsInput) {
   return mapGoods(updated);
 }
 
+export async function deleteGoods(id: string) {
+  assertRequired(id, "货物");
+  const prisma = getPrisma();
+  const [inventoryCount, movementCount, inboundCount, outboundCount, salesReturnCount] = await Promise.all([
+    prisma.inventoryItem.count({ where: { goodsId: id } }),
+    prisma.stockMovement.count({ where: { goodsId: id } }),
+    prisma.inboundOrderItem.count({ where: { goodsId: id } }),
+    prisma.outboundOrderItem.count({ where: { goodsId: id } }),
+    prisma.salesReturnOrderItem.count({ where: { goodsId: id } })
+  ]);
+  assertNoReferences(
+    inventoryCount + movementCount + inboundCount + outboundCount + salesReturnCount,
+    "该货物已被库存、单据或流水引用，不能直接删除，请改为停用"
+  );
+
+  await prisma.goods.delete({ where: { id } });
+  return { deleted: true };
+}
+
 export async function createWarehouse(input: CreateWarehouseInput) {
   assertRequired(input.code, "仓库编码");
   assertRequired(input.name, "仓库名称");
@@ -269,6 +288,50 @@ export async function updateWarehouse(id: string, input: UpdateWarehouseInput) {
   return mapWarehouse(updated);
 }
 
+export async function deleteWarehouse(id: string) {
+  assertRequired(id, "仓库");
+  const prisma = getPrisma();
+  const [
+    inventoryCount,
+    inboundCount,
+    sourceOutboundCount,
+    targetOutboundCount,
+    salesReturnCount,
+    locationInventoryCount,
+    locationInboundCount,
+    locationOutboundCount,
+    locationSalesReturnCount
+  ] = await Promise.all([
+    prisma.inventoryItem.count({ where: { warehouseId: id } }),
+    prisma.inboundOrder.count({ where: { warehouseId: id } }),
+    prisma.outboundOrder.count({ where: { sourceWarehouseId: id } }),
+    prisma.outboundOrder.count({ where: { targetWarehouseId: id } }),
+    prisma.salesReturnOrder.count({ where: { returnWarehouseId: id } }),
+    prisma.inventoryItem.count({ where: { location: { warehouseId: id } } }),
+    prisma.inboundOrder.count({ where: { location: { warehouseId: id } } }),
+    prisma.outboundOrder.count({ where: { targetLocation: { warehouseId: id } } }),
+    prisma.salesReturnOrder.count({ where: { returnLocation: { warehouseId: id } } })
+  ]);
+  assertNoReferences(
+    inventoryCount +
+      inboundCount +
+      sourceOutboundCount +
+      targetOutboundCount +
+      salesReturnCount +
+      locationInventoryCount +
+      locationInboundCount +
+      locationOutboundCount +
+      locationSalesReturnCount,
+    "该仓库已被库存或业务单据引用，不能直接删除，请改为停用"
+  );
+
+  await prisma.$transaction(async (tx) => {
+    await tx.storageLocation.deleteMany({ where: { warehouseId: id } });
+    await tx.warehouse.delete({ where: { id } });
+  });
+  return { deleted: true };
+}
+
 export async function createSalesperson(input: CreateSalespersonInput) {
   assertRequired(input.code, "销售人员编码");
   assertRequired(input.name, "销售人员姓名");
@@ -320,6 +383,23 @@ export async function updateSalesperson(id: string, input: UpdateSalespersonInpu
   const prisma = getPrisma();
   const updated = await prisma.salesperson.update({ where: { id }, data });
   return mapSalesperson(updated);
+}
+
+export async function deleteSalesperson(id: string) {
+  assertRequired(id, "销售人员");
+  const prisma = getPrisma();
+  const [inventoryCount, outboundCount, salesReturnCount] = await Promise.all([
+    prisma.inventoryItem.count({ where: { salespersonId: id } }),
+    prisma.outboundOrder.count({ where: { salespersonId: id } }),
+    prisma.salesReturnOrderItem.count({ where: { fromSalespersonId: id } })
+  ]);
+  assertNoReferences(
+    inventoryCount + outboundCount + salesReturnCount,
+    "该销售人员已被库存或业务单据引用，不能直接删除，请改为停用"
+  );
+
+  await prisma.salesperson.delete({ where: { id } });
+  return { deleted: true };
 }
 
 export async function createTerminalStore(input: CreateTerminalStoreInput) {
@@ -375,9 +455,25 @@ export async function updateTerminalStore(id: string, input: UpdateTerminalStore
   return mapTerminalStore(updated);
 }
 
+export async function deleteTerminalStore(id: string) {
+  assertRequired(id, "终端店铺");
+  const prisma = getPrisma();
+  const inboundCount = await prisma.inboundOrder.count({ where: { terminalStoreId: id } });
+  assertNoReferences(inboundCount, "该终端店铺已被入库单引用，不能直接删除，请改为停用");
+
+  await prisma.terminalStore.delete({ where: { id } });
+  return { deleted: true };
+}
+
 function assertRequired(value: string, label: string) {
   if (!value?.trim()) {
     throw new Error(`${label}不能为空`);
+  }
+}
+
+function assertNoReferences(count: number, message: string) {
+  if (count > 0) {
+    throw new Error(message);
   }
 }
 

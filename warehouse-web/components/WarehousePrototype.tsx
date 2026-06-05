@@ -1021,6 +1021,7 @@ export default function WarehousePrototype() {
               setState={setState}
               showToast={showToast}
               masterDataSource={masterDataSource}
+              canDeleteMasterData={canMaintainSystem}
             />
           ) : null}
           {activeView === "inbound" ? (
@@ -1761,12 +1762,14 @@ function MastersView({
   state,
   setState,
   showToast,
-  masterDataSource
+  masterDataSource,
+  canDeleteMasterData
 }: {
   state: WarehouseState;
   setState: (updater: (previous: WarehouseState) => WarehouseState) => void;
   showToast: (toast: Toast) => void;
   masterDataSource: "local" | "database";
+  canDeleteMasterData: boolean;
 }) {
   const [goodsDraft, setGoodsDraft] = useState({
     code: "",
@@ -1813,6 +1816,13 @@ function MastersView({
     setState((previous) => ({
       ...previous,
       [key]: previous[key].map((item) => (item.id === record.id ? record : item))
+    }));
+  }
+
+  function removeRecord<K extends "goods" | "warehouses" | "salespeople" | "terminalStores">(key: K, id: string) {
+    setState((previous) => ({
+      ...previous,
+      [key]: previous[key].filter((item) => item.id !== id)
     }));
   }
 
@@ -2022,6 +2032,28 @@ function MastersView({
       showToast({ tone: "success", message: status === "enabled" ? "资料已启用" : "资料已停用" });
     } catch (error) {
       showToast({ tone: "error", message: apiErrorMessage(error, "状态更新失败") });
+    }
+  }
+
+  async function deleteMasterRecord<K extends "goods" | "warehouses" | "salespeople" | "terminalStores">(
+    key: K,
+    apiPath: string,
+    id: string,
+    label: string
+  ) {
+    if (!canDeleteMasterData) {
+      showToast({ tone: "error", message: "只有超级管理员可以删除基础资料" });
+      return;
+    }
+    const confirmed = window.confirm(`确定直接删除「${label}」吗？已被库存或单据引用的资料会被系统拒绝删除。`);
+    if (!confirmed) return;
+
+    try {
+      await requestApi<{ deleted: boolean }>(`${apiPath}/${id}`, undefined, "DELETE");
+      removeRecord(key, id);
+      showToast({ tone: "success", message: "基础资料已删除" });
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "删除基础资料失败") });
     }
   }
 
@@ -2331,6 +2363,11 @@ function MastersView({
               status={item.status}
               onEdit={() => setEditingGoods(item)}
               onToggle={() => toggleMasterStatus("goods", "/api/goods", item)}
+              onDelete={
+                canDeleteMasterData
+                  ? () => deleteMasterRecord("goods", "/api/goods", item.id, `${item.code} / ${item.name}`)
+                  : undefined
+              }
             />
           ])}
         />
@@ -2348,6 +2385,11 @@ function MastersView({
               status={item.status}
               onEdit={() => setEditingWarehouse(item)}
               onToggle={() => toggleMasterStatus("warehouses", "/api/warehouses", item)}
+              onDelete={
+                canDeleteMasterData
+                  ? () => deleteMasterRecord("warehouses", "/api/warehouses", item.id, `${item.code} / ${item.name}`)
+                  : undefined
+              }
             />
           ])}
         />
@@ -2366,6 +2408,12 @@ function MastersView({
               status={item.status}
               onEdit={() => setEditingSalesperson(item)}
               onToggle={() => toggleMasterStatus("salespeople", "/api/salespeople", item)}
+              onDelete={
+                canDeleteMasterData
+                  ? () =>
+                      deleteMasterRecord("salespeople", "/api/salespeople", item.id, `${item.code} / ${item.name}`)
+                  : undefined
+              }
             />
           ])}
         />
@@ -2384,6 +2432,11 @@ function MastersView({
               status={item.status}
               onEdit={() => setEditingStore(item)}
               onToggle={() => toggleMasterStatus("terminalStores", "/api/terminal-stores", item)}
+              onDelete={
+                canDeleteMasterData
+                  ? () => deleteMasterRecord("terminalStores", "/api/terminal-stores", item.id, item.name)
+                  : undefined
+              }
             />
           ])}
         />
@@ -2466,11 +2519,13 @@ function MasterTable({
 function MasterActions({
   status,
   onEdit,
-  onToggle
+  onToggle,
+  onDelete
 }: {
   status: "enabled" | "disabled";
   onEdit: () => void;
   onToggle: () => void;
+  onDelete?: () => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -2482,6 +2537,12 @@ function MasterActions({
         <Power className="h-3.5 w-3.5" />
         {status === "enabled" ? "停用" : "启用"}
       </button>
+      {onDelete ? (
+        <button className="secondary-button px-3 py-2 text-xs text-red-600 hover:border-red-200 hover:bg-red-50" onClick={onDelete}>
+          <Trash2 className="h-3.5 w-3.5" />
+          删除
+        </button>
+      ) : null}
     </div>
   );
 }
