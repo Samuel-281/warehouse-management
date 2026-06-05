@@ -311,6 +311,7 @@ export default function WarehousePrototype() {
 
     setState(masterData);
     setInboundGoodsId(masterData.goods[0]?.id ?? "");
+    setDirectOutboundGoodsId(masterData.goods[0]?.id ?? "");
     setInboundWarehouseId(firstWarehouse?.id ?? "");
     setInboundLocationId(firstLocation?.id ?? "");
     setTerminalStoreId(masterData.terminalStores[0]?.id ?? "");
@@ -452,6 +453,20 @@ export default function WarehousePrototype() {
     const firstLocation = enabledLocationsForWarehouse(returnWarehouseId, state.locations)[0];
     setReturnLocationId(firstLocation?.id ?? "");
   }, [returnWarehouseId, state.locations]);
+
+  useEffect(() => {
+    const firstEnabledGoods = state.goods.find((goods) => goods.status === "enabled");
+    if (!firstEnabledGoods) {
+      if (directOutboundGoodsId) setDirectOutboundGoodsId("");
+      return;
+    }
+    const selectedGoodsIsEnabled = state.goods.some(
+      (goods) => goods.id === directOutboundGoodsId && goods.status === "enabled"
+    );
+    if (!selectedGoodsIsEnabled) {
+      setDirectOutboundGoodsId(firstEnabledGoods.id);
+    }
+  }, [directOutboundGoodsId, state.goods]);
 
   const filteredOrders = useMemo(() => {
     if (orderKindFilter === "all") return orders;
@@ -2848,12 +2863,12 @@ function OutboundView(props: {
     !sourceWarehouse ||
     !destinationReady ||
     (isDirectOutbound && !directGoods);
-	  const outboundTitle =
-	    props.outboundType === "transfer" ? "仓库挪动" : props.outboundType === "sales" ? "销售出库" : "直接出库";
+  const outboundTitle =
+    props.outboundType === "transfer" ? "仓库挪动" : props.outboundType === "sales" ? "销售出库" : "直接出库";
   const destinationLabel = isTransferDestination ? "目标仓库" : "销售人员";
-	  const barcodeValidationText = isDirectOutbound
-	    ? `${validBarcodeCount} 件新条码待提交校验`
-	    : `${validBarcodeCount} 件待提交校验`;
+  const barcodeValidationText = isDirectOutbound
+    ? `${validBarcodeCount} 件新条码待提交校验`
+    : `${validBarcodeCount} 件待提交校验`;
   const outboundChecks: OperationCheck[] = [
     {
       label: "出库仓库",
