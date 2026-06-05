@@ -1239,9 +1239,17 @@ function ToastBox({ toast }: { toast: Toast }) {
         ? "border-red-200 bg-red-50 text-red-800"
         : "border-sky-200 bg-sky-50 text-sky-800";
   return (
-    <div className={`mb-4 flex items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-sm ${toneClass}`}>
-      {toast.tone === "success" ? <Check className="h-4 w-4" /> : <Info className="h-4 w-4" />}
-      {toast.message}
+    <div className="fixed inset-x-0 bottom-5 z-[60] flex justify-center px-4 pointer-events-none">
+      <div className={`pointer-events-auto flex max-w-lg items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-lg ${toneClass}`}>
+        {toast.tone === "success" ? (
+          <Check className="h-4 w-4 shrink-0" />
+        ) : toast.tone === "error" ? (
+          <AlertCircle className="h-4 w-4 shrink-0" />
+        ) : (
+          <Info className="h-4 w-4 shrink-0" />
+        )}
+        <span>{toast.message}</span>
+      </div>
     </div>
   );
 }
@@ -1249,7 +1257,7 @@ function ToastBox({ toast }: { toast: Toast }) {
 function ResultDialogBox({ dialog, onClose }: { dialog: ResultDialog; onClose: () => void }) {
   const isSuccess = dialog.tone === "success";
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/20 px-4 pt-20">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/20 p-4">
       <section
         className={`w-full max-w-md rounded-md border bg-white p-5 shadow-2xl ${
           isSuccess ? "border-emerald-200" : "border-red-200"
@@ -3774,11 +3782,11 @@ function InventoryView(props: {
   state: WarehouseState;
   filters: InventoryFilters;
   setFilters: (value: InventoryFilters) => void;
-	  selectedBarcode: string;
-	  setSelectedBarcode: (barcode: string) => void;
-	  showToast: (toast: Toast) => void;
+  selectedBarcode: string;
+  setSelectedBarcode: (barcode: string) => void;
+  showToast: (toast: Toast) => void;
   canDeleteInventory: boolean;
-	}) {
+}) {
   const { filters, showToast } = props;
   const [detailBarcode, setDetailBarcode] = useState<string | null>(null);
   const [detailResult, setDetailResult] = useState<InventoryDetailResult | null>(null);
@@ -4116,16 +4124,16 @@ function InventoryView(props: {
         item={detailResult?.item}
         movements={detailResult?.movements ?? []}
         state={props.state}
-	        onClose={() => {
-	          setDetailBarcode(null);
-	          setDetailResult(null);
-	        }}
-	        onExport={() => exportMovements(detailBarcode ?? "", detailResult?.movements ?? [])}
+        onClose={() => {
+          setDetailBarcode(null);
+          setDetailResult(null);
+        }}
+        onExport={() => exportMovements(detailBarcode ?? "", detailResult?.movements ?? [])}
         canDelete={props.canDeleteInventory}
         onDelete={() => {
           if (detailResult?.item) void deleteInventoryBarcode(detailResult.item.barcode);
         }}
-	      />
+      />
     </div>
   );
 }
