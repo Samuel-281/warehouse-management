@@ -1,6 +1,11 @@
 import { getPrisma } from "@/lib/db";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
-import type { OrderSummary } from "@/lib/types";
+import type { OrderKind, OrderSummary } from "@/lib/types";
+
+export type DeleteOrderInput = {
+  id: string;
+  kind: OrderKind;
+};
 
 export async function listOrderSummaries(): Promise<OrderSummary[]> {
   const prisma = getPrisma();
@@ -94,6 +99,41 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
       };
     })
   ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+export async function deleteOrders(input: DeleteOrderInput[]) {
+  const orders = input.filter((order) => order.id && order.kind);
+  if (orders.length === 0) {
+    throw new Error("请选择需要删除的单据");
+  }
+
+  const inboundIds = orders.filter((order) => order.kind === "inbound").map((order) => order.id);
+  const outboundIds = orders.filter((order) => order.kind === "outbound").map((order) => order.id);
+  const salesReturnIds = orders.filter((order) => order.kind === "sales_return").map((order) => order.id);
+  const prisma = getPrisma();
+
+  return prisma.$transaction(async (tx) => {
+    const [inboundCount, outboundCount, salesReturnCount] = await Promise.all([
+      inboundIds.length > 0 ? tx.inboundOrder.count({ where: { id: { in: inboundIds } } }) : 0,
+      outboundIds.length > 0 ? tx.outboundOrder.count({ where: { id: { in: outboundIds } } }) : 0,
+      salesReturnIds.length > 0 ? tx.salesReturnOrder.count({ where: { id: { in: salesReturnIds } } }) : 0
+    ]);
+
+    if (inboundIds.length > 0) {
+      await tx.inboundOrderItem.deleteMany({ where: { orderId: { in: inboundIds } } });
+      await tx.inboundOrder.deleteMany({ where: { id: { in: inboundIds } } });
+    }
+    if (outboundIds.length > 0) {
+      await tx.outboundOrderItem.deleteMany({ where: { orderId: { in: outboundIds } } });
+      await tx.outboundOrder.deleteMany({ where: { id: { in: outboundIds } } });
+    }
+    if (salesReturnIds.length > 0) {
+      await tx.salesReturnOrderItem.deleteMany({ where: { orderId: { in: salesReturnIds } } });
+      await tx.salesReturnOrder.deleteMany({ where: { id: { in: salesReturnIds } } });
+    }
+
+    return { deleted: inboundCount + outboundCount + salesReturnCount };
+  });
 }
 
 function summarizeGoods(names: string[]) {

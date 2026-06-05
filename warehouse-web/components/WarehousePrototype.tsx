@@ -1118,6 +1118,7 @@ export default function WarehousePrototype() {
               setBarcodeFilter={setOrderBarcodeFilter}
               refreshOrders={loadOrders}
               showToast={showToast}
+              canDeleteOrders={canMaintainSystem}
             />
           ) : null}
           {activeView === "inventory" ? (
@@ -1128,6 +1129,7 @@ export default function WarehousePrototype() {
               selectedBarcode={selectedBarcode}
               setSelectedBarcode={setSelectedBarcode}
               showToast={showToast}
+              canDeleteInventory={canMaintainSystem}
             />
           ) : null}
           {activeView === "system" && canMaintainSystem ? (
@@ -3218,7 +3220,8 @@ function OrdersView({
   barcodeFilter,
   setBarcodeFilter,
   refreshOrders,
-  showToast
+  showToast,
+  canDeleteOrders
 }: {
   orders: OrderSummary[];
   loading: boolean;
@@ -3228,6 +3231,7 @@ function OrdersView({
   setBarcodeFilter: (value: string) => void;
   refreshOrders: () => void;
   showToast: (toast: Toast) => void;
+  canDeleteOrders: boolean;
 }) {
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [pageSize, setPageSize] = useState(20);
@@ -3302,6 +3306,34 @@ function OrdersView({
     showToast({ tone: "success", message: `已导出 ${selectedOrders.length} 张单据` });
   }
 
+  async function deleteSelectedOrders() {
+    if (!canDeleteOrders || selectedOrders.length === 0) return;
+    const confirmed = window.confirm(
+      `确定删除已选 ${selectedOrders.length} 张单据吗？此操作只删除单据记录，不会回滚库存状态。`
+    );
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch("/api/orders", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          orders: selectedOrders.map((order) => ({ id: order.id, kind: order.kind }))
+        })
+      });
+      const payload = (await response.json()) as ApiResponse<{ deleted: number }>;
+      if (!response.ok || !("data" in payload)) {
+        throw new ClientApiError("error" in payload ? payload.error : "删除单据失败", response.status);
+      }
+      setSelectedOrderIds([]);
+      await refreshOrders();
+      showToast({ tone: "success", message: `已删除 ${payload.data.deleted} 张单据` });
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "删除单据失败") });
+    }
+  }
+
   return (
     <div className="space-y-4">
       <section className="panel p-4">
@@ -3312,7 +3344,7 @@ function OrdersView({
               当前 {barcodeFilteredOrders.length} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-[180px_220px_120px_auto_auto_auto] sm:items-end">
+          <div className="grid gap-2 sm:grid-cols-[180px_220px_120px_auto_auto_auto_auto] sm:items-end">
             <div>
               <FieldSelect
                 label="业务类型"
@@ -3352,6 +3384,12 @@ function OrdersView({
               <Download className="h-4 w-4" />
               导出已选
             </button>
+            {canDeleteOrders ? (
+              <button className="secondary-button text-red-600 hover:border-red-200 hover:bg-red-50" onClick={deleteSelectedOrders} disabled={selectedOrders.length === 0}>
+                <Trash2 className="h-4 w-4" />
+                删除已选
+              </button>
+            ) : null}
             <button
               className="secondary-button"
               onClick={() => setSelectedOrderIds([])}
@@ -3736,10 +3774,11 @@ function InventoryView(props: {
   state: WarehouseState;
   filters: InventoryFilters;
   setFilters: (value: InventoryFilters) => void;
-  selectedBarcode: string;
-  setSelectedBarcode: (barcode: string) => void;
-  showToast: (toast: Toast) => void;
-}) {
+	  selectedBarcode: string;
+	  setSelectedBarcode: (barcode: string) => void;
+	  showToast: (toast: Toast) => void;
+  canDeleteInventory: boolean;
+	}) {
   const { filters, showToast } = props;
   const [detailBarcode, setDetailBarcode] = useState<string | null>(null);
   const [detailResult, setDetailResult] = useState<InventoryDetailResult | null>(null);
@@ -3846,8 +3885,31 @@ function InventoryView(props: {
     downloadCsv(`${barcode}-流水.csv`, [header, ...rows]);
   }
 
-  function clearInventoryFilters() {
-    props.setFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+	  function clearInventoryFilters() {
+	    props.setFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+	  }
+
+  async function deleteInventoryBarcode(barcode: string) {
+    if (!props.canDeleteInventory) return;
+    const confirmed = window.confirm(`确定删除条码「${barcode}」吗？该条码的库存记录、流转记录和相关单据明细会一并删除。`);
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`/api/inventory/${encodeURIComponent(barcode)}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const payload = (await response.json()) as ApiResponse<{ deleted: boolean }>;
+      if (!response.ok || !("data" in payload)) {
+        throw new ClientApiError("error" in payload ? payload.error : "删除库存条码失败", response.status);
+      }
+      setDetailBarcode(null);
+      setDetailResult(null);
+      await loadInventoryPage();
+      showToast({ tone: "success", message: `条码 ${barcode} 已删除` });
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "删除库存条码失败") });
+    }
   }
 
   const warehouseResultCount = inventoryResult.warehouseResultCount;
@@ -4054,12 +4116,16 @@ function InventoryView(props: {
         item={detailResult?.item}
         movements={detailResult?.movements ?? []}
         state={props.state}
-        onClose={() => {
-          setDetailBarcode(null);
-          setDetailResult(null);
+	        onClose={() => {
+	          setDetailBarcode(null);
+	          setDetailResult(null);
+	        }}
+	        onExport={() => exportMovements(detailBarcode ?? "", detailResult?.movements ?? [])}
+        canDelete={props.canDeleteInventory}
+        onDelete={() => {
+          if (detailResult?.item) void deleteInventoryBarcode(detailResult.item.barcode);
         }}
-        onExport={() => exportMovements(detailBarcode ?? "", detailResult?.movements ?? [])}
-      />
+	      />
     </div>
   );
 }
@@ -4069,13 +4135,17 @@ function InventoryDetailModal({
   movements,
   state,
   onClose,
-  onExport
+  onExport,
+  canDelete,
+  onDelete
 }: {
   item?: InventoryItem;
   movements: StockMovement[];
   state: WarehouseState;
   onClose: () => void;
   onExport: () => void;
+  canDelete: boolean;
+  onDelete: () => void;
 }) {
   const goods = item ? state.goods.find((entry) => entry.id === item.goodsId) : undefined;
 
@@ -4100,11 +4170,17 @@ function InventoryDetailModal({
               <p className="text-xs font-semibold text-muted">条码详情</p>
               <p className="mt-1 break-all font-mono text-lg font-semibold text-work">{item.barcode}</p>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
-              <button className="icon-button" onClick={onClose} aria-label="关闭条码详情">
-                <X className="h-4 w-4" />
-              </button>
+	            <div className="flex shrink-0 items-center gap-2">
+	              <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
+              {canDelete ? (
+                <button className="secondary-button h-9 px-3 text-red-600 hover:border-red-200 hover:bg-red-50" onClick={onDelete}>
+                  <Trash2 className="h-4 w-4" />
+                  删除
+                </button>
+              ) : null}
+	              <button className="icon-button" onClick={onClose} aria-label="关闭条码详情">
+	                <X className="h-4 w-4" />
+	              </button>
             </div>
           </div>
         </div>

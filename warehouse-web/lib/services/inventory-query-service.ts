@@ -121,6 +121,44 @@ export async function getInventoryDetail(barcode: string): Promise<InventoryDeta
   };
 }
 
+export async function deleteInventoryItemByBarcode(barcode: string) {
+  const normalizedBarcode = barcode.trim();
+  if (!normalizedBarcode) throw new Error("请选择需要删除的条码");
+
+  const prisma = getPrisma();
+  return prisma.$transaction(async (tx) => {
+    const item = await tx.inventoryItem.findUnique({ where: { barcode: normalizedBarcode } });
+    if (!item) throw new Error(`条码 ${normalizedBarcode} 不存在`);
+
+    const [inboundItems, outboundItems, salesReturnItems] = await Promise.all([
+      tx.inboundOrderItem.findMany({ where: { inventoryItemId: item.id }, select: { orderId: true } }),
+      tx.outboundOrderItem.findMany({ where: { inventoryItemId: item.id }, select: { orderId: true } }),
+      tx.salesReturnOrderItem.findMany({ where: { inventoryItemId: item.id }, select: { orderId: true } })
+    ]);
+    const inboundOrderIds = inboundItems.map((entry) => entry.orderId);
+    const outboundOrderIds = outboundItems.map((entry) => entry.orderId);
+    const salesReturnOrderIds = salesReturnItems.map((entry) => entry.orderId);
+
+    await tx.inboundOrderItem.deleteMany({ where: { inventoryItemId: item.id } });
+    await tx.outboundOrderItem.deleteMany({ where: { inventoryItemId: item.id } });
+    await tx.salesReturnOrderItem.deleteMany({ where: { inventoryItemId: item.id } });
+    await tx.stockMovement.deleteMany({ where: { itemId: item.id } });
+    await tx.inventoryItem.delete({ where: { id: item.id } });
+
+    if (inboundOrderIds.length > 0) {
+      await tx.inboundOrder.deleteMany({ where: { id: { in: inboundOrderIds }, items: { none: {} } } });
+    }
+    if (outboundOrderIds.length > 0) {
+      await tx.outboundOrder.deleteMany({ where: { id: { in: outboundOrderIds }, items: { none: {} } } });
+    }
+    if (salesReturnOrderIds.length > 0) {
+      await tx.salesReturnOrder.deleteMany({ where: { id: { in: salesReturnOrderIds }, items: { none: {} } } });
+    }
+
+    return { deleted: true };
+  });
+}
+
 export async function getInventorySummary(): Promise<InventorySummary> {
   const prisma = getPrisma();
   const [totalItems, inStock, withSales, warehouseGroups, salespersonGroups, recentMovements] =
