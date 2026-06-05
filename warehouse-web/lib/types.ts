@@ -3,7 +3,7 @@ export type WarehouseType = "warehouse";
 export type OwnerType = "warehouse" | "salesperson";
 export type ItemStatus = "in_stock" | "with_salesperson";
 export type InboundSource = "factory" | "terminal_return";
-export type OutboundType = "transfer" | "sales";
+export type OutboundType = "transfer" | "sales" | "direct";
 export type MovementType =
   | "factory_inbound"
   | "terminal_return_inbound"

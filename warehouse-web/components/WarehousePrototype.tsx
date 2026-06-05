@@ -62,6 +62,8 @@ import {
 } from "@/lib/warehouse-utils";
 
 type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "orders" | "inventory" | "system";
+type DirectOutboundDestination = "transfer" | "sales";
+type InboundBranch = InboundSource | "sales_return";
 
 type MasterDataPayload = WarehouseState;
 type InventoryOwnerScope = "all" | "warehouse" | "salesperson";
@@ -173,7 +175,6 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
   { key: "masters", label: "基础资料", icon: Building2 },
   { key: "inbound", label: "入库", icon: Truck },
   { key: "outbound", label: "出库", icon: ArrowLeftRight },
-  { key: "return", label: "销售退回", icon: Undo2 },
   { key: "orders", label: "单据查询", icon: ClipboardList },
   { key: "inventory", label: "库存查询", icon: Search },
   { key: "system", label: "系统维护", icon: ShieldCheck }
@@ -218,6 +219,7 @@ export default function WarehousePrototype() {
   const [dashboardSummary, setDashboardSummary] = useState<InventorySummary>(emptyInventorySummary);
 
   const [inboundSource, setInboundSource] = useState<InboundSource>("factory");
+  const [inboundBranch, setInboundBranch] = useState<InboundBranch>("factory");
   const [inboundWarehouseId, setInboundWarehouseId] = useState("wh-main");
   const [inboundLocationId, setInboundLocationId] = useState("loc-main-a1");
   const [inboundGoodsId, setInboundGoodsId] = useState("goods-hj-001");
@@ -233,6 +235,8 @@ export default function WarehousePrototype() {
   const [targetWarehouseId, setTargetWarehouseId] = useState("wh-county-a");
   const [targetLocationId, setTargetLocationId] = useState("loc-county-a1");
   const [salespersonId, setSalespersonId] = useState("sp-001");
+  const [directOutboundDestination, setDirectOutboundDestination] = useState<DirectOutboundDestination>("sales");
+  const [directOutboundGoodsId, setDirectOutboundGoodsId] = useState("goods-hj-001");
   const [outboundBarcodeInput, setOutboundBarcodeInput] = useState("");
   const [outboundBarcodes, setOutboundBarcodes] = useState<string[]>([]);
   const [outboundBarcodeReviews, setOutboundBarcodeReviews] = useState<BarcodeReviewMap>({});
@@ -265,7 +269,7 @@ export default function WarehousePrototype() {
       navItems.filter((item) => {
         if (item.key === "masters") return canManageMasterData;
         if (item.key === "system") return canMaintainSystem;
-        if (item.key === "inbound" || item.key === "outbound" || item.key === "return") {
+        if (item.key === "inbound" || item.key === "outbound") {
           return canOperateWarehouse;
         }
         return true;
@@ -436,12 +440,13 @@ export default function WarehousePrototype() {
   }, [targetWarehouseId, state.locations]);
 
   useEffect(() => {
-    if (outboundType !== "transfer" || targetWarehouseId !== sourceWarehouseId) return;
+    if (outboundType !== "transfer" && !(outboundType === "direct" && directOutboundDestination === "transfer")) return;
+    if (targetWarehouseId !== sourceWarehouseId) return;
     const nextTarget = state.warehouses.find(
       (warehouse) => warehouse.status === "enabled" && warehouse.id !== sourceWarehouseId
     );
     setTargetWarehouseId(nextTarget?.id ?? "");
-  }, [outboundType, sourceWarehouseId, state.warehouses, targetWarehouseId]);
+  }, [directOutboundDestination, outboundType, sourceWarehouseId, state.warehouses, targetWarehouseId]);
 
   useEffect(() => {
     const firstLocation = enabledLocationsForWarehouse(returnWarehouseId, state.locations)[0];
@@ -572,6 +577,20 @@ export default function WarehousePrototype() {
       setOutboundBarcodeReviews({});
       return;
     }
+    if (outboundType === "direct") {
+      const timer = window.setTimeout(() => {
+        void refreshBarcodeReviews(
+          {
+            mode: "factory_inbound",
+            barcodes,
+            goodsId: directOutboundGoodsId
+          },
+          setOutboundBarcodeReviews
+        );
+      }, 250);
+
+      return () => window.clearTimeout(timer);
+    }
 
     const timer = window.setTimeout(() => {
       void refreshBarcodeReviews(
@@ -585,7 +604,7 @@ export default function WarehousePrototype() {
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [outboundBarcodes, sourceWarehouseId]);
+  }, [directOutboundGoodsId, outboundBarcodes, outboundType, sourceWarehouseId]);
 
   useEffect(() => {
     const barcodes = uniqueBarcodes(returnBarcodes);
@@ -710,6 +729,27 @@ export default function WarehousePrototype() {
       showResultDialog({ tone: "error", title: "出库未提交", message: "请选择有效的出库仓库" });
       return;
     }
+    if (outboundType === "direct") {
+      const directGoods = state.goods.find((goods) => goods.id === directOutboundGoodsId);
+      if (!directGoods) {
+        showResultDialog({ tone: "error", title: "直接出库未提交", message: "请选择需要直接出库的货物" });
+        return;
+      }
+      if (directOutboundDestination === "transfer") {
+        if (!targetWarehouse) {
+          showResultDialog({ tone: "error", title: "直接出库未提交", message: "请选择有效的目标仓库" });
+          return;
+        }
+        if (targetWarehouse.id === sourceWarehouse.id) {
+          showResultDialog({ tone: "error", title: "直接出库未提交", message: "目标仓库不能与出库仓库相同" });
+          return;
+        }
+      }
+      if (directOutboundDestination === "sales" && !salesperson) {
+        showResultDialog({ tone: "error", title: "直接出库未提交", message: "请选择销售人员" });
+        return;
+      }
+    }
     if (outboundType === "transfer") {
       if (!targetWarehouse) {
         showResultDialog({ tone: "error", title: "出库未提交", message: "请选择有效的目标仓库" });
@@ -727,20 +767,36 @@ export default function WarehousePrototype() {
 
     try {
       await validateBarcodeList(
-        {
-          mode: "warehouse_outbound",
-          barcodes,
-          warehouseId: sourceWarehouseId
-        },
+        outboundType === "direct"
+          ? {
+              mode: "factory_inbound",
+              barcodes,
+              goodsId: directOutboundGoodsId
+            }
+          : {
+              mode: "warehouse_outbound",
+              barcodes,
+              warehouseId: sourceWarehouseId
+            },
         "请先扫描或录入条码",
         setOutboundBarcodeReviews
       );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/outbound", {
         type: outboundType,
         sourceWarehouseId,
-        targetWarehouseId: outboundType === "transfer" ? targetWarehouseId : undefined,
-        targetLocationId: outboundType === "transfer" ? targetLocationId : undefined,
-        salespersonId: outboundType === "sales" ? salespersonId : undefined,
+        goodsId: outboundType === "direct" ? directOutboundGoodsId : undefined,
+        targetWarehouseId:
+          outboundType === "transfer" || (outboundType === "direct" && directOutboundDestination === "transfer")
+            ? targetWarehouseId
+            : undefined,
+        targetLocationId:
+          outboundType === "transfer" || (outboundType === "direct" && directOutboundDestination === "transfer")
+            ? targetLocationId
+            : undefined,
+        salespersonId:
+          outboundType === "sales" || (outboundType === "direct" && directOutboundDestination === "sales")
+            ? salespersonId
+            : undefined,
         barcodes,
         operatorName: currentUser?.displayName ?? operator
       });
@@ -755,7 +811,7 @@ export default function WarehousePrototype() {
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
       showResultDialog({
         tone: "success",
-        title: outboundType === "transfer" ? "挪仓成功" : "销售出库成功",
+        title: outboundType === "transfer" ? "挪仓成功" : outboundType === "sales" ? "销售出库成功" : "直接出库成功",
         message: `已处理 ${result.items.length} 件货物，并写入库存流水`
       });
     } catch (error) {
@@ -955,8 +1011,11 @@ export default function WarehousePrototype() {
           {activeView === "inbound" ? (
             <InboundView
               state={state}
-              inboundSource={inboundSource}
-              setInboundSource={setInboundSource}
+              inboundBranch={inboundBranch}
+              setInboundBranch={(value) => {
+                setInboundBranch(value);
+                if (value !== "sales_return") setInboundSource(value);
+              }}
               inboundWarehouseId={inboundWarehouseId}
               setInboundWarehouseId={setInboundWarehouseId}
               inboundGoodsId={inboundGoodsId}
@@ -987,6 +1046,20 @@ export default function WarehousePrototype() {
                 })
               }
               submitInbound={submitInbound}
+              returnWarehouseId={returnWarehouseId}
+              setReturnWarehouseId={setReturnWarehouseId}
+              returnBarcodeInput={returnBarcodeInput}
+              setReturnBarcodeInput={setReturnBarcodeInput}
+              returnBarcodes={returnBarcodes}
+              setReturnBarcodes={(nextBarcodes) => {
+                setReturnBarcodes(nextBarcodes);
+                if (nextBarcodes.length === 0) setReturnBarcodeReviews({});
+              }}
+              returnBarcodeReviews={returnBarcodeReviews}
+              addReturnBarcode={(input) =>
+                addBarcode(input, returnBarcodes, setReturnBarcodeInput, setReturnBarcodes)
+              }
+              submitSalesReturn={submitSalesReturn}
             />
           ) : null}
           {activeView === "outbound" ? (
@@ -1001,6 +1074,10 @@ export default function WarehousePrototype() {
               setTargetWarehouseId={setTargetWarehouseId}
               salespersonId={salespersonId}
               setSalespersonId={setSalespersonId}
+              directOutboundDestination={directOutboundDestination}
+              setDirectOutboundDestination={setDirectOutboundDestination}
+              directOutboundGoodsId={directOutboundGoodsId}
+              setDirectOutboundGoodsId={setDirectOutboundGoodsId}
               outboundBarcodeInput={outboundBarcodeInput}
               setOutboundBarcodeInput={setOutboundBarcodeInput}
               outboundBarcodes={outboundBarcodes}
@@ -1013,25 +1090,6 @@ export default function WarehousePrototype() {
                 addBarcode(input, outboundBarcodes, setOutboundBarcodeInput, setOutboundBarcodes)
               }
               submitOutbound={submitOutbound}
-            />
-          ) : null}
-          {activeView === "return" ? (
-            <SalesReturnView
-              state={state}
-              returnWarehouseId={returnWarehouseId}
-              setReturnWarehouseId={setReturnWarehouseId}
-              returnBarcodeInput={returnBarcodeInput}
-              setReturnBarcodeInput={setReturnBarcodeInput}
-              returnBarcodes={returnBarcodes}
-              setReturnBarcodes={(nextBarcodes) => {
-                setReturnBarcodes(nextBarcodes);
-                if (nextBarcodes.length === 0) setReturnBarcodeReviews({});
-              }}
-              returnBarcodeReviews={returnBarcodeReviews}
-              addBarcode={(input) =>
-                addBarcode(input, returnBarcodes, setReturnBarcodeInput, setReturnBarcodes)
-              }
-              submitSalesReturn={submitSalesReturn}
             />
           ) : null}
           {activeView === "orders" ? (
@@ -1318,7 +1376,7 @@ function DashboardView({
                 <DashboardAction
                   icon={Truck}
                   title="入库管理"
-                  description="厂家到货、终端店铺退换货"
+                  description="厂家到货、终端店铺退换货、销售退回"
                   onClick={() => setActiveView("inbound")}
                 />
                 <DashboardAction
@@ -1326,12 +1384,6 @@ function DashboardView({
                   title="出库管理"
                   description="仓库挪动、销售人员分配"
                   onClick={() => setActiveView("outbound")}
-                />
-                <DashboardAction
-                  icon={Undo2}
-                  title="销售退回"
-                  description="未售完货物回流仓库"
-                  onClick={() => setActiveView("return")}
                 />
               </>
             ) : null}
@@ -2484,8 +2536,8 @@ function MasterEditDialog({
 
 function InboundView(props: {
   state: WarehouseState;
-  inboundSource: InboundSource;
-  setInboundSource: (value: InboundSource) => void;
+  inboundBranch: InboundBranch;
+  setInboundBranch: (value: InboundBranch) => void;
   inboundWarehouseId: string;
   setInboundWarehouseId: (value: string) => void;
   inboundGoodsId: string;
@@ -2503,7 +2555,45 @@ function InboundView(props: {
   setTerminalStoreId: (value: string) => void;
   addBarcode: (input: string) => void;
   submitInbound: () => void;
+  returnWarehouseId: string;
+  setReturnWarehouseId: (value: string) => void;
+  returnBarcodeInput: string;
+  setReturnBarcodeInput: (value: string) => void;
+  returnBarcodes: string[];
+  setReturnBarcodes: (value: string[]) => void;
+  returnBarcodeReviews: BarcodeReviewMap;
+  addReturnBarcode: (input: string) => void;
+  submitSalesReturn: () => void;
 }) {
+  const branchOptions = [
+    { value: "factory", label: "厂家到货" },
+    { value: "terminal_return", label: "终端店铺退换货" },
+    { value: "sales_return", label: "销售退回" }
+  ];
+  if (props.inboundBranch === "sales_return") {
+    return (
+      <SalesReturnView
+        state={props.state}
+        returnWarehouseId={props.returnWarehouseId}
+        setReturnWarehouseId={props.setReturnWarehouseId}
+        returnBarcodeInput={props.returnBarcodeInput}
+        setReturnBarcodeInput={props.setReturnBarcodeInput}
+        returnBarcodes={props.returnBarcodes}
+        setReturnBarcodes={props.setReturnBarcodes}
+        returnBarcodeReviews={props.returnBarcodeReviews}
+        addBarcode={props.addReturnBarcode}
+        submitSalesReturn={props.submitSalesReturn}
+        branchSelector={
+          <SegmentedControl
+            options={branchOptions}
+            value={props.inboundBranch}
+            onChange={(value) => props.setInboundBranch(value as InboundBranch)}
+          />
+        }
+      />
+    );
+  }
+
   const selectedGoods = props.state.goods.find((goods) => goods.id === props.inboundGoodsId);
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
   const enabledGoods = props.state.goods.filter((goods) => goods.status === "enabled");
@@ -2521,7 +2611,7 @@ function InboundView(props: {
           ? "条码超量"
           : `还差 ${validPlannedQty - barcodeCount} 件`;
   const shelfLifePreview =
-    props.inboundSource === "terminal_return" &&
+    props.inboundBranch === "terminal_return" &&
     selectedGoods?.category === "health_wine" &&
     props.productionDate
       ? addYears(props.productionDate, 3)
@@ -2530,7 +2620,7 @@ function InboundView(props: {
     const review = props.inboundBarcodeReviews[barcode];
     if (review) return review;
 
-    if (props.inboundSource === "factory") {
+    if (props.inboundBranch === "factory") {
       return { tone: "neutral", label: "校验中", detail: "正在确认该条码是否已存在" };
     }
 
@@ -2542,7 +2632,7 @@ function InboundView(props: {
     invalidBarcodeCount > 0 ||
     validPlannedQty === 0 ||
     barcodeCount !== validPlannedQty ||
-    (props.inboundSource === "terminal_return" && !props.productionDate);
+    (props.inboundBranch === "terminal_return" && !props.productionDate);
   const inboundChecks: OperationCheck[] = [
     {
       label: "业务参数",
@@ -2559,7 +2649,7 @@ function InboundView(props: {
       passed: barcodeCount > 0 && invalidBarcodeCount === 0,
       detail: invalidBarcodeCount > 0 ? `${invalidBarcodeCount} 件需处理` : `${barcodeCount} 件可入库`
     },
-    ...(props.inboundSource === "terminal_return"
+    ...(props.inboundBranch === "terminal_return"
       ? [
           {
             label: "生产日期",
@@ -2575,7 +2665,7 @@ function InboundView(props: {
       <OperationPageHeader
         icon={Truck}
         eyebrow="入库管理"
-        title={props.inboundSource === "factory" ? "厂家到货入库" : "终端店铺退换货入库"}
+        title={props.inboundBranch === "factory" ? "厂家到货入库" : "终端店铺退换货入库"}
         summary={[
           { label: "入库仓库", value: selectedWarehouse?.name ?? "未选择" },
           { label: "货物", value: selectedGoods?.name ?? "未选择" },
@@ -2587,12 +2677,9 @@ function InboundView(props: {
         <OperationPanel step="1" icon={ClipboardList} title="入库参数">
           <div>
             <SegmentedControl
-              options={[
-                { value: "factory", label: "厂家到货" },
-                { value: "terminal_return", label: "终端店铺退换货" }
-              ]}
-              value={props.inboundSource}
-              onChange={(value) => props.setInboundSource(value as InboundSource)}
+              options={branchOptions}
+              value={props.inboundBranch}
+              onChange={(value) => props.setInboundBranch(value as InboundBranch)}
             />
           </div>
 
@@ -2634,7 +2721,7 @@ function InboundView(props: {
               />
             </div>
             <ReadOnlyField label="数量状态" value={quantityStatus} />
-            {props.inboundSource === "terminal_return" ? (
+            {props.inboundBranch === "terminal_return" ? (
               <>
                 <FieldSelect
                   label="终端店铺"
@@ -2659,10 +2746,10 @@ function InboundView(props: {
           </div>
 
           <BusinessRuleStrip
-            tone={props.inboundSource === "terminal_return" ? "warning" : "neutral"}
-            title={props.inboundSource === "terminal_return" ? "退换货入库规则" : "厂家到货规则"}
+            tone={props.inboundBranch === "terminal_return" ? "warning" : "neutral"}
+            title={props.inboundBranch === "terminal_return" ? "退换货入库规则" : "厂家到货规则"}
             detail={
-              props.inboundSource === "terminal_return"
+              props.inboundBranch === "terminal_return"
                 ? `货物大类：${selectedGoods ? formatCategory(selectedGoods.category) : "未选择"}；默认保质期：${shelfLifePreview}`
                 : "生产日期与默认保质期不强制登记。"
             }
@@ -2706,6 +2793,10 @@ function OutboundView(props: {
   setTargetWarehouseId: (value: string) => void;
   salespersonId: string;
   setSalespersonId: (value: string) => void;
+  directOutboundDestination: DirectOutboundDestination;
+  setDirectOutboundDestination: (value: DirectOutboundDestination) => void;
+  directOutboundGoodsId: string;
+  setDirectOutboundGoodsId: (value: string) => void;
   outboundBarcodeInput: string;
   setOutboundBarcodeInput: (value: string) => void;
   outboundBarcodes: string[];
@@ -2720,14 +2811,26 @@ function OutboundView(props: {
   const sourceWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.sourceWarehouseId);
   const targetWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.targetWarehouseId);
   const salesperson = enabledSalespeople.find((person) => person.id === props.salespersonId);
+  const enabledGoods = props.state.goods.filter((goods) => goods.status === "enabled");
+  const directGoods = enabledGoods.find((goods) => goods.id === props.directOutboundGoodsId);
+  const directGoodsLabel = directGoods ? `${directGoods.code} / ${directGoods.name}` : "未选择";
+  const isDirectOutbound = props.outboundType === "direct";
+  const isTransferDestination = props.outboundType === "transfer" || props.directOutboundDestination === "transfer";
   const sourceWarehouseAvailableCount =
     props.inventorySummary.warehouseCounts.find((row) => row.warehouseId === props.sourceWarehouseId)?.count ?? 0;
   const validBarcodeCount = props.outboundBarcodes.length;
-  const targetLabel =
-    props.outboundType === "transfer" ? targetWarehouse?.name ?? "未选择" : salesperson?.name ?? "未选择";
+  const targetLabel = isTransferDestination ? targetWarehouse?.name ?? "未选择" : salesperson?.name ?? "未选择";
   const reviewOutboundBarcode = (barcode: string): BarcodeReview => {
     const review = props.outboundBarcodeReviews[barcode];
     if (review) return review;
+
+    if (isDirectOutbound) {
+      return {
+        tone: "neutral",
+        label: "校验中",
+        detail: "正在确认该新条码是否已存在"
+      };
+    }
 
     return {
       tone: "neutral",
@@ -2736,24 +2839,39 @@ function OutboundView(props: {
     };
   };
   const invalidBarcodeCount = countInvalidReviews(props.outboundBarcodes, reviewOutboundBarcode);
+  const destinationReady = isTransferDestination
+    ? Boolean(targetWarehouse && sourceWarehouse && targetWarehouse.id !== sourceWarehouse.id)
+    : Boolean(salesperson);
   const submitDisabled =
     props.outboundBarcodes.length === 0 ||
     invalidBarcodeCount > 0 ||
     !sourceWarehouse ||
-    (props.outboundType === "transfer" && (!targetWarehouse || targetWarehouse.id === sourceWarehouse.id)) ||
-    (props.outboundType === "sales" && !salesperson);
+    !destinationReady ||
+    (isDirectOutbound && !directGoods);
+	  const outboundTitle =
+	    props.outboundType === "transfer" ? "仓库挪动" : props.outboundType === "sales" ? "销售出库" : "直接出库";
+  const destinationLabel = isTransferDestination ? "目标仓库" : "销售人员";
+	  const barcodeValidationText = isDirectOutbound
+	    ? `${validBarcodeCount} 件新条码待提交校验`
+	    : `${validBarcodeCount} 件待提交校验`;
   const outboundChecks: OperationCheck[] = [
     {
       label: "出库仓库",
       passed: Boolean(sourceWarehouse),
       detail: sourceWarehouse?.name ?? "未选择"
     },
+    ...(isDirectOutbound
+      ? [
+          {
+            label: "货物",
+            passed: Boolean(directGoods),
+            detail: directGoodsLabel
+          }
+        ]
+      : []),
     {
-      label: props.outboundType === "transfer" ? "目标仓库" : "销售人员",
-      passed:
-        props.outboundType === "transfer"
-          ? Boolean(targetWarehouse && sourceWarehouse && targetWarehouse.id !== sourceWarehouse.id)
-          : Boolean(salesperson),
+      label: destinationLabel,
+      passed: destinationReady,
       detail: targetLabel
     },
     {
@@ -2762,7 +2880,9 @@ function OutboundView(props: {
       detail:
         invalidBarcodeCount > 0
           ? `${invalidBarcodeCount} 件需处理`
-          : `${validBarcodeCount} / ${props.outboundBarcodes.length} 可出库`
+          : isDirectOutbound
+            ? `${validBarcodeCount} / ${props.outboundBarcodes.length} 待确认新条码`
+            : `${validBarcodeCount} / ${props.outboundBarcodes.length} 可出库`
     }
   ];
 
@@ -2771,10 +2891,11 @@ function OutboundView(props: {
       <OperationPageHeader
         icon={ArrowLeftRight}
         eyebrow="出库管理"
-        title={props.outboundType === "transfer" ? "仓库挪动" : "销售出库"}
+        title={outboundTitle}
         summary={[
           { label: "出库仓库", value: sourceWarehouse?.name ?? "未选择" },
-          { label: props.outboundType === "transfer" ? "目标仓库" : "销售人员", value: targetLabel },
+          ...(isDirectOutbound ? [{ label: "货物", value: directGoods?.name ?? "未选择" }] : []),
+          { label: destinationLabel, value: targetLabel },
           { label: "条码数量", value: `${props.outboundBarcodes.length} 件` }
         ]}
       />
@@ -2785,7 +2906,8 @@ function OutboundView(props: {
             <SegmentedControl
               options={[
                 { value: "transfer", label: "挪仓" },
-                { value: "sales", label: "销售出库" }
+                { value: "sales", label: "销售出库" },
+                { value: "direct", label: "直接出库" }
               ]}
               value={props.outboundType}
               onChange={(value) => props.setOutboundType(value as OutboundType)}
@@ -2798,7 +2920,28 @@ function OutboundView(props: {
               onChange={props.setSourceWarehouseId}
               options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
             />
-            {props.outboundType === "transfer" ? (
+            {isDirectOutbound ? (
+              <FieldSelect
+                label="直接出库货物"
+                value={props.directOutboundGoodsId}
+                onChange={props.setDirectOutboundGoodsId}
+                options={enabledGoods.map((goods) => ({ value: goods.id, label: `${goods.code} / ${goods.name}` }))}
+              />
+            ) : null}
+            {isDirectOutbound ? (
+              <div className="md:col-span-2">
+                <p className="mb-2 text-xs font-semibold text-muted">直接出库去向</p>
+                <SegmentedControl
+                  options={[
+                    { value: "transfer", label: "发往仓库" },
+                    { value: "sales", label: "分配销售" }
+                  ]}
+                  value={props.directOutboundDestination}
+                  onChange={(value) => props.setDirectOutboundDestination(value as DirectOutboundDestination)}
+                />
+              </div>
+            ) : null}
+            {isTransferDestination ? (
               <FieldSelect
                 label="目标仓库"
                 value={props.targetWarehouseId}
@@ -2817,47 +2960,61 @@ function OutboundView(props: {
               />
             )}
             <ReadOnlyField
-              label="仓库可用库存"
-              value={sourceWarehouse ? `${sourceWarehouseAvailableCount.toLocaleString("zh-CN")} 件` : "未选择仓库"}
+              label={isDirectOutbound ? "库存占用方式" : "仓库可用库存"}
+              value={
+                isDirectOutbound
+                  ? "即入即出，不占用现有库存"
+                  : sourceWarehouse
+                    ? `${sourceWarehouseAvailableCount.toLocaleString("zh-CN")} 件`
+                    : "未选择仓库"
+              }
             />
-            <ReadOnlyField label="条码校验" value={`${validBarcodeCount} 件待提交校验`} />
+            <ReadOnlyField label="条码校验" value={barcodeValidationText} />
           </div>
 
           <RoutePreview
             from={sourceWarehouse?.name ?? "未选择"}
-            fromMeta="出库仓库"
+            fromMeta={isDirectOutbound ? "先登记到该出库仓库" : "出库仓库"}
             to={targetLabel}
-            toMeta={props.outboundType === "transfer" ? "目标仓库" : salesperson?.region ?? "销售人员"}
+            toMeta={isTransferDestination ? "目标仓库" : salesperson?.region ?? "销售人员"}
           />
 
           <BusinessRuleStrip
-            tone="neutral"
-            title={props.outboundType === "transfer" ? "挪仓规则" : "销售出库规则"}
+            tone={isDirectOutbound ? "warning" : "neutral"}
+            title={
+	              props.outboundType === "transfer"
+	                ? "挪仓规则"
+	                : props.outboundType === "sales"
+	                  ? "销售出库规则"
+	                  : "直接出库规则"
+            }
             detail={
-              props.outboundType === "transfer"
-                ? "仓库之间可互相挪动，目标仓库不能与出库仓库相同。"
-                : "任一仓库均可销售出库，货物只分配到销售人员名下。"
+	              props.outboundType === "transfer"
+	                ? "仓库之间可互相挪动，目标仓库不能与出库仓库相同。"
+	                : props.outboundType === "sales"
+	                  ? "任一仓库均可销售出库，货物只分配到销售人员名下。"
+	                  : "用于货物来不及常规入库就需要出库送货的场景。提交时会先把新条码登记到出库仓库，再立即完成发往仓库或分配销售；不填写生产日期。"
             }
           />
         </OperationPanel>
 
         <OperationPanel step="2" icon={ScanLine} title="条码录入与提交">
-          <BarcodeCollector
-            title="出库条码"
-            description="条码归属将从仓库库存转出"
+	          <BarcodeCollector
+	            title={isDirectOutbound ? "直接出库条码" : "出库条码"}
+	            description={isDirectOutbound ? "条码将作为新条码建档后立即转出" : "条码归属将从仓库库存转出"}
             input={props.outboundBarcodeInput}
             setInput={props.setOutboundBarcodeInput}
             barcodes={props.outboundBarcodes}
             setBarcodes={props.setOutboundBarcodes}
             onAdd={props.addBarcode}
-            placeholder="扫描或输入当前在库条码"
+            placeholder={isDirectOutbound ? "扫描或输入新条码" : "扫描或输入当前在库条码"}
             reviewBarcode={reviewOutboundBarcode}
           />
           <OperationSubmitBar
             checks={outboundChecks}
-            itemCount={props.outboundBarcodes.length}
-            invalidCount={invalidBarcodeCount}
-            submitLabel="提交出库"
+	            itemCount={props.outboundBarcodes.length}
+	            invalidCount={invalidBarcodeCount}
+	            submitLabel={isDirectOutbound ? "提交直接出库" : "提交出库"}
             disabled={submitDisabled}
             onSubmit={props.submitOutbound}
           />
@@ -2878,6 +3035,7 @@ function SalesReturnView(props: {
   returnBarcodeReviews: BarcodeReviewMap;
   addBarcode: (input: string) => void;
   submitSalesReturn: () => void;
+  branchSelector?: ReactNode;
 }) {
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
   const returnWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.returnWarehouseId);
@@ -2914,8 +3072,8 @@ function SalesReturnView(props: {
     <div className="space-y-4">
       <OperationPageHeader
         icon={Undo2}
-        eyebrow="销售退回"
-        title="未售完货物回流仓库"
+        eyebrow={props.branchSelector ? "入库管理" : "销售退回"}
+        title={props.branchSelector ? "销售退回入库" : "未售完货物回流仓库"}
         summary={[
           { label: "回流仓库", value: returnWarehouse?.name ?? "未选择" },
           { label: "销售人员名下", value: "按库存查询查看" },
@@ -2925,6 +3083,7 @@ function SalesReturnView(props: {
 
       <div className="grid gap-4 xl:grid-cols-[0.82fr_1.18fr]">
         <OperationPanel step="1" icon={ClipboardList} title="退回设置">
+          {props.branchSelector ? <div className="mb-4">{props.branchSelector}</div> : null}
           <div className="grid gap-4 md:grid-cols-2">
             <FieldSelect
               label="回流仓库"
@@ -2945,7 +3104,7 @@ function SalesReturnView(props: {
           <BusinessRuleStrip
             tone="neutral"
             title="销售退回规则"
-            detail="仅把销售人员名下未售完条码回流到仓库，不记录终端店铺、生产日期，也不重新计算保质期。"
+            detail="销售退回作为入库分支展示，但业务规则独立：仅把销售人员名下未售完条码回流到仓库，不记录终端店铺、生产日期，也不重新计算保质期。"
           />
         </OperationPanel>
 
