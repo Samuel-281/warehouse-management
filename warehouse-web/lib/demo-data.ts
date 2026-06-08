@@ -18,7 +18,8 @@ export const goods: Goods[] = [
     category: "health_wine",
     unit: "瓶",
     spec: "500ml/瓶，12瓶/箱",
-    status: "enabled"
+    status: "enabled",
+    sortOrder: 10
   },
   {
     id: "goods-bj-001",
@@ -27,7 +28,8 @@ export const goods: Goods[] = [
     category: "baijiu",
     unit: "瓶",
     spec: "500ml/瓶，6瓶/箱",
-    status: "enabled"
+    status: "enabled",
+    sortOrder: 20
   },
   {
     id: "goods-hj-002",
@@ -36,7 +38,8 @@ export const goods: Goods[] = [
     category: "health_wine",
     unit: "盒",
     spec: "2瓶/盒",
-    status: "enabled"
+    status: "enabled",
+    sortOrder: 30
   }
 ];
 
@@ -47,7 +50,8 @@ export const warehouses: Warehouse[] = [
     name: "市区仓库",
     type: "warehouse",
     manager: "周主管",
-    status: "enabled"
+    status: "enabled",
+    sortOrder: 10
   },
   {
     id: "wh-county-a",
@@ -55,7 +59,8 @@ export const warehouses: Warehouse[] = [
     name: "东山县仓库",
     type: "warehouse",
     manager: "刘库管",
-    status: "enabled"
+    status: "enabled",
+    sortOrder: 20
   },
   {
     id: "wh-town-b",
@@ -63,7 +68,8 @@ export const warehouses: Warehouse[] = [
     name: "南河镇仓库",
     type: "warehouse",
     manager: "陈库管",
-    status: "enabled"
+    status: "enabled",
+    sortOrder: 30
   }
 ];
 

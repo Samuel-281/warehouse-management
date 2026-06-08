@@ -137,6 +137,7 @@ model Goods {
   unit      String
   spec      String
   status    RecordStatus  @default(ENABLED)
+  sortOrder Int           @default(0)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
@@ -148,6 +149,7 @@ model Goods {
   outboundOrderItems    OutboundOrderItem[]
   salesReturnOrderItems SalesReturnOrderItem[]
 
+  @@index([sortOrder])
   @@map("goods")
 }
 
@@ -159,6 +161,7 @@ model Warehouse {
   parentId  String?       @db.Uuid
   manager   String
   status    RecordStatus  @default(ENABLED)
+  sortOrder Int           @default(0)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
@@ -174,6 +177,7 @@ model Warehouse {
   salesReturnOrders   SalesReturnOrder[]
 
   @@index([parentId])
+  @@index([sortOrder])
   @@map("warehouses")
 }
 

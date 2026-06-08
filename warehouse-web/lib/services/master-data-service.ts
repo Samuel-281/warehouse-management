@@ -31,6 +31,7 @@ type DbGoods = {
   unit: string;
   spec: string;
   status: DbRecordStatus;
+  sortOrder: number;
 };
 
 type DbWarehouse = {
@@ -41,6 +42,7 @@ type DbWarehouse = {
   parentId: string | null;
   manager: string;
   status: DbRecordStatus;
+  sortOrder: number;
 };
 
 type DbStorageLocation = {
@@ -135,11 +137,16 @@ export type UpdateTerminalStoreInput = Partial<CreateTerminalStoreInput> & {
   status?: TerminalStore["status"];
 };
 
+export type UpdateMasterSortInput = {
+  target: "goods" | "warehouses";
+  orderedIds: string[];
+};
+
 export async function listMasterData(): Promise<WarehouseState> {
   const prisma = getPrisma();
   const [goods, warehouses, locations, salespeople, terminalStores, warehouseStocks, movements] = await Promise.all([
-    prisma.goods.findMany({ orderBy: { code: "asc" } }),
-    prisma.warehouse.findMany({ orderBy: { code: "asc" } }),
+    prisma.goods.findMany({ orderBy: [{ sortOrder: "asc" }, { code: "asc" }] }),
+    prisma.warehouse.findMany({ orderBy: [{ sortOrder: "asc" }, { code: "asc" }] }),
     prisma.storageLocation.findMany({ orderBy: [{ warehouseId: "asc" }, { code: "asc" }] }),
     prisma.salesperson.findMany({ orderBy: { code: "asc" } }),
     prisma.terminalStore.findMany({ orderBy: { name: "asc" } }),
@@ -166,6 +173,7 @@ export async function createGoods(input: CreateGoodsInput) {
   assertRequired(input.spec, "规格");
 
   const prisma = getPrisma();
+  const sortOrder = await nextSortOrder(prisma.goods);
   const created = await prisma.goods.create({
     data: {
       code: input.code.trim(),
@@ -173,7 +181,8 @@ export async function createGoods(input: CreateGoodsInput) {
       category: toDbGoodsCategory(input.category),
       unit: input.unit.trim(),
       spec: input.spec.trim(),
-      status: "ENABLED"
+      status: "ENABLED",
+      sortOrder
     }
   });
 
@@ -246,6 +255,7 @@ export async function createWarehouse(input: CreateWarehouseInput) {
   return prisma.$transaction(async (tx) => {
     const code = input.code.trim();
     const name = input.name.trim();
+    const sortOrder = await nextSortOrder(tx.warehouse);
     const warehouse = await tx.warehouse.create({
       data: {
         code,
@@ -253,7 +263,8 @@ export async function createWarehouse(input: CreateWarehouseInput) {
         type: "MAIN",
         parentId: null,
         manager: input.manager.trim(),
-        status: "ENABLED"
+        status: "ENABLED",
+        sortOrder
       }
     });
 
@@ -485,6 +496,46 @@ export async function deleteTerminalStore(id: string) {
   return { deleted: true };
 }
 
+export async function updateMasterSortOrder(input: UpdateMasterSortInput) {
+  const orderedIds = Array.from(new Set(input.orderedIds.map((id) => id.trim()).filter(Boolean)));
+  if (orderedIds.length === 0) {
+    throw new Error("请提供需要排序的资料");
+  }
+
+  const prisma = getPrisma();
+  if (input.target === "goods") {
+    const count = await prisma.goods.count({ where: { id: { in: orderedIds } } });
+    assertSortCount(count, orderedIds.length);
+    await prisma.$transaction(
+      orderedIds.map((id, index) =>
+        prisma.goods.update({
+          where: { id },
+          data: { sortOrder: (index + 1) * 10 }
+        })
+      )
+    );
+    const goods = await prisma.goods.findMany({ orderBy: [{ sortOrder: "asc" }, { code: "asc" }] });
+    return { target: input.target, goods: goods.map(mapGoods) };
+  }
+
+  if (input.target === "warehouses") {
+    const count = await prisma.warehouse.count({ where: { id: { in: orderedIds } } });
+    assertSortCount(count, orderedIds.length);
+    await prisma.$transaction(
+      orderedIds.map((id, index) =>
+        prisma.warehouse.update({
+          where: { id },
+          data: { sortOrder: (index + 1) * 10 }
+        })
+      )
+    );
+    const warehouses = await prisma.warehouse.findMany({ orderBy: [{ sortOrder: "asc" }, { code: "asc" }] });
+    return { target: input.target, warehouses: warehouses.map(mapWarehouse) };
+  }
+
+  throw new Error("不支持的排序资料类型");
+}
+
 function assertRequired(value: string, label: string) {
   if (!value?.trim()) {
     throw new Error(`${label}不能为空`);
@@ -495,6 +546,17 @@ function assertNoReferences(count: number, message: string) {
   if (count > 0) {
     throw new Error(message);
   }
+}
+
+function assertSortCount(found: number, expected: number) {
+  if (found !== expected) {
+    throw new Error("排序列表中包含无效资料，请刷新后重试");
+  }
+}
+
+async function nextSortOrder(model: { aggregate: (args: { _max: { sortOrder: true } }) => Promise<{ _max: { sortOrder: number | null } }> }) {
+  const aggregate = await model.aggregate({ _max: { sortOrder: true } });
+  return (aggregate._max.sortOrder ?? 0) + 10;
 }
 
 function mapStatus(status: DbRecordStatus) {
@@ -537,7 +599,8 @@ function mapGoods(goods: DbGoods): Goods {
     category: mapGoodsCategory(goods.category),
     unit: goods.unit,
     spec: goods.spec,
-    status: mapStatus(goods.status)
+    status: mapStatus(goods.status),
+    sortOrder: goods.sortOrder
   };
 }
 
@@ -549,7 +612,8 @@ function mapWarehouse(warehouse: DbWarehouse): Warehouse {
     type: "warehouse",
     parentId: warehouse.parentId ?? undefined,
     manager: warehouse.manager,
-    status: mapStatus(warehouse.status)
+    status: mapStatus(warehouse.status),
+    sortOrder: warehouse.sortOrder
   };
 }
 

@@ -36,6 +36,7 @@ export type Goods = {
   unit: string;
   spec: string;
   status: "enabled" | "disabled";
+  sortOrder: number;
 };
 
 export type Warehouse = {
@@ -46,6 +47,7 @@ export type Warehouse = {
   parentId?: string;
   manager: string;
   status: "enabled" | "disabled";
+  sortOrder: number;
 };
 
 export type StorageLocation = {

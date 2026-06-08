@@ -22,19 +22,21 @@ VALUES
   ('12000000-0000-0000-0000-000000000003', '11000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000003')
 ON CONFLICT ("userId", "roleId") DO NOTHING;
 
-INSERT INTO goods (id, code, name, category, unit, spec, status, "createdAt", "updatedAt")
+INSERT INTO goods (id, code, name, category, unit, spec, status, "sortOrder", "createdAt", "updatedAt")
 VALUES
-  ('20000000-0000-0000-0000-000000000001', 'HJ-001', '鹿泉保健酒 500ml', 'HEALTH_WINE', '瓶', '500ml/瓶，12瓶/箱', 'ENABLED', now(), now()),
-  ('20000000-0000-0000-0000-000000000002', 'BJ-001', '青山白酒 52度', 'BAIJIU', '瓶', '500ml/瓶，6瓶/箱', 'ENABLED', now(), now()),
-  ('20000000-0000-0000-0000-000000000003', 'HJ-002', '参杞保健酒礼盒', 'HEALTH_WINE', '盒', '2瓶/盒', 'ENABLED', now(), now())
-ON CONFLICT (code) DO NOTHING;
+  ('20000000-0000-0000-0000-000000000001', 'HJ-001', '鹿泉保健酒 500ml', 'HEALTH_WINE', '瓶', '500ml/瓶，12瓶/箱', 'ENABLED', 10, now(), now()),
+  ('20000000-0000-0000-0000-000000000002', 'BJ-001', '青山白酒 52度', 'BAIJIU', '瓶', '500ml/瓶，6瓶/箱', 'ENABLED', 20, now(), now()),
+  ('20000000-0000-0000-0000-000000000003', 'HJ-002', '参杞保健酒礼盒', 'HEALTH_WINE', '盒', '2瓶/盒', 'ENABLED', 30, now(), now())
+ON CONFLICT (code)
+DO UPDATE SET "sortOrder" = EXCLUDED."sortOrder", "updatedAt" = now();
 
-INSERT INTO warehouses (id, code, name, type, "parentId", manager, status, "createdAt", "updatedAt")
+INSERT INTO warehouses (id, code, name, type, "parentId", manager, status, "sortOrder", "createdAt", "updatedAt")
 VALUES
-  ('30000000-0000-0000-0000-000000000001', 'CK-001', '市区仓库', 'MAIN', NULL, '周主管', 'ENABLED', now(), now()),
-  ('30000000-0000-0000-0000-000000000002', 'CK-101', '东山县仓库', 'MAIN', NULL, '刘库管', 'ENABLED', now(), now()),
-  ('30000000-0000-0000-0000-000000000003', 'CK-202', '南河镇仓库', 'MAIN', NULL, '陈库管', 'ENABLED', now(), now())
-ON CONFLICT (code) DO NOTHING;
+  ('30000000-0000-0000-0000-000000000001', 'CK-001', '市区仓库', 'MAIN', NULL, '周主管', 'ENABLED', 10, now(), now()),
+  ('30000000-0000-0000-0000-000000000002', 'CK-101', '东山县仓库', 'MAIN', NULL, '刘库管', 'ENABLED', 20, now(), now()),
+  ('30000000-0000-0000-0000-000000000003', 'CK-202', '南河镇仓库', 'MAIN', NULL, '陈库管', 'ENABLED', 30, now(), now())
+ON CONFLICT (code)
+DO UPDATE SET "sortOrder" = EXCLUDED."sortOrder", "updatedAt" = now();
 
 INSERT INTO storage_locations (id, "warehouseId", zone, code, name, status, "createdAt", "updatedAt")
 VALUES

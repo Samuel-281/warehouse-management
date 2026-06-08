@@ -10,6 +10,7 @@ import {
   Check,
   ClipboardList,
   Download,
+  GripVertical,
   Home,
   Info,
   LogIn,
@@ -28,7 +29,7 @@ import {
   Warehouse,
   X
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { initialState } from "@/lib/demo-data";
 import { hasAnyRole } from "@/lib/role-utils";
 import type {
@@ -157,6 +158,18 @@ function parseBarcodeInput(input: string) {
 function countInvalidReviews(barcodes: string[], reviewBarcode?: (barcode: string) => BarcodeReview) {
   if (!reviewBarcode) return 0;
   return barcodes.filter((barcode) => reviewBarcode(barcode).tone === "error").length;
+}
+
+function masterSortOrder(record: { sortOrder?: number }) {
+  return Number.isFinite(record.sortOrder) ? Number(record.sortOrder) : Number.MAX_SAFE_INTEGER;
+}
+
+function compareMasterRecords<T extends { sortOrder?: number; code: string; name: string }>(a: T, b: T) {
+  const orderDiff = masterSortOrder(a) - masterSortOrder(b);
+  if (orderDiff !== 0) return orderDiff;
+  const codeDiff = a.code.localeCompare(b.code, "zh-CN");
+  if (codeDiff !== 0) return codeDiff;
+  return a.name.localeCompare(b.name, "zh-CN");
 }
 
 function validationResultToReview(result: BarcodeValidationResult): BarcodeReview {
@@ -1362,7 +1375,7 @@ function DashboardView({
 }) {
   const recentMovements = summary.recentMovements;
   const salespersonCountById = new Map(summary.salespersonCounts.map((row) => [row.salespersonId, row.count]));
-  const stockRows = summary.warehouseStocks
+  const sortedStockRows = summary.warehouseStocks
     .map((stock) => ({
       stock,
       warehouse: state.warehouses.find((warehouse) => warehouse.id === stock.warehouseId),
@@ -1370,10 +1383,11 @@ function DashboardView({
     }))
     .filter((row) => row.warehouse && row.goods)
     .sort((a, b) => {
-      const warehouseSort = (a.warehouse?.name ?? "").localeCompare(b.warehouse?.name ?? "", "zh-CN");
+      const warehouseSort = compareMasterRecords(a.warehouse!, b.warehouse!);
       if (warehouseSort !== 0) return warehouseSort;
-      return (a.goods?.code ?? "").localeCompare(b.goods?.code ?? "", "zh-CN");
+      return compareMasterRecords(a.goods!, b.goods!);
     });
+  const stockRows = sortedStockRows.slice(0, 10);
   const salespersonRows = state.salespeople
     .map((person) => ({ person, count: salespersonCountById.get(person.id) ?? 0 }))
     .filter((row) => row.count > 0);
@@ -1391,12 +1405,17 @@ function DashboardView({
         <section className="panel p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <SectionHeader icon={PackageCheck} title="各仓库货物储备" compact />
-            {canOperateWarehouse ? (
-              <button className="primary-button" onClick={() => setActiveView("inbound")}>
-                <Truck className="h-4 w-4" />
-                到货入库
-              </button>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-500">
+                首页显示 {stockRows.length} / {sortedStockRows.length} 条
+              </span>
+              {canOperateWarehouse ? (
+                <button className="primary-button" onClick={() => setActiveView("inbound")}>
+                  <Truck className="h-4 w-4" />
+                  到货入库
+                </button>
+              ) : null}
+            </div>
           </div>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[760px]">
@@ -1446,8 +1465,11 @@ function DashboardView({
           </div>
           {salespersonRows.length > 0 ? (
             <div className="mt-4 rounded-md border border-slate-200">
-              <div className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">销售人员持有</div>
-              <div className="divide-y divide-slate-200">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+                <span className="text-sm font-semibold text-slate-700">销售人员持有</span>
+                <span className="text-xs text-muted">最多显示 6 条高度，可滚动</span>
+              </div>
+              <div className="max-h-[324px] divide-y divide-slate-200 overflow-y-auto">
                 {salespersonRows.map(({ person, count }) => (
                   <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm" key={person.id}>
                     <div>
@@ -1831,6 +1853,8 @@ function MastersView({
   const [editingStore, setEditingStore] = useState<WarehouseState["terminalStores"][number] | null>(null);
   const [creatingMaster, setCreatingMaster] = useState<MasterCreateKey | null>(null);
   const [masterDialogError, setMasterDialogError] = useState("");
+  const sortedGoods = [...state.goods].sort(compareMasterRecords);
+  const sortedWarehouses = [...state.warehouses].sort(compareMasterRecords);
 
   async function requestApi<T>(path: string, body: unknown, method = "POST"): Promise<T> {
     const response = await fetch(path, {
@@ -1863,6 +1887,57 @@ function MastersView({
       ...previous,
       [key]: previous[key].filter((item) => item.id !== id)
     }));
+  }
+
+  async function reorderMasterData(target: "goods" | "warehouses", draggedId: string, targetId: string) {
+    if (draggedId === targetId) return;
+
+    if (target === "goods") {
+      const fromIndex = sortedGoods.findIndex((item) => item.id === draggedId);
+      const toIndex = sortedGoods.findIndex((item) => item.id === targetId);
+      if (fromIndex < 0 || toIndex < 0) return;
+      const previousGoods = state.goods;
+      const nextGoods = [...sortedGoods];
+      const [moved] = nextGoods.splice(fromIndex, 1);
+      nextGoods.splice(toIndex, 0, moved);
+      const optimisticGoods = nextGoods.map((item, index) => ({ ...item, sortOrder: (index + 1) * 10 }));
+      setState((previous) => ({ ...previous, goods: optimisticGoods }));
+
+      try {
+        const result = await requestApi<{ target: "goods"; goods: WarehouseState["goods"] }>("/api/master-data/sort", {
+          target,
+          orderedIds: optimisticGoods.map((item) => item.id)
+        }, "PATCH");
+        setState((previous) => ({ ...previous, goods: result.goods }));
+        showToast({ tone: "success", message: "货物排序已保存" });
+      } catch (error) {
+        setState((previous) => ({ ...previous, goods: previousGoods }));
+        showToast({ tone: "error", message: apiErrorMessage(error, "货物排序保存失败") });
+      }
+      return;
+    }
+
+    const fromIndex = sortedWarehouses.findIndex((item) => item.id === draggedId);
+    const toIndex = sortedWarehouses.findIndex((item) => item.id === targetId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const previousWarehouses = state.warehouses;
+    const nextWarehouses = [...sortedWarehouses];
+    const [moved] = nextWarehouses.splice(fromIndex, 1);
+    nextWarehouses.splice(toIndex, 0, moved);
+    const optimisticWarehouses = nextWarehouses.map((item, index) => ({ ...item, sortOrder: (index + 1) * 10 }));
+    setState((previous) => ({ ...previous, warehouses: optimisticWarehouses }));
+
+    try {
+      const result = await requestApi<{ target: "warehouses"; warehouses: WarehouseState["warehouses"] }>("/api/master-data/sort", {
+        target,
+        orderedIds: optimisticWarehouses.map((item) => item.id)
+      }, "PATCH");
+      setState((previous) => ({ ...previous, warehouses: result.warehouses }));
+      showToast({ tone: "success", message: "仓库排序已保存" });
+    } catch (error) {
+      setState((previous) => ({ ...previous, warehouses: previousWarehouses }));
+      showToast({ tone: "error", message: apiErrorMessage(error, "仓库排序保存失败") });
+    }
   }
 
   async function addGoods() {
@@ -2391,7 +2466,9 @@ function MastersView({
           title="货物资料"
           icon={Boxes}
           headers={["编码", "名称", "大类", "规格", "状态", "操作"]}
-          rows={state.goods.map((item) => [
+          rowIds={sortedGoods.map((item) => item.id)}
+          onReorder={(draggedId, targetId) => reorderMasterData("goods", draggedId, targetId)}
+          rows={sortedGoods.map((item) => [
             item.code,
             item.name,
             formatCategory(item.category),
@@ -2414,7 +2491,9 @@ function MastersView({
           title="仓库资料"
           icon={Warehouse}
           headers={["编码", "名称", "负责人", "状态", "操作"]}
-          rows={state.warehouses.map((item) => [
+          rowIds={sortedWarehouses.map((item) => item.id)}
+          onReorder={(draggedId, targetId) => reorderMasterData("warehouses", draggedId, targetId)}
+          rows={sortedWarehouses.map((item) => [
             item.code,
             item.name,
             item.manager,
@@ -2512,25 +2591,45 @@ function MasterTable({
   title,
   icon: Icon,
   headers,
-  rows
+  rows,
+  rowIds,
+  onReorder
 }: {
   title: string;
   icon: typeof Home;
   headers: string[];
   rows: ReactNode[][];
+  rowIds?: string[];
+  onReorder?: (draggedId: string, targetId: string) => void;
 }) {
+  const sortable = Boolean(rowIds && onReorder);
+
+  function handleDragStart(event: DragEvent, id: string) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+  }
+
+  function handleDrop(event: DragEvent, targetId?: string) {
+    if (!targetId || !onReorder) return;
+    event.preventDefault();
+    const draggedId = event.dataTransfer.getData("text/plain");
+    if (draggedId) onReorder(draggedId, targetId);
+  }
+
   return (
     <section className="panel overflow-hidden">
       <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
-        <SectionHeader icon={Icon} title={title} compact />
-        <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-500">
-          {rows.length} 条
-        </span>
+        <div>
+          <SectionHeader icon={Icon} title={title} compact />
+          {sortable ? <p className="mt-1 text-xs text-muted">拖动左侧手柄可调整首页展示权重</p> : null}
+        </div>
+        <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-500">{rows.length} 条</span>
       </div>
       <div className="max-h-[520px] overflow-auto">
         <table className="w-full min-w-[620px]">
           <thead className="table-head sticky top-0 z-[1]">
             <tr>
+              {sortable ? <th className="w-10 px-4 py-3">排序</th> : null}
               {headers.map((header) => (
                 <th className="px-4 py-3" key={header}>
                   {header}
@@ -2540,7 +2639,24 @@ function MasterTable({
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} className="hover:bg-slate-50">
+              <tr
+                key={rowIds?.[rowIndex] ?? rowIndex}
+                className="hover:bg-slate-50"
+                onDragOver={sortable ? (event) => event.preventDefault() : undefined}
+                onDrop={sortable ? (event) => handleDrop(event, rowIds?.[rowIndex]) : undefined}
+              >
+                {sortable ? (
+                  <td className="table-cell w-10">
+                    <button
+                      aria-label="拖动排序"
+                      className="flex h-8 w-8 cursor-grab items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 active:cursor-grabbing"
+                      draggable
+                      onDragStart={(event) => handleDragStart(event, rowIds?.[rowIndex] ?? "")}
+                    >
+                      <GripVertical className="h-4 w-4" />
+                    </button>
+                  </td>
+                ) : null}
                 {row.map((cell, index) => (
                   <td className="table-cell" key={`${rowIndex}-${index}`}>
                     {cell}
