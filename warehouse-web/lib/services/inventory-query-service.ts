@@ -10,7 +10,9 @@ import type {
   InventorySummary,
   MovementType,
   OwnerType,
-  StockMovement
+  StockMovement,
+  WarehouseStock,
+  WarehouseStockMovement
 } from "@/lib/types";
 
 type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
@@ -39,6 +41,30 @@ type DbStockMovement = {
   type: DbMovementType;
   fromLabel: string;
   toLabel: string;
+  operatorName: string;
+  occurredAt: Date;
+  note: string;
+};
+
+type DbWarehouseStock = {
+  id: string;
+  warehouseId: string;
+  goodsId: string;
+  quantity: number;
+  lastChangedAt: Date;
+};
+
+type DbWarehouseStockMovement = {
+  id: string;
+  warehouseId: string;
+  goodsId: string;
+  type: DbMovementType;
+  quantityChange: number;
+  balanceAfter: number;
+  orderKind: string | null;
+  orderId: string | null;
+  barcode: string | null;
+  counterparty: string | null;
   operatorName: string;
   occurredAt: Date;
   note: string;
@@ -161,11 +187,23 @@ export async function deleteInventoryItemByBarcode(barcode: string) {
 
 export async function getInventorySummary(): Promise<InventorySummary> {
   const prisma = getPrisma();
-  const [totalItems, inStock, withSales, warehouseGroups, salespersonGroups, recentMovements] =
+  const [
+    totalItems,
+    inStock,
+    withSales,
+    warehouseStocks,
+    warehouseStockAggregate,
+    warehouseGroups,
+    salespersonGroups,
+    recentMovements,
+    recentStockMovements
+  ] =
     await Promise.all([
       prisma.inventoryItem.count(),
       prisma.inventoryItem.count({ where: { ownerType: "WAREHOUSE" } }),
       prisma.inventoryItem.count({ where: { ownerType: "SALESPERSON" } }),
+      prisma.warehouseStock.findMany({ orderBy: [{ warehouseId: "asc" }, { goodsId: "asc" }] }),
+      prisma.warehouseStock.aggregate({ _sum: { quantity: true } }),
       prisma.inventoryItem.groupBy({
         by: ["warehouseId"],
         where: { ownerType: "WAREHOUSE", warehouseId: { not: null } },
@@ -179,6 +217,10 @@ export async function getInventorySummary(): Promise<InventorySummary> {
       prisma.stockMovement.findMany({
         orderBy: { occurredAt: "desc" },
         take: 8
+      }),
+      prisma.warehouseStockMovement.findMany({
+        orderBy: { occurredAt: "desc" },
+        take: 12
       })
     ]);
   const warehouseCounts = warehouseGroups
@@ -189,6 +231,9 @@ export async function getInventorySummary(): Promise<InventorySummary> {
     totalItems,
     inStock,
     withSales,
+    totalWarehouseQuantity: warehouseStockAggregate._sum.quantity ?? 0,
+    warehouseStocks: warehouseStocks.map(mapWarehouseStock),
+    recentStockMovements: recentStockMovements.map(mapWarehouseStockMovement),
     warehouseCounts,
     salespersonCounts: salespersonGroups
       .filter((group) => group.salespersonId)
@@ -225,14 +270,20 @@ export async function validateBarcodes(input: BarcodeValidationInput): Promise<B
       return { barcode, ok: true, label: "可回仓", detail: "该条码当前在销售人员名下", item: mapInventoryItem(item) };
     }
 
-    if (!item) return { barcode, ok: false, label: "不存在", detail: "系统内未找到该条码" };
-
     if (input.mode === "warehouse_outbound") {
+      if (!item) {
+        return { barcode, ok: true, label: "新出库条码", detail: "系统将从所选仓库库存中扣减并建立条码追踪" };
+      }
+      if (input.goodsId && item.goodsId !== input.goodsId) {
+        return { barcode, ok: false, label: "货物不符", detail: "该条码已绑定其他货物", item: mapInventoryItem(item) };
+      }
       if (item.ownerType !== "WAREHOUSE" || item.warehouseId !== input.warehouseId) {
         return { barcode, ok: false, label: "仓库不符", detail: "条码当前不在所选仓库库存中", item: mapInventoryItem(item) };
       }
       return { barcode, ok: true, label: "可出库", detail: "条码当前在所选仓库库存中", item: mapInventoryItem(item) };
     }
+
+    if (!item) return { barcode, ok: false, label: "不存在", detail: "系统内未找到该条码" };
 
     if (item.ownerType !== "SALESPERSON" || !item.salespersonId) {
       return { barcode, ok: false, label: "不可退回", detail: "条码当前不在销售人员名下", item: mapInventoryItem(item) };
@@ -343,6 +394,34 @@ function mapStockMovement(movement: DbStockMovement): StockMovement {
     type: mapMovementType(movement.type),
     fromLabel: movement.fromLabel,
     toLabel: movement.toLabel,
+    operator: movement.operatorName,
+    occurredAt: formatAppDateTime(movement.occurredAt),
+    note: movement.note
+  };
+}
+
+function mapWarehouseStock(stock: DbWarehouseStock): WarehouseStock {
+  return {
+    id: stock.id,
+    warehouseId: stock.warehouseId,
+    goodsId: stock.goodsId,
+    quantity: stock.quantity,
+    lastChangedAt: formatAppDateTime(stock.lastChangedAt)
+  };
+}
+
+function mapWarehouseStockMovement(movement: DbWarehouseStockMovement): WarehouseStockMovement {
+  return {
+    id: movement.id,
+    warehouseId: movement.warehouseId,
+    goodsId: movement.goodsId,
+    type: mapMovementType(movement.type),
+    quantityChange: movement.quantityChange,
+    balanceAfter: movement.balanceAfter,
+    orderKind: movement.orderKind ?? undefined,
+    orderId: movement.orderId ?? undefined,
+    barcode: movement.barcode ?? undefined,
+    counterparty: movement.counterparty ?? undefined,
     operator: movement.operatorName,
     occurredAt: formatAppDateTime(movement.occurredAt),
     note: movement.note

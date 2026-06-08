@@ -103,10 +103,37 @@ export type StockMovement = {
   note: string;
 };
 
+export type WarehouseStock = {
+  id: string;
+  warehouseId: string;
+  goodsId: string;
+  quantity: number;
+  lastChangedAt: string;
+};
+
+export type WarehouseStockMovement = {
+  id: string;
+  warehouseId: string;
+  goodsId: string;
+  type: MovementType;
+  quantityChange: number;
+  balanceAfter: number;
+  orderKind?: string;
+  orderId?: string;
+  barcode?: string;
+  counterparty?: string;
+  operator: string;
+  occurredAt: string;
+  note: string;
+};
+
 export type InventorySummary = {
   totalItems: number;
   inStock: number;
   withSales: number;
+  totalWarehouseQuantity: number;
+  warehouseStocks: WarehouseStock[];
+  recentStockMovements: WarehouseStockMovement[];
   warehouseCounts: Array<{
     warehouseId: string;
     count: number;
@@ -169,6 +196,7 @@ export type WarehouseState = {
   locations: StorageLocation[];
   salespeople: Salesperson[];
   terminalStores: TerminalStore[];
+  warehouseStocks: WarehouseStock[];
   inventoryItems: InventoryItem[];
   movements: StockMovement[];
 };

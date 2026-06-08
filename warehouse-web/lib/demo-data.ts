@@ -6,6 +6,7 @@ import type {
   StorageLocation,
   TerminalStore,
   Warehouse,
+  WarehouseStock,
   WarehouseState
 } from "./types";
 
@@ -208,6 +209,37 @@ export const inventoryItems: InventoryItem[] = [
   }
 ];
 
+export const warehouseStocks: WarehouseStock[] = [
+  {
+    id: "stock-main-hj-001",
+    warehouseId: "wh-main",
+    goodsId: "goods-hj-001",
+    quantity: 1,
+    lastChangedAt: now
+  },
+  {
+    id: "stock-county-hj-001",
+    warehouseId: "wh-county-a",
+    goodsId: "goods-hj-001",
+    quantity: 1,
+    lastChangedAt: "2026-05-29 09:30"
+  },
+  {
+    id: "stock-main-bj-001",
+    warehouseId: "wh-main",
+    goodsId: "goods-bj-001",
+    quantity: 1,
+    lastChangedAt: "2026-05-29 10:00"
+  },
+  {
+    id: "stock-main-hj-002",
+    warehouseId: "wh-main",
+    goodsId: "goods-hj-002",
+    quantity: 1,
+    lastChangedAt: "2026-05-29 10:20"
+  }
+];
+
 export const movements: StockMovement[] = [
   {
     id: "mv-001",
@@ -277,6 +309,7 @@ export const initialState: WarehouseState = {
   locations,
   salespeople,
   terminalStores,
+  warehouseStocks,
   inventoryItems,
   movements
 };

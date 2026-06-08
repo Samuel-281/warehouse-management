@@ -1,4 +1,5 @@
 import { getPrisma } from "@/lib/db";
+import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { addYears, formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InboundSource, InventoryItem, MovementType, StockMovement } from "@/lib/types";
 
@@ -40,15 +41,20 @@ export type SubmitInboundInput = {
   goodsId: string;
   terminalStoreId?: string;
   productionDate?: string;
+  quantity?: number;
   barcodes: string[];
   operatorName: string;
 };
 
 export async function submitInbound(input: SubmitInboundInput) {
   const barcodes = Array.from(new Set(input.barcodes.map((barcode) => barcode.trim()).filter(Boolean)));
+  const quantity = normalizeQuantity(input.quantity ?? (input.source === "terminal_return" ? barcodes.length : 0));
 
-  if (barcodes.length === 0) {
-    throw new Error("请先扫描或录入条码");
+  if (input.source === "factory" && quantity <= 0) {
+    throw new Error("厂家到货入库数量必须为正整数");
+  }
+  if (input.source === "terminal_return" && barcodes.length === 0) {
+    throw new Error("请先扫描或录入退换货条码");
   }
   if (input.source === "terminal_return" && !input.productionDate) {
     throw new Error("终端店铺退换货入库必须登记生产日期");
@@ -68,36 +74,9 @@ export async function submitInbound(input: SubmitInboundInput) {
       throw new Error("请选择有效的入库库位");
     }
 
-    const existingItems = await tx.inventoryItem.findMany({
-      where: { barcode: { in: barcodes } },
-      orderBy: { barcode: "asc" }
-    });
-
-    if (input.source === "factory" && existingItems.length > 0) {
-      throw new Error(`条码 ${existingItems[0].barcode} 已存在，厂家到货条码不可重复入库`);
-    }
-
-    if (input.source === "terminal_return") {
-      const invalid = existingItems.find((item) => item.ownerType !== "SALESPERSON" || !item.salespersonId);
-      if (invalid) {
-        throw new Error(`条码 ${invalid.barcode} 已在系统库存中，不能作为终端店铺退换货重复入库`);
-      }
-    }
-
-    const terminalStore =
-      input.source === "terminal_return" && input.terminalStoreId
-        ? await tx.terminalStore.findUnique({ where: { id: input.terminalStoreId } })
-        : null;
     const time = new Date();
     const source = toDbInboundSource(input.source);
     const movementType = toDbMovementType(input.source);
-    const productionDate =
-      input.source === "terminal_return" && input.productionDate ? new Date(input.productionDate) : null;
-    const shelfLifeDate =
-      input.source === "terminal_return" && goods.category === "HEALTH_WINE" && input.productionDate
-        ? new Date(addYears(input.productionDate, 3))
-        : null;
-    const fromLabel = input.source === "terminal_return" ? terminalStore?.name ?? "终端店铺" : "无库存";
     const toLabel = `${warehouse.name} / ${location.name}`;
     const order = await tx.inboundOrder.create({
       data: {
@@ -105,11 +84,51 @@ export async function submitInbound(input: SubmitInboundInput) {
         source,
         warehouseId: warehouse.id,
         locationId: location.id,
-        terminalStoreId: terminalStore?.id,
+        terminalStoreId: input.source === "terminal_return" ? input.terminalStoreId : undefined,
         operatorName: input.operatorName,
         createdAt: time
       }
     });
+
+    if (input.source === "factory") {
+      await tx.inboundOrderItem.create({
+        data: {
+          orderId: order.id,
+          goodsId: goods.id,
+          quantity
+        }
+      });
+      await adjustWarehouseStock(tx, {
+        warehouseId: warehouse.id,
+        goodsId: goods.id,
+        quantityChange: quantity,
+        type: "FACTORY_INBOUND",
+        orderKind: "inbound",
+        orderId: order.id,
+        counterparty: "厂家到货",
+        operatorName: input.operatorName,
+        occurredAt: time,
+        note: "厂家到货数量入库"
+      });
+
+      return { orderId: order.id, quantity, items: [], movements: [] };
+    }
+
+    const existingItems = await tx.inventoryItem.findMany({
+      where: { barcode: { in: barcodes } },
+      orderBy: { barcode: "asc" }
+    });
+
+    const invalid = existingItems.find((item) => item.ownerType !== "SALESPERSON" || !item.salespersonId);
+    if (invalid) {
+      throw new Error(`条码 ${invalid.barcode} 已在仓库或异常状态中，不能作为终端店铺退换货重复入库`);
+    }
+
+    const terminalStore =
+      input.terminalStoreId ? await tx.terminalStore.findUnique({ where: { id: input.terminalStoreId } }) : null;
+    const productionDate = input.productionDate ? new Date(input.productionDate) : null;
+    const shelfLifeDate = goods.category === "HEALTH_WINE" && input.productionDate ? new Date(addYears(input.productionDate, 3)) : null;
+    const fromLabel = terminalStore?.name ?? "终端店铺";
 
     const items: InventoryItem[] = [];
     const movements: StockMovement[] = [];
@@ -121,6 +140,8 @@ export async function submitInbound(input: SubmitInboundInput) {
         throw new Error(`条码 ${barcode} 已绑定其他货物，不能按当前货物入库`);
       }
 
+      const nextProductionDate = existingItem?.productionDate ?? productionDate;
+      const nextShelfLifeDate = existingItem?.productionDate ? existingItem.shelfLifeDate : shelfLifeDate;
       const item = existingItem
         ? await tx.inventoryItem.update({
             where: { id: existingItem.id },
@@ -130,8 +151,8 @@ export async function submitInbound(input: SubmitInboundInput) {
               locationId: location.id,
               salespersonId: null,
               status: "IN_STOCK",
-              productionDate,
-              shelfLifeDate,
+              productionDate: nextProductionDate,
+              shelfLifeDate: nextShelfLifeDate,
               inboundSource: source,
               lastMovedAt: time
             }
@@ -173,17 +194,35 @@ export async function submitInbound(input: SubmitInboundInput) {
           inventoryItemId: item.id,
           barcode: item.barcode,
           goodsId: goods.id,
+          quantity: 1,
           productionDate,
           shelfLifeDate
         }
+      });
+      await adjustWarehouseStock(tx, {
+        warehouseId: warehouse.id,
+        goodsId: goods.id,
+        quantityChange: 1,
+        type: "TERMINAL_RETURN_INBOUND",
+        orderKind: "inbound",
+        orderId: order.id,
+        barcode: item.barcode,
+        counterparty: fromLabel,
+        operatorName: input.operatorName,
+        occurredAt: time,
+        note: `终端店铺退换货入库，生产日期 ${input.productionDate}`
       });
 
       items.push(mapInventoryItem(item));
       movements.push(mapStockMovement(movement));
     }
 
-    return { orderId: order.id, items, movements };
+    return { orderId: order.id, quantity: items.length, items, movements };
   });
+}
+
+function normalizeQuantity(quantity: number) {
+  return Number.isFinite(quantity) && quantity > 0 ? Math.floor(quantity) : 0;
 }
 
 function makeOrderNo(prefix: string) {

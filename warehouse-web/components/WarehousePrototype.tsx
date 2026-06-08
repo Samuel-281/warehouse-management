@@ -188,6 +188,9 @@ const emptyInventorySummary: InventorySummary = {
   totalItems: 0,
   inStock: 0,
   withSales: 0,
+  totalWarehouseQuantity: 0,
+  warehouseStocks: [],
+  recentStockMovements: [],
   warehouseCounts: [],
   salespersonCounts: [],
   recentMovements: []
@@ -336,7 +339,7 @@ export default function WarehousePrototype() {
     try {
       const summary = await getJson<InventorySummary>("/api/inventory/summary");
       setDashboardSummary(summary);
-      setState((previous) => ({ ...previous, movements: summary.recentMovements }));
+      setState((previous) => ({ ...previous, warehouseStocks: summary.warehouseStocks, movements: summary.recentMovements }));
       return summary;
     } catch (error) {
       console.info(apiErrorMessage(error, "库存统计接口暂不可用"));
@@ -405,7 +408,7 @@ export default function WarehousePrototype() {
         if (cancelled) return;
         applyDatabaseState(masterData, { preserveSelection: true });
         setDashboardSummary(summary);
-        setState((previous) => ({ ...previous, movements: summary.recentMovements }));
+        setState((previous) => ({ ...previous, warehouseStocks: summary.warehouseStocks, movements: summary.recentMovements }));
       })
       .catch((error) => {
         if (cancelled) return;

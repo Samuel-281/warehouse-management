@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import { getPrisma } from "@/lib/db";
+import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InventoryItem, MovementType, StockMovement } from "@/lib/types";
 
@@ -84,6 +85,25 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
     const updatedItems: InventoryItem[] = [];
     const movements: StockMovement[] = [];
     const toLabel = `${returnWarehouse.name} / ${returnLocation.name}`;
+    const goodsQuantities = new Map<string, number>();
+    for (const item of items) {
+      goodsQuantities.set(item.goodsId, (goodsQuantities.get(item.goodsId) ?? 0) + 1);
+    }
+
+    for (const [goodsId, quantity] of goodsQuantities.entries()) {
+      await adjustWarehouseStock(tx, {
+        warehouseId: returnWarehouse.id,
+        goodsId,
+        quantityChange: quantity,
+        type: "SALES_RETURN",
+        orderKind: "sales_return",
+        orderId: order.id,
+        counterparty: "销售人员名下",
+        operatorName: input.operatorName,
+        occurredAt: time,
+        note: "销售退回入库"
+      });
+    }
 
     for (const barcode of barcodes) {
       const item = itemByBarcode.get(barcode);

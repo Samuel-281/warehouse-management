@@ -16,7 +16,7 @@ export async function POST(request: Request) {
       targetType: "INBOUND_ORDER",
       targetId: result.orderId,
       result: "SUCCESS",
-      detail: `barcodes=${result.items.length}`
+      detail: `quantity=${result.quantity ?? result.items.length};barcodes=${result.items.length}`
     });
     return ok(result, { status: 201 });
   } catch (error) {

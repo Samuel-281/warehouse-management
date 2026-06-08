@@ -141,6 +141,8 @@ model Goods {
   updatedAt DateTime      @updatedAt
 
   inventoryItems        InventoryItem[]
+  warehouseStocks       WarehouseStock[]
+  warehouseStockMovements WarehouseStockMovement[]
   stockMovements        StockMovement[]
   inboundOrderItems     InboundOrderItem[]
   outboundOrderItems    OutboundOrderItem[]
@@ -164,6 +166,8 @@ model Warehouse {
   branches            Warehouse[]        @relation("WarehouseHierarchy")
   locations           StorageLocation[]
   inventoryItems      InventoryItem[]
+  warehouseStocks     WarehouseStock[]
+  warehouseStockMovements WarehouseStockMovement[]
   inboundOrders       InboundOrder[]
   sourceOutboundOrders OutboundOrder[]   @relation("SourceWarehouse")
   targetOutboundOrders OutboundOrder[]   @relation("TargetWarehouse")
@@ -261,6 +265,49 @@ model InventoryItem {
   @@map("inventory_items")
 }
 
+model WarehouseStock {
+  id            String   @id @default(uuid()) @db.Uuid
+  warehouseId   String   @db.Uuid
+  goodsId       String   @db.Uuid
+  quantity      Int      @default(0)
+  lastChangedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  goods     Goods     @relation(fields: [goodsId], references: [id])
+
+  @@unique([warehouseId, goodsId])
+  @@index([goodsId])
+  @@index([lastChangedAt])
+  @@map("warehouse_stocks")
+}
+
+model WarehouseStockMovement {
+  id           String       @id @default(uuid()) @db.Uuid
+  warehouseId  String       @db.Uuid
+  goodsId      String       @db.Uuid
+  type         MovementType
+  quantityChange Int
+  balanceAfter   Int
+  orderKind    String?
+  orderId      String?      @db.Uuid
+  barcode      String?
+  counterparty String?
+  operatorName String
+  occurredAt   DateTime
+  note         String
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  goods     Goods     @relation(fields: [goodsId], references: [id])
+
+  @@index([warehouseId, goodsId])
+  @@index([goodsId])
+  @@index([occurredAt])
+  @@index([barcode])
+  @@map("warehouse_stock_movements")
+}
+
 model StockMovement {
   id           String       @id @default(uuid()) @db.Uuid
   itemId       String       @db.Uuid
@@ -312,14 +359,15 @@ model InboundOrder {
 model InboundOrderItem {
   id              String    @id @default(uuid()) @db.Uuid
   orderId         String    @db.Uuid
-  inventoryItemId String    @db.Uuid
-  barcode         String
+  inventoryItemId String?   @db.Uuid
+  barcode         String?
   goodsId         String    @db.Uuid
+  quantity        Int       @default(1)
   productionDate  DateTime? @db.Date
   shelfLifeDate   DateTime? @db.Date
 
   order         InboundOrder @relation(fields: [orderId], references: [id])
-  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id])
   goods         Goods        @relation(fields: [goodsId], references: [id])
 
   @@index([barcode])

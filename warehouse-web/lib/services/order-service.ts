@@ -45,7 +45,8 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
   return [
     ...inboundOrders.map((order): OrderSummary => {
       const location = `${order.warehouse.name} / ${order.location.name}`;
-      const barcodes = order.items.map((item) => item.barcode);
+      const barcodes = order.items.map((item) => item.barcode).filter((barcode): barcode is string => Boolean(barcode));
+      const itemCount = order.items.reduce((sum, item) => sum + item.quantity, 0);
       return {
         id: order.id,
         orderNo: order.orderNo,
@@ -55,8 +56,8 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
         counterparty: order.source === "TERMINAL_RETURN" ? order.terminalStore?.name ?? "终端店铺" : "厂家到货",
         operator: order.operatorName,
         createdAt: formatDateTime(order.createdAt),
-        itemCount: order.items.length,
-        goodsSummary: summarizeGoods(order.items.map((item) => item.goods.name)),
+        itemCount,
+        goodsSummary: summarizeGoodsQuantities(order.items.map((item) => ({ name: item.goods.name, quantity: item.quantity }))),
         barcodePreview: summarizeBarcodes(barcodes),
         barcodes
       };
@@ -144,12 +145,21 @@ function summarizeGoods(names: string[]) {
     .join("、");
 }
 
+function summarizeGoodsQuantities(items: Array<{ name: string; quantity: number }>) {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.name, (counts.get(item.name) ?? 0) + item.quantity);
+  return Array.from(counts.entries())
+    .map(([name, count]) => `${name} x${count}`)
+    .join("、");
+}
+
 function summarizeSalespeople(names: string[]) {
   const uniqueNames = Array.from(new Set(names));
   return uniqueNames.length > 0 ? `原销售人员：${uniqueNames.join("、")}` : "原销售人员：未知";
 }
 
 function summarizeBarcodes(barcodes: string[]) {
+  if (barcodes.length === 0) return "无条码";
   if (barcodes.length <= 3) return barcodes.join("、");
   return `${barcodes.slice(0, 3).join("、")} 等 ${barcodes.length} 件`;
 }

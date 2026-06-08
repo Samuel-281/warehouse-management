@@ -9,6 +9,7 @@ import type {
   StockMovement,
   TerminalStore,
   Warehouse,
+  WarehouseStock,
   WarehouseState
 } from "@/lib/types";
 
@@ -82,6 +83,14 @@ type DbStockMovement = {
   note: string;
 };
 
+type DbWarehouseStock = {
+  id: string;
+  warehouseId: string;
+  goodsId: string;
+  quantity: number;
+  lastChangedAt: Date;
+};
+
 export type CreateGoodsInput = {
   code: string;
   name: string;
@@ -128,12 +137,13 @@ export type UpdateTerminalStoreInput = Partial<CreateTerminalStoreInput> & {
 
 export async function listMasterData(): Promise<WarehouseState> {
   const prisma = getPrisma();
-  const [goods, warehouses, locations, salespeople, terminalStores, movements] = await Promise.all([
+  const [goods, warehouses, locations, salespeople, terminalStores, warehouseStocks, movements] = await Promise.all([
     prisma.goods.findMany({ orderBy: { code: "asc" } }),
     prisma.warehouse.findMany({ orderBy: { code: "asc" } }),
     prisma.storageLocation.findMany({ orderBy: [{ warehouseId: "asc" }, { code: "asc" }] }),
     prisma.salesperson.findMany({ orderBy: { code: "asc" } }),
     prisma.terminalStore.findMany({ orderBy: { name: "asc" } }),
+    prisma.warehouseStock.findMany({ orderBy: [{ warehouseId: "asc" }, { goodsId: "asc" }] }),
     prisma.stockMovement.findMany({ orderBy: { occurredAt: "desc" }, take: 8 })
   ]);
 
@@ -143,6 +153,7 @@ export async function listMasterData(): Promise<WarehouseState> {
     locations: locations.map(mapStorageLocation),
     salespeople: salespeople.map(mapSalesperson),
     terminalStores: terminalStores.map(mapTerminalStore),
+    warehouseStocks: warehouseStocks.map(mapWarehouseStock),
     inventoryItems: [],
     movements: movements.map(mapStockMovement)
   };
@@ -207,15 +218,18 @@ export async function updateGoods(id: string, input: UpdateGoodsInput) {
 export async function deleteGoods(id: string) {
   assertRequired(id, "货物");
   const prisma = getPrisma();
-  const [inventoryCount, movementCount, inboundCount, outboundCount, salesReturnCount] = await Promise.all([
+  const [inventoryCount, stockCount, stockMovementCount, movementCount, inboundCount, outboundCount, salesReturnCount] =
+    await Promise.all([
     prisma.inventoryItem.count({ where: { goodsId: id } }),
+    prisma.warehouseStock.count({ where: { goodsId: id } }),
+    prisma.warehouseStockMovement.count({ where: { goodsId: id } }),
     prisma.stockMovement.count({ where: { goodsId: id } }),
     prisma.inboundOrderItem.count({ where: { goodsId: id } }),
     prisma.outboundOrderItem.count({ where: { goodsId: id } }),
     prisma.salesReturnOrderItem.count({ where: { goodsId: id } })
   ]);
   assertNoReferences(
-    inventoryCount + movementCount + inboundCount + outboundCount + salesReturnCount,
+    inventoryCount + stockCount + stockMovementCount + movementCount + inboundCount + outboundCount + salesReturnCount,
     "该货物已被库存、单据或流水引用，不能直接删除，请改为停用"
   );
 
@@ -298,6 +312,8 @@ export async function deleteWarehouse(id: string) {
     targetOutboundCount,
     salesReturnCount,
     locationInventoryCount,
+    stockCount,
+    stockMovementCount,
     locationInboundCount,
     locationOutboundCount,
     locationSalesReturnCount
@@ -308,6 +324,8 @@ export async function deleteWarehouse(id: string) {
     prisma.outboundOrder.count({ where: { targetWarehouseId: id } }),
     prisma.salesReturnOrder.count({ where: { returnWarehouseId: id } }),
     prisma.inventoryItem.count({ where: { location: { warehouseId: id } } }),
+    prisma.warehouseStock.count({ where: { warehouseId: id } }),
+    prisma.warehouseStockMovement.count({ where: { warehouseId: id } }),
     prisma.inboundOrder.count({ where: { location: { warehouseId: id } } }),
     prisma.outboundOrder.count({ where: { targetLocation: { warehouseId: id } } }),
     prisma.salesReturnOrder.count({ where: { returnLocation: { warehouseId: id } } })
@@ -319,6 +337,8 @@ export async function deleteWarehouse(id: string) {
       targetOutboundCount +
       salesReturnCount +
       locationInventoryCount +
+      stockCount +
+      stockMovementCount +
       locationInboundCount +
       locationOutboundCount +
       locationSalesReturnCount,
@@ -578,5 +598,15 @@ function mapStockMovement(movement: DbStockMovement): StockMovement {
     operator: movement.operatorName,
     occurredAt: formatDateTime(movement.occurredAt),
     note: movement.note
+  };
+}
+
+function mapWarehouseStock(stock: DbWarehouseStock): WarehouseStock {
+  return {
+    id: stock.id,
+    warehouseId: stock.warehouseId,
+    goodsId: stock.goodsId,
+    quantity: stock.quantity,
+    lastChangedAt: formatDateTime(stock.lastChangedAt)
   };
 }

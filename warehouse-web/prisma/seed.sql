@@ -143,6 +143,24 @@ VALUES
   )
 ON CONFLICT (barcode) DO NOTHING;
 
+INSERT INTO warehouse_stocks ("warehouseId", "goodsId", quantity, "lastChangedAt", "createdAt", "updatedAt")
+SELECT
+  "warehouseId",
+  "goodsId",
+  COUNT(*)::INTEGER AS quantity,
+  MAX("lastMovedAt") AS "lastChangedAt",
+  now(),
+  now()
+FROM inventory_items
+WHERE "ownerType" = 'WAREHOUSE'
+  AND "warehouseId" IS NOT NULL
+GROUP BY "warehouseId", "goodsId"
+ON CONFLICT ("warehouseId", "goodsId")
+DO UPDATE SET
+  quantity = EXCLUDED.quantity,
+  "lastChangedAt" = EXCLUDED."lastChangedAt",
+  "updatedAt" = now();
+
 INSERT INTO stock_movements (
   id, "itemId", barcode, "goodsId", type, "fromLabel", "toLabel", "operatorId", "operatorName", "occurredAt", note
 )
