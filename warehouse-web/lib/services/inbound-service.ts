@@ -42,12 +42,13 @@ export type SubmitInboundInput = {
   terminalStoreId?: string;
   productionDate?: string;
   quantity?: number;
-  barcodes: string[];
+  barcodes?: string[];
   operatorName: string;
 };
 
 export async function submitInbound(input: SubmitInboundInput) {
-  const barcodes = Array.from(new Set(input.barcodes.map((barcode) => barcode.trim()).filter(Boolean)));
+  const rawBarcodes = Array.isArray(input.barcodes) ? input.barcodes : [];
+  const barcodes = Array.from(new Set(rawBarcodes.map((barcode) => barcode.trim()).filter(Boolean)));
   const quantity = normalizeQuantity(input.quantity ?? (input.source === "terminal_return" ? barcodes.length : 0));
 
   if (input.source === "factory" && quantity <= 0) {
@@ -181,10 +182,7 @@ export async function submitInbound(input: SubmitInboundInput) {
           toLabel,
           operatorName: input.operatorName,
           occurredAt: time,
-          note:
-            input.source === "factory"
-              ? "厂家到货入库"
-              : `终端店铺退换货入库，生产日期 ${input.productionDate}`
+          note: `终端店铺退换货入库，生产日期 ${input.productionDate}`
         }
       });
 

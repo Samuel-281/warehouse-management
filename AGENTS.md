@@ -26,6 +26,23 @@ The current product state is:
 8. The desktop app has been stress-tested with large inventory counts; future list pages should avoid loading unbounded records into the browser.
 9. Warehouse master data is now single-level. Do not require a main warehouse before creating a warehouse.
 
+## Web 1.0 Current Business Model
+
+The desktop web 1.0 model is now a double-ledger model:
+
+1. Warehouse stock is quantity-based: each `warehouse + goods` pair has a current quantity.
+2. Barcode tracking is traceability-based: only goods that have passed through scanning workflows need an `inventory_items` barcode record.
+3. Factory arrival inbound does not scan barcodes. It records warehouse, goods, and quantity, then increases the warehouse stock quantity ledger.
+4. Scanned outbound is the unified outbound entry. The operator selects source warehouse, goods, destination type, and barcodes. Destination type can be salesperson or warehouse.
+5. When scanned outbound goes to a salesperson, source warehouse stock decreases and the scanned barcodes become traceable under that salesperson.
+6. When scanned outbound goes to another warehouse, source warehouse stock decreases, target warehouse stock increases, and the scanned barcodes become traceable under the target warehouse.
+7. Sales return is an inbound branch. The operator selects return warehouse and scans barcodes. The system detects the original salesperson from barcode ownership; the operator does not manually select a salesperson.
+8. Terminal store return/exchange is also an inbound branch. It records return warehouse, terminal store, goods, quantity, production date, and barcodes.
+9. Terminal return/exchange creates a barcode record when the scanned barcode does not exist, auto-returns salesperson-owned barcodes to the warehouse, and rejects barcodes already in a warehouse.
+10. Do not display or design around "tracked in-warehouse quantity" versus "untracked quantity"; the user only wants to see warehouse stock quantity and separately query traceable barcodes.
+
+Older documentation may still mention the previous prototype model where every inventory unit depended on a barcode record. Treat this Web 1.0 business model as the source of truth unless the user explicitly changes it.
+
 When handling future requests, be careful not to reintroduce demo data during production maintenance operations unless the user explicitly asks for a demo/testing database.
 
 ## Current Artifacts
