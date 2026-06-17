@@ -16,7 +16,7 @@ export async function POST(request: Request) {
       targetType: "OUTBOUND_ORDER",
       targetId: result.orderId,
       result: "SUCCESS",
-      detail: `barcodes=${result.items.length}`
+      detail: `lines=${input.lines?.length ?? 1};barcodes=${result.items.length}`
     });
     return ok(result, { status: 201 });
   } catch (error) {

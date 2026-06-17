@@ -37,6 +37,18 @@ type DbStockMovement = {
   note: string;
 };
 
+export type SubmitOutboundLineInput = {
+  goodsId: string;
+  targetQuantity?: number;
+  barcodes: string[];
+};
+
+type NormalizedOutboundLine = {
+  goodsId: string;
+  targetQuantity?: number;
+  barcodes: string[];
+};
+
 export type SubmitOutboundInput = {
   type: OutboundType;
   sourceWarehouseId: string;
@@ -44,28 +56,30 @@ export type SubmitOutboundInput = {
   targetLocationId?: string;
   salespersonId?: string;
   goodsId?: string;
-  barcodes: string[];
+  barcodes?: string[];
+  lines?: SubmitOutboundLineInput[];
   operatorName: string;
 };
 
 export async function submitOutbound(input: SubmitOutboundInput) {
-  const barcodes = Array.from(new Set(input.barcodes.map((barcode) => barcode.trim()).filter(Boolean)));
+  const lines = normalizeOutboundLines(input);
+  const barcodes = lines.flatMap((line) => line.barcodes);
 
   if (barcodes.length === 0) {
     throw new Error("请先扫描或录入条码");
   }
-  if (!input.goodsId) {
-    throw new Error("扫码出库必须选择货物");
-  }
 
   const prisma = getPrisma();
   return prisma.$transaction(async (tx) => {
-    const [sourceWarehouse, goods] = await Promise.all([
+    const goodsIds = Array.from(new Set(lines.map((line) => line.goodsId)));
+    const [sourceWarehouse, goodsRecords] = await Promise.all([
       tx.warehouse.findUnique({ where: { id: input.sourceWarehouseId } }),
-      tx.goods.findUnique({ where: { id: input.goodsId as string } })
+      tx.goods.findMany({ where: { id: { in: goodsIds } } })
     ]);
     if (!sourceWarehouse) throw new Error("请选择有效的出库仓库");
-    if (!goods) throw new Error("请选择有效的货物");
+    const goodsById = new Map(goodsRecords.map((goods) => [goods.id, goods]));
+    const missingGoodsId = goodsIds.find((goodsId) => !goodsById.has(goodsId));
+    if (missingGoodsId) throw new Error("请选择有效的货物");
     const time = new Date();
 
     const sourceLocation = await tx.storageLocation.findFirst({
@@ -105,7 +119,8 @@ export async function submitOutbound(input: SubmitOutboundInput) {
       orderBy: { barcode: "asc" }
     });
     const itemByBarcode = new Map(items.map((item) => [item.barcode, item]));
-    const goodsMismatch = items.find((item) => item.goodsId !== goods.id);
+    const lineByBarcode = new Map(lines.flatMap((line) => line.barcodes.map((barcode) => [barcode, line] as const)));
+    const goodsMismatch = items.find((item) => lineByBarcode.get(item.barcode)?.goodsId !== item.goodsId);
     if (goodsMismatch) throw new Error(`条码 ${goodsMismatch.barcode} 已绑定其他货物，不能按当前货物出库`);
     const invalid = items.find(
       (item) => item.ownerType !== "WAREHOUSE" || item.warehouseId !== sourceWarehouse.id
@@ -124,112 +139,169 @@ export async function submitOutbound(input: SubmitOutboundInput) {
         createdAt: time
       }
     });
-    await adjustWarehouseStock(tx, {
-      warehouseId: sourceWarehouse.id,
-      goodsId: goods.id,
-      quantityChange: -barcodes.length,
-      type: destinationType === "transfer" ? "TRANSFER" : "SALES_OUTBOUND",
-      orderKind: "outbound",
-      orderId: order.id,
-      counterparty:
-        destinationType === "transfer" ? targetWarehouse?.name ?? "目标仓库" : `销售人员：${salesperson?.name ?? "未知"}`,
-      operatorName: input.operatorName,
-      occurredAt: time,
-      note: destinationType === "transfer" ? "扫码出库发往仓库" : "扫码出库分配销售"
-    });
-    if (destinationType === "transfer" && targetWarehouse) {
+
+    for (const line of lines) {
+      const goods = goodsById.get(line.goodsId);
+      if (!goods) throw new Error("请选择有效的货物");
       await adjustWarehouseStock(tx, {
-        warehouseId: targetWarehouse.id,
+        warehouseId: sourceWarehouse.id,
         goodsId: goods.id,
-        quantityChange: barcodes.length,
-        type: "TRANSFER",
+        quantityChange: -line.barcodes.length,
+        type: destinationType === "transfer" ? "TRANSFER" : "SALES_OUTBOUND",
         orderKind: "outbound",
         orderId: order.id,
-        counterparty: sourceWarehouse.name,
+        counterparty:
+          destinationType === "transfer" ? targetWarehouse?.name ?? "目标仓库" : `销售人员：${salesperson?.name ?? "未知"}`,
         operatorName: input.operatorName,
         occurredAt: time,
-        note: "扫码出库到达仓库"
+        note: destinationType === "transfer" ? "扫码出库发往仓库" : "扫码出库分配销售"
       });
+      if (destinationType === "transfer" && targetWarehouse) {
+        await adjustWarehouseStock(tx, {
+          warehouseId: targetWarehouse.id,
+          goodsId: goods.id,
+          quantityChange: line.barcodes.length,
+          type: "TRANSFER",
+          orderKind: "outbound",
+          orderId: order.id,
+          counterparty: sourceWarehouse.name,
+          operatorName: input.operatorName,
+          occurredAt: time,
+          note: "扫码出库到达仓库"
+        });
+      }
     }
 
     const updatedItems: InventoryItem[] = [];
     const movements: StockMovement[] = [];
 
-    for (const barcode of barcodes) {
-      const item =
-        itemByBarcode.get(barcode) ??
-        (await tx.inventoryItem.create({
-          data: {
-            barcode,
-            goodsId: goods.id,
-            ownerType: "WAREHOUSE",
-            warehouseId: sourceWarehouse.id,
-            locationId: sourceLocation.id,
-            status: "IN_STOCK",
-            productionDate: null,
-            shelfLifeDate: null,
-            inboundSource: "FACTORY",
-            lastMovedAt: time
-          }
-        }));
+    for (const line of lines) {
+      const goods = goodsById.get(line.goodsId);
+      if (!goods) throw new Error("请选择有效的货物");
 
-      const fromLabel = await warehouseLabel(tx, item.warehouseId, item.locationId);
-      const toLabel =
-        destinationType === "transfer"
-          ? `${targetWarehouse?.name ?? "目标仓库"} / ${targetLocation?.name ?? "默认库位"}`
-          : `销售人员：${salesperson?.name ?? "未知"}`;
+      for (const barcode of line.barcodes) {
+        const item =
+          itemByBarcode.get(barcode) ??
+          (await tx.inventoryItem.create({
+            data: {
+              barcode,
+              goodsId: goods.id,
+              ownerType: "WAREHOUSE",
+              warehouseId: sourceWarehouse.id,
+              locationId: sourceLocation.id,
+              status: "IN_STOCK",
+              productionDate: null,
+              shelfLifeDate: null,
+              inboundSource: "FACTORY",
+              lastMovedAt: time
+            }
+          }));
 
-      const updated = await tx.inventoryItem.update({
-        where: { id: item.id },
-        data:
+        const fromLabel = await warehouseLabel(tx, item.warehouseId, item.locationId);
+        const toLabel =
           destinationType === "transfer"
-            ? {
-                ownerType: "WAREHOUSE",
-                warehouseId: targetWarehouse?.id,
-                locationId: targetLocation?.id,
-                salespersonId: null,
-                status: "IN_STOCK",
-                lastMovedAt: time
-              }
-            : {
-                ownerType: "SALESPERSON",
-                warehouseId: null,
-                locationId: null,
-                salespersonId: salesperson?.id,
-                status: "WITH_SALESPERSON",
-                lastMovedAt: time
-              }
-      });
+            ? `${targetWarehouse?.name ?? "目标仓库"} / ${targetLocation?.name ?? "默认库位"}`
+            : `销售人员：${salesperson?.name ?? "未知"}`;
 
-      const movement = await tx.stockMovement.create({
-        data: {
-          itemId: updated.id,
-          barcode: updated.barcode,
-          goodsId: updated.goodsId,
-          type: destinationType === "transfer" ? "TRANSFER" : "SALES_OUTBOUND",
-          fromLabel,
-          toLabel,
-          operatorName: input.operatorName,
-          occurredAt: time,
-          note: destinationType === "transfer" ? "扫码出库发往仓库" : "扫码出库分配销售"
-        }
-      });
+        const updated = await tx.inventoryItem.update({
+          where: { id: item.id },
+          data:
+            destinationType === "transfer"
+              ? {
+                  ownerType: "WAREHOUSE",
+                  warehouseId: targetWarehouse?.id,
+                  locationId: targetLocation?.id,
+                  salespersonId: null,
+                  status: "IN_STOCK",
+                  lastMovedAt: time
+                }
+              : {
+                  ownerType: "SALESPERSON",
+                  warehouseId: null,
+                  locationId: null,
+                  salespersonId: salesperson?.id,
+                  status: "WITH_SALESPERSON",
+                  lastMovedAt: time
+                }
+        });
 
-      await tx.outboundOrderItem.create({
-        data: {
-          orderId: order.id,
-          inventoryItemId: updated.id,
-          barcode: updated.barcode,
-          goodsId: updated.goodsId
-        }
-      });
+        const movement = await tx.stockMovement.create({
+          data: {
+            itemId: updated.id,
+            barcode: updated.barcode,
+            goodsId: updated.goodsId,
+            type: destinationType === "transfer" ? "TRANSFER" : "SALES_OUTBOUND",
+            fromLabel,
+            toLabel,
+            operatorName: input.operatorName,
+            occurredAt: time,
+            note: destinationType === "transfer" ? "扫码出库发往仓库" : "扫码出库分配销售"
+          }
+        });
 
-      updatedItems.push(mapInventoryItem(updated));
-      movements.push(mapStockMovement(movement));
+        await tx.outboundOrderItem.create({
+          data: {
+            orderId: order.id,
+            inventoryItemId: updated.id,
+            barcode: updated.barcode,
+            goodsId: updated.goodsId
+          }
+        });
+
+        updatedItems.push(mapInventoryItem(updated));
+        movements.push(mapStockMovement(movement));
+      }
     }
 
     return { orderId: order.id, items: updatedItems, movements };
   });
+}
+
+function normalizeOutboundLines(input: SubmitOutboundInput): NormalizedOutboundLine[] {
+  const rawLines =
+    Array.isArray(input.lines) && input.lines.length > 0
+      ? input.lines
+      : input.goodsId
+        ? [{ goodsId: input.goodsId, barcodes: input.barcodes ?? [] }]
+        : [];
+
+  const seenBarcodes = new Set<string>();
+  const normalized: NormalizedOutboundLine[] = [];
+
+  for (const rawLine of rawLines) {
+    const goodsId = rawLine.goodsId?.trim();
+    if (!goodsId) {
+      throw new Error("每个出库货品行都必须选择货物");
+    }
+
+    const lineBarcodes = Array.from(new Set((rawLine.barcodes ?? []).map((barcode) => barcode.trim()).filter(Boolean)));
+    const targetQuantity = normalizeTargetQuantity(rawLine.targetQuantity);
+
+    if (targetQuantity !== undefined && lineBarcodes.length !== targetQuantity) {
+      throw new Error(`货品行目标数量为 ${targetQuantity} 件，当前已扫 ${lineBarcodes.length} 件`);
+    }
+
+    for (const barcode of lineBarcodes) {
+      if (seenBarcodes.has(barcode)) {
+        throw new Error(`条码 ${barcode} 在多个货品行中重复`);
+      }
+      seenBarcodes.add(barcode);
+    }
+
+    if (lineBarcodes.length > 0) {
+      normalized.push({ goodsId, targetQuantity, barcodes: lineBarcodes });
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeTargetQuantity(quantity: number | undefined) {
+  if (quantity === undefined || quantity === null) return undefined;
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isInteger(quantity)) {
+    throw new Error("目标数量必须为正整数");
+  }
+  return quantity;
 }
 
 function makeOrderNo(prefix: string) {
