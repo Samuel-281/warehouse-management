@@ -191,6 +191,25 @@ export type OperationLog = {
   createdAt: string;
 };
 
+export type ConsistencyAuditIssue = {
+  code: string;
+  severity: "error" | "warning" | "info";
+  entityType: string;
+  entityId: string;
+  summary: string;
+  suggestion: string;
+};
+
+export type ConsistencyAuditResult = {
+  generatedAt: string;
+  healthy: boolean;
+  total: number;
+  truncated: boolean;
+  severityCounts: { error: number; warning: number; info: number };
+  categoryCounts: Record<string, number>;
+  issues: ConsistencyAuditIssue[];
+};
+
 export type OrderKind = "inbound" | "outbound" | "sales_return";
 
 export type OrderSummary = {

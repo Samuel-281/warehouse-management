@@ -295,3 +295,4 @@ The July 2026 cleanup established these additional invariants:
 9. Integration tests use a local database whose name ends in `_test`; test tooling must refuse remote database hosts.
 10. Web business submissions use an optional `clientRequestId` for idempotency. Existing PDA clients may omit it, but new clients should retain the same value while retrying an uncertain submission.
 11. Users may change their own password. Super administrators may edit, enable, disable, and reset other accounts, but the system must retain at least one enabled super administrator.
+12. The super-administrator consistency audit is diagnostic only. It must not automatically repair quantity balances, barcode ownership, movements, or voided orders.

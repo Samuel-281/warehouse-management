@@ -57,6 +57,7 @@ import { BarcodeCollector, type BarcodeReview } from "@/components/warehouse/Bar
 import { hasAnyRole } from "@/lib/role-utils";
 import type {
   CurrentUser,
+  ConsistencyAuditResult,
   InboundSource,
   InventoryItem,
   InventorySummary,
@@ -3347,6 +3348,39 @@ function SalesReturnView(props: {
     </div>
   );
 }
+function AuditSummary({
+  label,
+  value,
+  tone
+}: {
+  label: string;
+  value: string;
+  tone: "success" | "error" | "warning" | "neutral";
+}) {
+  const toneClass = {
+    success: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    error: "border-red-200 bg-red-50 text-red-800",
+    warning: "border-amber-200 bg-amber-50 text-amber-800",
+    neutral: "border-slate-200 bg-slate-50 text-slate-700"
+  }[tone];
+  return (
+    <div className={`rounded-md border px-3 py-3 ${toneClass}`}>
+      <p className="text-xs">{label}</p>
+      <p className="mt-1 text-lg font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function AuditSeverity({ severity }: { severity: "error" | "warning" | "info" }) {
+  const styles = {
+    error: "border-red-200 bg-red-50 text-red-700",
+    warning: "border-amber-200 bg-amber-50 text-amber-700",
+    info: "border-slate-200 bg-slate-50 text-slate-600"
+  };
+  const labels = { error: "错误", warning: "警告", info: "提示" };
+  return <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold ${styles[severity]}`}>{labels[severity]}</span>;
+}
+
 function ChangePasswordDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -3440,6 +3474,8 @@ function SystemMaintenanceView({
   const [submitting, setSubmitting] = useState(false);
   const [logs, setLogs] = useState<OperationLog[]>([]);
   const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [audit, setAudit] = useState<ConsistencyAuditResult | null>(null);
+  const [auditBusy, setAuditBusy] = useState(false);
   const [editingUser, setEditingUser] = useState<ManagedUser | null>(null);
   const [resettingPasswordFor, setResettingPasswordFor] = useState<ManagedUser | null>(null);
   const [userDraft, setUserDraft] = useState({
@@ -3506,6 +3542,25 @@ function SystemMaintenanceView({
       setLogs(await getJson<OperationLog[]>("/api/operation-logs"));
     } catch (error) {
       throw new Error(apiErrorMessage(error, "重置密码失败"));
+    }
+  }
+
+  async function runAudit() {
+    setAuditBusy(true);
+    try {
+      const result = await getJson<ConsistencyAuditResult>("/api/system/consistency-audit");
+      setAudit(result);
+      showToast({
+        tone: result.healthy ? "success" : "error",
+        message: result.healthy
+          ? `一致性检查完成，没有发现错误${result.severityCounts.info ? `，有 ${result.severityCounts.info} 条历史提示` : ""}`
+          : `一致性检查发现 ${result.severityCounts.error} 条错误，请查看检查结果`
+      });
+      setLogs(await getJson<OperationLog[]>("/api/operation-logs"));
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "一致性检查失败") });
+    } finally {
+      setAuditBusy(false);
     }
   }
 
@@ -3643,6 +3698,64 @@ function SystemMaintenanceView({
           </button>
         </section>
       </div>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
+          <div>
+            <SectionHeader icon={ShieldCheck} title="数据一致性检查" compact />
+            <p className="mt-1 text-xs text-muted">只读检查数量账、条码归属、流水和作废单据，不会自动修改数据。</p>
+          </div>
+          <button className="secondary-button" onClick={() => void runAudit()} disabled={auditBusy}>
+            <RotateCcw className={`h-4 w-4 ${auditBusy ? "animate-spin" : ""}`} />
+            {auditBusy ? "正在检查" : "开始检查"}
+          </button>
+        </div>
+        {audit ? (
+          <div>
+            <div className="grid gap-3 border-b border-slate-200 p-4 sm:grid-cols-4">
+              <AuditSummary label="检查结论" value={audit.healthy ? "账目正常" : "发现异常"} tone={audit.healthy ? "success" : "error"} />
+              <AuditSummary label="错误" value={`${audit.severityCounts.error} 条`} tone={audit.severityCounts.error ? "error" : "neutral"} />
+              <AuditSummary label="警告" value={`${audit.severityCounts.warning} 条`} tone={audit.severityCounts.warning ? "warning" : "neutral"} />
+              <AuditSummary label="历史提示" value={`${audit.severityCounts.info} 条`} tone="neutral" />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted">
+              <span>检查时间：{new Date(audit.generatedAt).toLocaleString("zh-CN", { hour12: false })}</span>
+              <span>{audit.truncated ? "问题较多，仅展示前 500 条" : `共 ${audit.total} 条检查结果`}</span>
+            </div>
+            {audit.issues.length > 0 ? (
+              <div className="max-h-[460px] overflow-auto border-t border-slate-200">
+                <table className="w-full min-w-[900px]">
+                  <thead className="table-head sticky top-0 z-[1]">
+                    <tr>
+                      <th className="px-4 py-3">级别</th>
+                      <th className="px-4 py-3">问题</th>
+                      <th className="px-4 py-3">对象</th>
+                      <th className="px-4 py-3">处理建议</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {audit.issues.map((issue, index) => (
+                      <tr key={`${issue.code}-${issue.entityType}-${issue.entityId}-${index}`}>
+                        <td className="table-cell"><AuditSeverity severity={issue.severity} /></td>
+                        <td className="table-cell">
+                          <p className="font-semibold text-ink">{issue.summary}</p>
+                          <p className="mt-1 font-mono text-xs text-muted">{issue.code}</p>
+                        </td>
+                        <td className="table-cell font-mono text-xs text-slate-600">{issue.entityType}<br />{issue.entityId}</td>
+                        <td className="table-cell text-slate-600">{issue.suggestion}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-4"><EmptyState icon={ShieldCheck} title="没有发现一致性问题" detail="当前数量余额、条码归属、流水和作废单据相互一致。" /></div>
+            )}
+          </div>
+        ) : (
+          <div className="p-4 text-sm text-muted">尚未执行检查。正式更新或恢复数据库后建议运行一次。</div>
+        )}
+      </section>
 
       <section className="panel overflow-hidden">
         <SectionHeader icon={ClipboardList} title="最近操作日志" />

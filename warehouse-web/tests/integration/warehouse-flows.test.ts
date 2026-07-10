@@ -4,6 +4,7 @@ import { after, beforeEach, test } from "node:test";
 
 import { getPrisma } from "@/lib/db";
 import { correctBarcode, writeOffBarcode } from "@/lib/services/barcode-management-service";
+import { runConsistencyAudit } from "@/lib/services/consistency-audit-service";
 import { submitInbound } from "@/lib/services/inbound-service";
 import { getInventoryDetail, listInventory } from "@/lib/services/inventory-query-service";
 import { listOrderSummaries } from "@/lib/services/order-service";
@@ -14,6 +15,7 @@ import { adjustStockManually } from "@/lib/services/stock-adjustment-service";
 import { changeOwnPassword, createUser, resetUserPassword, updateUser } from "@/lib/services/user-service";
 import { verifyPassword } from "@/lib/password";
 import type { CurrentUser } from "@/lib/types";
+import { GET as getConsistencyAudit } from "@/app/api/system/consistency-audit/route";
 
 const prisma = getPrisma();
 const operatorName = "集成测试管理员";
@@ -311,6 +313,45 @@ test("账号密码、角色和启停状态按安全规则维护", async () => {
     ),
     /至少一个启用的超级管理员/
   );
+});
+
+test("一致性检查区分错误和历史基线提示，并限制普通账号访问", async () => {
+  await factoryInbound(10);
+  let audit = await runConsistencyAudit();
+  assert.equal(audit.healthy, true);
+  assert.equal(audit.severityCounts.error, 0);
+
+  await prisma.warehouseStock.create({
+    data: { warehouseId: context.targetWarehouseId, goodsId: context.goodsId, quantity: 5 }
+  });
+  audit = await runConsistencyAudit();
+  assert.equal(audit.healthy, true, "只有历史基线提示时不应判定账目故障");
+  assert.equal(audit.categoryCounts.STOCK_MISSING_BASELINE, 1);
+
+  await prisma.warehouseStock.update({
+    where: { warehouseId_goodsId: { warehouseId: context.sourceWarehouseId, goodsId: context.goodsId } },
+    data: { quantity: { increment: 1 } }
+  });
+  audit = await runConsistencyAudit();
+  assert.equal(audit.healthy, false);
+  assert.equal(audit.categoryCounts.STOCK_BALANCE_MISMATCH, 1);
+
+  const viewerRole = await prisma.role.findUniqueOrThrow({ where: { code: "INVENTORY_VIEWER" } });
+  const viewer = await prisma.user.create({
+    data: {
+      username: "audit_viewer",
+      displayName: "审计只读用户",
+      passwordHash: "viewer-password",
+      roles: { create: { roleId: viewerRole.id } },
+      sessions: { create: { token: "audit-viewer-session", expiresAt: new Date(Date.now() + 60_000) } }
+    }
+  });
+  const response = await getConsistencyAudit(new Request("http://localhost/api/system/consistency-audit", {
+    headers: { cookie: "warehouse_session=audit-viewer-session" }
+  }));
+  assert.equal(response.status, 403);
+  assert.equal(await prisma.operationLog.count({ where: { targetType: "SYSTEM" } }), 1);
+  assert.ok(viewer.id);
 });
 
 test("500 条批量出库与精确查询达到本地性能门槛", async () => {
