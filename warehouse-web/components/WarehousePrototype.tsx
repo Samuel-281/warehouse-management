@@ -9,10 +9,8 @@ import {
   Building2,
   Check,
   ClipboardList,
-  Download,
   GripVertical,
   Home,
-  Info,
   LogIn,
   LogOut,
   PackageCheck,
@@ -29,22 +27,42 @@ import {
   Warehouse,
   X
 } from "lucide-react";
-import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { initialState } from "@/lib/demo-data";
+import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ClientApiError,
+  apiErrorMessage,
+  deleteJson,
+  getJson,
+  postJson,
+  requestJson
+} from "@/lib/client-api";
+import {
+  ConfirmDialog,
+  ResultDialogBox,
+  ToastBox,
+  type ResultDialog
+} from "@/components/warehouse/FeedbackDialogs";
+import {
+  EmptyState,
+  FieldSelect,
+  ReadOnlyField,
+  SectionHeader,
+  StatusBadge
+} from "@/components/warehouse/CommonUi";
+import { OrdersView } from "@/components/warehouse/OrdersView";
+import { InventoryView, type InventoryFilters } from "@/components/warehouse/InventoryView";
+import { BarcodeCollector, type BarcodeReview } from "@/components/warehouse/BarcodeCollector";
 import { hasAnyRole } from "@/lib/role-utils";
 import type {
   CurrentUser,
   InboundSource,
-  InventoryDetailResult,
   InventoryItem,
-  InventoryListResult,
   InventorySummary,
   ManagedUser,
   OperationLog,
   OrderKind,
   OrderListResult,
   OrderStatus,
-  OrderSummary,
   OutboundType,
   StockMovement,
   Toast,
@@ -54,13 +72,9 @@ import type {
 } from "@/lib/types";
 import {
   addYears,
-  cloneInitialState,
   enabledLocationsForWarehouse,
   formatCategory,
   formatMovementType,
-  goodsLabel,
-  ownerLabel,
-  STORAGE_KEY,
   uniqueBarcodes
 } from "@/lib/warehouse-utils";
 
@@ -70,21 +84,7 @@ type InboundBranch = InboundSource | "sales_return";
 type ReturnBranch = "sales_return" | "terminal_return";
 
 type MasterDataPayload = WarehouseState;
-type InventoryOwnerScope = "all" | "warehouse" | "salesperson";
-type InventoryFilters = {
-  keyword: string;
-  ownerScope: InventoryOwnerScope;
-  warehouseId: string;
-  salespersonId: string;
-  goodsId: string;
-};
 type MasterCreateKey = "goods" | "warehouse" | "salesperson" | "store";
-type BarcodeReviewTone = "success" | "warning" | "error" | "neutral";
-type BarcodeReview = {
-  tone: BarcodeReviewTone;
-  label: string;
-  detail?: string;
-};
 type BarcodeReviewMap = Record<string, BarcodeReview>;
 type OperationCheck = {
   label: string;
@@ -99,60 +99,6 @@ type BarcodeValidationResult = {
   detail: string;
   item?: InventoryItem;
 };
-type ResultDialog = {
-  tone: "success" | "error";
-  title: string;
-  message: string;
-};
-
-type ApiResponse<T> = { data: T } | { error: string };
-
-class ClientApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number
-  ) {
-    super(message);
-    this.name = "ClientApiError";
-  }
-}
-
-function apiErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof ClientApiError) {
-    if (error.message) return error.message;
-    if (error.status === 401) return "登录状态已过期，请重新登录";
-    if (error.status === 403) return "当前账号没有该操作权限";
-  }
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify(body)
-  });
-  const payload = (await response.json()) as ApiResponse<T>;
-
-  if (!response.ok || !("data" in payload)) {
-    throw new ClientApiError("error" in payload ? payload.error : "操作失败", response.status);
-  }
-
-  return payload.data;
-}
-
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { credentials: "same-origin" });
-  const payload = (await response.json()) as ApiResponse<T>;
-
-  if (!response.ok || !("data" in payload)) {
-    throw new ClientApiError("error" in payload ? payload.error : "读取数据失败", response.status);
-  }
-
-  return payload.data;
-}
-
 function parseBarcodeInput(input: string) {
   return uniqueBarcodes(input.split(/[\s,，;；]+/));
 }
@@ -199,8 +145,6 @@ const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
 
 const operator = "仓库操作员";
 const resetConfirmationText = "确定重置";
-const pageSizeOptions = [20, 50, 100];
-
 const emptyInventorySummary: InventorySummary = {
   totalItems: 0,
   inStock: 0,
@@ -211,6 +155,17 @@ const emptyInventorySummary: InventorySummary = {
   warehouseCounts: [],
   salespersonCounts: [],
   recentMovements: []
+};
+
+const emptyWarehouseState: WarehouseState = {
+  goods: [],
+  warehouses: [],
+  locations: [],
+  salespeople: [],
+  terminalStores: [],
+  warehouseStocks: [],
+  inventoryItems: [],
+  movements: []
 };
 
 const roleLabels: Record<UserRoleCode, string> = {
@@ -230,13 +185,17 @@ export default function WarehousePrototype() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
-  const [state, setState] = useState<WarehouseState>(() => cloneInitialState(initialState));
+  const [state, setState] = useState<WarehouseState>(emptyWarehouseState);
   const [toast, setToast] = useState<Toast | null>(null);
   const [resultDialog, setResultDialog] = useState<ResultDialog | null>(null);
-  const [selectedBarcode, setSelectedBarcode] = useState("HJ202605290001");
-  const [masterDataSource, setMasterDataSource] = useState<"local" | "database">("local");
+  const [selectedBarcode, setSelectedBarcode] = useState("");
+  const [dataStatus, setDataStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [dataError, setDataError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [dashboardSummary, setDashboardSummary] = useState<InventorySummary>(emptyInventorySummary);
+  const toastTimerRef = useRef<number | null>(null);
+  const resultDialogTimerRef = useRef<number | null>(null);
+  const orderRequestRef = useRef(0);
 
   const [returnBranch, setReturnBranch] = useState<ReturnBranch>("sales_return");
   const [inboundWarehouseId, setInboundWarehouseId] = useState("wh-main");
@@ -305,13 +264,28 @@ export default function WarehousePrototype() {
   );
 
   const showToast = useCallback((nextToast: Toast) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     setToast(nextToast);
-    window.setTimeout(() => setToast(null), 3200);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 3200);
   }, []);
 
   const showResultDialog = useCallback((nextDialog: ResultDialog) => {
+    if (resultDialogTimerRef.current !== null) window.clearTimeout(resultDialogTimerRef.current);
     setResultDialog(nextDialog);
-    window.setTimeout(() => setResultDialog(null), 2600);
+    resultDialogTimerRef.current = window.setTimeout(() => {
+      setResultDialog(null);
+      resultDialogTimerRef.current = null;
+    }, 2600);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+      if (resultDialogTimerRef.current !== null) window.clearTimeout(resultDialogTimerRef.current);
+    };
   }, []);
 
   const handleRequestError = useCallback((error: unknown, fallback: string) => {
@@ -355,8 +329,8 @@ export default function WarehousePrototype() {
       }
       return "";
     });
-    setMasterDataSource("database");
-    window.localStorage.removeItem(STORAGE_KEY);
+    setDataStatus("ready");
+    setDataError("");
   }, []);
 
   const loadDashboardSummary = useCallback(async () => {
@@ -366,7 +340,8 @@ export default function WarehousePrototype() {
       setState((previous) => ({ ...previous, warehouseStocks: summary.warehouseStocks, movements: summary.recentMovements }));
       return summary;
     } catch (error) {
-      console.info(apiErrorMessage(error, "库存统计接口暂不可用"));
+      const message = apiErrorMessage(error, "库存统计接口暂不可用");
+      console.info(message);
       return null;
     }
   }, []);
@@ -375,39 +350,37 @@ export default function WarehousePrototype() {
     async (options: { preserveSelection?: boolean; notify?: boolean } = {}) => {
       setRefreshing(true);
       try {
-        const [masterData] = await Promise.all([
+        const [masterData, summary] = await Promise.all([
           getJson<WarehouseState>("/api/master-data"),
-          loadDashboardSummary()
+          getJson<InventorySummary>("/api/inventory/summary")
         ]);
         applyDatabaseState(masterData, { preserveSelection: options.preserveSelection ?? true });
+        setDashboardSummary(summary);
+        setState((previous) => ({ ...previous, warehouseStocks: summary.warehouseStocks, movements: summary.recentMovements }));
         if (options.notify) {
           showToast({ tone: "success", message: "已从数据库刷新基础资料与库存统计" });
         }
         return masterData;
       } catch (error) {
-        setMasterDataSource("local");
+        const message = handleRequestError(error, "数据库连接失败，请检查数据库和服务状态");
+        setDataStatus("error");
+        setDataError(message);
+        setState(emptyWarehouseState);
+        setDashboardSummary(emptyInventorySummary);
         if (options.notify) {
-          showToast({ tone: "error", message: handleRequestError(error, "刷新数据失败") });
+          showToast({ tone: "error", message });
         } else {
-          console.info(apiErrorMessage(error, "基础资料接口暂不可用"));
+          console.info(message);
         }
         return null;
       } finally {
         setRefreshing(false);
       }
     },
-    [applyDatabaseState, handleRequestError, loadDashboardSummary, showToast]
+    [applyDatabaseState, handleRequestError, showToast]
   );
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        setState(JSON.parse(stored) as WarehouseState);
-      } catch {
-        setState(cloneInitialState(initialState));
-      }
-    }
     setHydrated(true);
   }, []);
 
@@ -436,20 +409,17 @@ export default function WarehousePrototype() {
       })
       .catch((error) => {
         if (cancelled) return;
-        setMasterDataSource("local");
-        console.info(apiErrorMessage(error, "基础资料接口暂不可用"));
+        const message = handleRequestError(error, "数据库连接失败，请检查数据库和服务状态");
+        setDataStatus("error");
+        setDataError(message);
+        setState(emptyWarehouseState);
+        setDashboardSummary(emptyInventorySummary);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [applyDatabaseState, hydrated, loggedIn]);
-
-  useEffect(() => {
-    if (hydrated && masterDataSource === "local") {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    }
-  }, [hydrated, masterDataSource, state]);
+  }, [applyDatabaseState, handleRequestError, hydrated, loggedIn]);
 
   useEffect(() => {
     if (!allowedNavItems.some((item) => item.key === activeView)) {
@@ -502,6 +472,8 @@ export default function WarehousePrototype() {
     page: number;
     pageSize: number;
   }) => {
+    const requestId = orderRequestRef.current + 1;
+    orderRequestRef.current = requestId;
     setOrdersLoading(true);
     try {
       const params = new URLSearchParams({
@@ -511,11 +483,14 @@ export default function WarehousePrototype() {
         page: String(query.page),
         pageSize: String(query.pageSize)
       });
-      setOrderResult(await getJson<OrderListResult>(`/api/orders?${params.toString()}`));
+      const result = await getJson<OrderListResult>(`/api/orders?${params.toString()}`);
+      if (requestId === orderRequestRef.current) setOrderResult(result);
     } catch (error) {
-      showToast({ tone: "error", message: handleRequestError(error, "读取单据失败") });
+      if (requestId === orderRequestRef.current) {
+        showToast({ tone: "error", message: handleRequestError(error, "读取单据失败") });
+      }
     } finally {
-      setOrdersLoading(false);
+      if (requestId === orderRequestRef.current) setOrdersLoading(false);
     }
   }, [handleRequestError, showToast]);
 
@@ -541,15 +516,21 @@ export default function WarehousePrototype() {
     const candidates = parseBarcodeInput(input);
     if (candidates.length === 0) return;
 
+    const availableSlots = Math.max(0, 500 - currentList.length);
     const accepted = candidates.filter((barcode) => {
       if (currentList.includes(barcode)) return false;
       return true;
-    });
+    }).slice(0, availableSlots);
 
     if (accepted.length === 0) {
       showToast({
         tone: "error",
-        message: candidates.length === 1 ? "当前清单中已有该条码或条码已存在" : "没有可加入的条码"
+        message:
+          availableSlots === 0
+            ? "单次最多处理 500 条条码，请先提交当前清单"
+            : candidates.length === 1
+              ? "当前清单中已有该条码或条码已存在"
+              : "没有可加入的条码"
       });
       return;
     }
@@ -949,7 +930,7 @@ export default function WarehousePrototype() {
             <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
               <span>数据源</span>
               <span className="rounded border border-slate-200 bg-white px-2 py-1 text-slate-700">
-                {masterDataSource === "database" ? "PostgreSQL" : "本地数据"}
+                {dataStatus === "ready" ? "PostgreSQL" : dataStatus === "error" ? "连接异常" : "连接中"}
               </span>
             </div>
             <button className="secondary-button mt-3 w-full justify-center" onClick={logout}>
@@ -1004,7 +985,14 @@ export default function WarehousePrototype() {
         <div className="p-4 md:p-6">
           {toast ? <ToastBox toast={toast} /> : null}
           {resultDialog ? <ResultDialogBox dialog={resultDialog} onClose={() => setResultDialog(null)} /> : null}
-          {activeView === "dashboard" ? (
+          {dataStatus !== "ready" ? (
+            <DataUnavailablePanel
+              loading={dataStatus === "loading"}
+              message={dataError}
+              retry={() => void refreshWarehouseState({ preserveSelection: true })}
+            />
+          ) : null}
+          {dataStatus === "ready" && activeView === "dashboard" ? (
             <DashboardView
               summary={dashboardSummary}
               state={state}
@@ -1013,16 +1001,15 @@ export default function WarehousePrototype() {
               canOperateWarehouse={canOperateWarehouse}
             />
           ) : null}
-          {activeView === "masters" ? (
+          {dataStatus === "ready" && activeView === "masters" ? (
             <MastersView
               state={state}
               setState={setState}
               showToast={showToast}
-              masterDataSource={masterDataSource}
               canDeleteMasterData={canMaintainSystem}
             />
           ) : null}
-          {activeView === "inbound" ? (
+          {dataStatus === "ready" && activeView === "inbound" ? (
             <InboundView
               state={state}
               inboundBranch="factory"
@@ -1074,7 +1061,7 @@ export default function WarehousePrototype() {
               submitSalesReturn={submitSalesReturn}
             />
           ) : null}
-          {activeView === "outbound" ? (
+          {dataStatus === "ready" && activeView === "outbound" ? (
             <OutboundView
               state={state}
               inventorySummary={dashboardSummary}
@@ -1104,7 +1091,7 @@ export default function WarehousePrototype() {
               submitOutbound={submitOutbound}
             />
           ) : null}
-          {activeView === "return" ? (
+          {dataStatus === "ready" && activeView === "return" ? (
             returnBranch === "sales_return" ? (
               <SalesReturnView
                 state={state}
@@ -1188,7 +1175,7 @@ export default function WarehousePrototype() {
               />
             )
           ) : null}
-          {activeView === "orders" ? (
+          {dataStatus === "ready" && activeView === "orders" ? (
             <OrdersView
               orders={orderResult.items}
               result={orderResult}
@@ -1202,7 +1189,7 @@ export default function WarehousePrototype() {
               canDeleteOrders={canMaintainSystem}
             />
           ) : null}
-          {activeView === "inventory" ? (
+          {dataStatus === "ready" && activeView === "inventory" ? (
             <InventoryView
               state={state}
               filters={inventoryFilters}
@@ -1211,9 +1198,12 @@ export default function WarehousePrototype() {
               setSelectedBarcode={setSelectedBarcode}
               showToast={showToast}
               canDeleteInventory={canMaintainSystem}
+              onDataChanged={async () => {
+                await refreshWarehouseState({ preserveSelection: true });
+              }}
             />
           ) : null}
-          {activeView === "system" && canMaintainSystem ? (
+          {dataStatus === "ready" && activeView === "system" && canMaintainSystem ? (
             <SystemMaintenanceView
               onResetComplete={() => {
                 setCurrentUser(null);
@@ -1312,62 +1302,27 @@ function LoginScreen({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
   );
 }
 
-function ToastBox({ toast }: { toast: Toast }) {
-  const toneClass =
-    toast.tone === "success"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-      : toast.tone === "error"
-        ? "border-red-200 bg-red-50 text-red-800"
-        : "border-sky-200 bg-sky-50 text-sky-800";
+function DataUnavailablePanel({ loading, message, retry }: { loading: boolean; message: string; retry: () => void }) {
   return (
-    <div className="fixed inset-x-0 bottom-5 z-[60] flex justify-center px-4 pointer-events-none">
-      <div className={`pointer-events-auto flex max-w-lg items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-lg ${toneClass}`}>
-        {toast.tone === "success" ? (
-          <Check className="h-4 w-4 shrink-0" />
-        ) : toast.tone === "error" ? (
-          <AlertCircle className="h-4 w-4 shrink-0" />
-        ) : (
-          <Info className="h-4 w-4 shrink-0" />
-        )}
-        <span>{toast.message}</span>
-      </div>
-    </div>
-  );
-}
-
-function ResultDialogBox({ dialog, onClose }: { dialog: ResultDialog; onClose: () => void }) {
-  const isSuccess = dialog.tone === "success";
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/20 p-4">
-      <section
-        className={`w-full max-w-md rounded-md border bg-white p-5 shadow-2xl ${
-          isSuccess ? "border-emerald-200" : "border-red-200"
-        }`}
-        role="status"
-        aria-live="polite"
-      >
-        <div className="flex items-start gap-3">
-          <div
-            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${
-              isSuccess ? "bg-emerald-50 text-work" : "bg-red-50 text-danger"
-            }`}
-          >
-            {isSuccess ? <Check className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold text-ink">{dialog.title}</h2>
-            <p className="mt-1 text-sm leading-6 text-slate-600">{dialog.message}</p>
-          </div>
-          <button
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-            onClick={onClose}
-            aria-label="关闭提示"
-          >
-            <X className="h-4 w-4" />
-          </button>
+    <section className="panel mx-auto max-w-2xl p-6">
+      <div className="flex items-start gap-3">
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${loading ? "bg-sky-50 text-sky-700" : "bg-red-50 text-danger"}`}>
+          {loading ? <RotateCcw className="h-5 w-5 animate-spin" /> : <AlertCircle className="h-5 w-5" />}
         </div>
-      </section>
-    </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-semibold text-ink">{loading ? "正在连接数据库" : "暂时无法读取业务数据"}</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            {loading ? "系统正在读取基础资料和库存统计。" : message || "请检查 PostgreSQL 和应用服务状态后重试。"}
+          </p>
+          {!loading ? (
+            <button className="secondary-button mt-4" onClick={retry}>
+              <RotateCcw className="h-4 w-4" />
+              重新连接
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1746,37 +1701,6 @@ function OperationSubmitBar({
   );
 }
 
-function EmptyState({
-  icon: Icon,
-  title,
-  detail
-}: {
-  icon: typeof Home;
-  title: string;
-  detail: string;
-}) {
-  return (
-    <div className="flex min-h-[150px] flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center">
-      <div className="flex h-10 w-10 items-center justify-center rounded-md bg-white text-work shadow-sm">
-        <Icon className="h-5 w-5" />
-      </div>
-      <p className="mt-3 text-sm font-semibold text-ink">{title}</p>
-      <p className="mt-1 max-w-md text-xs leading-5 text-muted">{detail}</p>
-    </div>
-  );
-}
-
-function ReadOnlyField({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="label">{label}</p>
-      <div className="flex h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700">
-        {value}
-      </div>
-    </div>
-  );
-}
-
 function BusinessRuleStrip({
   tone,
   title,
@@ -1834,13 +1758,11 @@ function MastersView({
   state,
   setState,
   showToast,
-  masterDataSource,
   canDeleteMasterData
 }: {
   state: WarehouseState;
   setState: (updater: (previous: WarehouseState) => WarehouseState) => void;
   showToast: (toast: Toast) => void;
-  masterDataSource: "local" | "database";
   canDeleteMasterData: boolean;
 }) {
   const [goodsDraft, setGoodsDraft] = useState({
@@ -1864,23 +1786,18 @@ function MastersView({
   const [editingStore, setEditingStore] = useState<WarehouseState["terminalStores"][number] | null>(null);
   const [creatingMaster, setCreatingMaster] = useState<MasterCreateKey | null>(null);
   const [masterDialogError, setMasterDialogError] = useState("");
+  const [pendingMasterDelete, setPendingMasterDelete] = useState<{
+    key: "goods" | "warehouses" | "salespeople" | "terminalStores";
+    apiPath: string;
+    id: string;
+    label: string;
+  } | null>(null);
+  const [deletingMaster, setDeletingMaster] = useState(false);
   const sortedGoods = [...state.goods].sort(compareMasterRecords);
   const sortedWarehouses = [...state.warehouses].sort(compareMasterRecords);
 
   async function requestApi<T>(path: string, body: unknown, method = "POST"): Promise<T> {
-    const response = await fetch(path, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify(body)
-    });
-    const payload = (await response.json()) as ApiResponse<T>;
-
-    if (!response.ok || !("data" in payload)) {
-      throw new Error("error" in payload ? payload.error : "操作失败");
-    }
-
-    return payload.data;
+    return requestJson<T>(path, { method, body });
   }
 
   function replaceRecord<K extends "goods" | "warehouses" | "salespeople" | "terminalStores">(
@@ -2160,7 +2077,7 @@ function MastersView({
     }
   }
 
-  async function deleteMasterRecord<K extends "goods" | "warehouses" | "salespeople" | "terminalStores">(
+  function deleteMasterRecord<K extends "goods" | "warehouses" | "salespeople" | "terminalStores">(
     key: K,
     apiPath: string,
     id: string,
@@ -2170,15 +2087,21 @@ function MastersView({
       showToast({ tone: "error", message: "只有超级管理员可以删除基础资料" });
       return;
     }
-    const confirmed = window.confirm(`确定直接删除「${label}」吗？已被库存或单据引用的资料会被系统拒绝删除。`);
-    if (!confirmed) return;
+    setPendingMasterDelete({ key, apiPath, id, label });
+  }
 
+  async function confirmMasterDelete() {
+    if (!pendingMasterDelete) return;
+    setDeletingMaster(true);
     try {
-      await requestApi<{ deleted: boolean }>(`${apiPath}/${id}`, undefined, "DELETE");
-      removeRecord(key, id);
+      await deleteJson<{ deleted: boolean }>(`${pendingMasterDelete.apiPath}/${pendingMasterDelete.id}`);
+      removeRecord(pendingMasterDelete.key, pendingMasterDelete.id);
+      setPendingMasterDelete(null);
       showToast({ tone: "success", message: "基础资料已删除" });
     } catch (error) {
       showToast({ tone: "error", message: apiErrorMessage(error, "删除基础资料失败") });
+    } finally {
+      setDeletingMaster(false);
     }
   }
 
@@ -2188,9 +2111,7 @@ function MastersView({
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <SectionHeader icon={Building2} title="基础资料维护" compact />
-            <p className="mt-2 text-xs text-muted">
-              数据来源：{masterDataSource === "database" ? "PostgreSQL 数据库" : "本地系统数据"}
-            </p>
+            <p className="mt-2 text-xs text-muted">数据来源：PostgreSQL 数据库</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -2472,6 +2393,21 @@ function MastersView({
           />
         </div>
       </MasterEditDialog>
+      <ConfirmDialog
+        dialog={
+          pendingMasterDelete
+            ? {
+                title: "删除基础资料",
+                message: `确定直接删除「${pendingMasterDelete.label}」吗？\n已被库存或单据引用的资料会被系统拒绝删除。`,
+                confirmLabel: "确认删除",
+                destructive: true
+              }
+            : null
+        }
+        busy={deletingMaster}
+        onCancel={() => setPendingMasterDelete(null)}
+        onConfirm={() => void confirmMasterDelete()}
+      />
       <div className="grid gap-4 xl:grid-cols-2">
         <MasterTable
           title="货物资料"
@@ -3348,394 +3284,7 @@ function SalesReturnView(props: {
   );
 }
 
-function OrdersView({
-  orders,
-  result,
-  loading,
-  kindFilter,
-  setKindFilter,
-  barcodeFilter,
-  setBarcodeFilter,
-  refreshOrders,
-  showToast,
-  canDeleteOrders
-}: {
-  orders: OrderSummary[];
-  result: OrderListResult;
-  loading: boolean;
-  kindFilter: OrderKind | "all";
-  setKindFilter: (value: OrderKind | "all") => void;
-  barcodeFilter: string;
-  setBarcodeFilter: (value: string) => void;
-  refreshOrders: (query: {
-    kind: OrderKind | "all";
-    status: OrderStatus | "all";
-    barcode: string;
-    page: number;
-    pageSize: number;
-  }) => Promise<void>;
-  showToast: (toast: Toast) => void;
-  canDeleteOrders: boolean;
-}) {
-  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
-  const [pageSize, setPageSize] = useState(20);
-  const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | "all">("all");
-  const inboundCount = result.counts.inbound;
-  const outboundCount = result.counts.outbound;
-  const returnCount = result.counts.salesReturn;
-  const totalPages = Math.max(1, Math.ceil(result.total / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pageOrders = orders;
-  const selectedOrders = orders.filter((order) => selectedOrderIds.includes(order.id));
-  const pageSelectedOrders = pageOrders.filter((order) => selectedOrderIds.includes(order.id));
-  const allVisibleSelected = pageOrders.length > 0 && pageSelectedOrders.length === pageOrders.length;
 
-  useEffect(() => {
-    setSelectedOrderIds((previous) => previous.filter((id) => orders.some((order) => order.id === id)));
-  }, [orders]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [barcodeFilter, kindFilter, pageSize, statusFilter]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void refreshOrders({ kind: kindFilter, status: statusFilter, barcode: barcodeFilter, page, pageSize });
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [barcodeFilter, kindFilter, page, pageSize, refreshOrders, statusFilter]);
-
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
-
-  function toggleOrderSelection(orderId: string, checked: boolean) {
-    setSelectedOrderIds((previous) =>
-      checked ? [...new Set([...previous, orderId])] : previous.filter((id) => id !== orderId)
-    );
-  }
-
-  function toggleAllVisibleOrders(checked: boolean) {
-    const pageOrderIds = pageOrders.map((order) => order.id);
-    setSelectedOrderIds((previous) =>
-      checked
-        ? [...new Set([...previous, ...pageOrderIds])]
-        : previous.filter((orderId) => !pageOrderIds.includes(orderId))
-    );
-  }
-
-  async function exportSelectedOrders() {
-    if (selectedOrders.length === 0) return;
-    try {
-      const response = await fetch("/api/orders/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ orders: selectedOrders.map((order) => ({ id: order.id, kind: order.kind })) })
-      });
-      if (!response.ok) {
-        const payload = (await response.json()) as ApiResponse<never>;
-        throw new ClientApiError("error" in payload ? payload.error : "导出单据失败", response.status);
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `业务单据导出-${new Date().toISOString().slice(0, 10)}.csv`;
-      anchor.click();
-      URL.revokeObjectURL(url);
-      showToast({ tone: "success", message: `已导出 ${selectedOrders.length} 张单据` });
-    } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "导出单据失败") });
-    }
-  }
-
-  async function deleteSelectedOrders() {
-    if (!canDeleteOrders || selectedOrders.length === 0) return;
-    const invalid = selectedOrders.find((order) => order.status === "voided" || !order.reversalSupported);
-    if (invalid) {
-      showToast({ tone: "error", message: `单据 ${invalid.orderNo} 已作废或不支持撤销` });
-      return;
-    }
-    const reason = window.prompt(
-      `将撤销已选 ${selectedOrders.length} 张单据，并恢复其库存影响。请输入撤销原因：`
-    )?.trim();
-    if (!reason) return;
-
-    try {
-      const response = await fetch("/api/orders/void", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          orders: selectedOrders.map((order) => ({ id: order.id, kind: order.kind })),
-          reason
-        })
-      });
-      const payload = (await response.json()) as ApiResponse<{ voided: number }>;
-      if (!response.ok || !("data" in payload)) {
-        throw new ClientApiError("error" in payload ? payload.error : "撤销单据失败", response.status);
-      }
-      setSelectedOrderIds([]);
-      await refreshOrders({ kind: kindFilter, status: statusFilter, barcode: barcodeFilter, page, pageSize });
-      showToast({ tone: "success", message: `已撤销 ${payload.data.voided} 张单据，库存影响已恢复` });
-    } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "撤销单据失败") });
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <section className="panel p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div>
-            <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
-            <p className="mt-2 text-xs text-muted">
-              当前筛选 {result.total} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
-            </p>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-[160px_150px_220px_120px_auto_auto_auto_auto] sm:items-end">
-            <div>
-              <FieldSelect
-                label="业务类型"
-                value={kindFilter}
-                onChange={(value) => setKindFilter(value as OrderKind | "all")}
-                options={[
-                  { value: "all", label: "全部单据" },
-                  { value: "inbound", label: "入库单" },
-                  { value: "outbound", label: "出库单" },
-                  { value: "sales_return", label: "销售退回单" }
-                ]}
-              />
-            </div>
-            <FieldSelect
-              label="单据状态"
-              value={statusFilter}
-              onChange={(value) => setStatusFilter(value as OrderStatus | "all")}
-              options={[
-                { value: "all", label: "全部状态" },
-                { value: "active", label: "正常" },
-                { value: "voided", label: "已作废" }
-              ]}
-            />
-            <div>
-              <label className="label" htmlFor="order-barcode-filter">
-                条码
-              </label>
-              <input
-                id="order-barcode-filter"
-                className="field"
-                placeholder="输入条码查单据"
-                value={barcodeFilter}
-                onChange={(event) => setBarcodeFilter(event.target.value)}
-              />
-            </div>
-            <FieldSelect
-              label="单页显示"
-              value={String(pageSize)}
-              onChange={(value) => setPageSize(Number(value))}
-              options={pageSizeOptions.map((size) => ({ value: String(size), label: `${size} 张` }))}
-            />
-            <button
-              className="secondary-button"
-              onClick={() => void refreshOrders({ kind: kindFilter, status: statusFilter, barcode: barcodeFilter, page, pageSize })}
-              disabled={loading}
-            >
-              <RotateCcw className="h-4 w-4" />
-              {loading ? "刷新中" : "刷新单据"}
-            </button>
-            <button className="primary-button" onClick={exportSelectedOrders} disabled={selectedOrders.length === 0}>
-              <Download className="h-4 w-4" />
-              导出已选
-            </button>
-            {canDeleteOrders ? (
-              <button className="secondary-button text-red-600 hover:border-red-200 hover:bg-red-50" onClick={deleteSelectedOrders} disabled={selectedOrders.length === 0}>
-                <Trash2 className="h-4 w-4" />
-                撤销已选
-              </button>
-            ) : null}
-            <button
-              className="secondary-button"
-              onClick={() => setSelectedOrderIds([])}
-              disabled={selectedOrders.length === 0}
-            >
-              <X className="h-4 w-4" />
-              清空选择
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-          <SectionHeader icon={ClipboardList} title="单据列表" compact />
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-            <span>
-              当前 {formatOrderFilterLabel(kindFilter)} · {result.total} 张 · 第 {currentPage} /{" "}
-              {totalPages} 页
-            </span>
-            <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
-              已选 {selectedOrders.length} 张
-            </span>
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px]">
-            <thead className="table-head">
-              <tr>
-                <th className="w-12 px-4 py-3">
-                  <input
-                    aria-label="选择当前列表全部单据"
-                    checked={allVisibleSelected}
-                    className="h-4 w-4 rounded border-slate-300 text-work"
-                    disabled={pageOrders.length === 0}
-                    onChange={(event) => toggleAllVisibleOrders(event.target.checked)}
-                    type="checkbox"
-                  />
-                </th>
-                <th className="px-4 py-3">单据</th>
-                <th className="px-4 py-3">业务</th>
-                <th className="px-4 py-3">来源 / 去向</th>
-                <th className="px-4 py-3">数量与条码</th>
-                <th className="px-4 py-3">操作信息</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pageOrders.map((order) => {
-                const selected = selectedOrderIds.includes(order.id);
-                return (
-                  <tr key={order.id} className={`${selected ? "bg-emerald-50" : ""} hover:bg-slate-50`}>
-                    <td className="table-cell">
-                      <input
-                        aria-label={`选择单据 ${order.orderNo}`}
-                        checked={selected}
-                        className="h-4 w-4 rounded border-slate-300 text-work"
-                        onChange={(event) => toggleOrderSelection(order.id, event.target.checked)}
-                        type="checkbox"
-                      />
-                    </td>
-                    <td className="table-cell">
-                      <div className="font-mono text-sm font-semibold text-work">{order.orderNo}</div>
-                      <div className="mt-1 text-xs text-slate-500">{order.createdAt}</div>
-                      {order.status === "voided" ? <div className="mt-1 text-xs font-semibold text-red-600">已作废</div> : null}
-                    </td>
-                    <td className="table-cell">
-                      <StatusBadge label={order.businessType} />
-                      <div className="mt-2 text-xs text-slate-500">{formatOrderKind(order.kind)}</div>
-                    </td>
-                    <td className="table-cell">
-                      <div className="font-medium text-ink">{order.primaryTarget}</div>
-                      <div className="mt-1 text-xs text-slate-500">{order.counterparty ?? "-"}</div>
-                    </td>
-                    <td className="table-cell">
-                      <div className="text-sm font-semibold text-ink">{order.itemCount} 件</div>
-                      <div className="mt-1 text-xs text-slate-500">{order.goodsSummary || "-"}</div>
-                      <div className="mt-2 font-mono text-xs text-slate-500">{order.barcodePreview || "-"}</div>
-                    </td>
-                    <td className="table-cell">
-                      <div className="font-medium text-ink">{order.operator}</div>
-                      <div className="mt-1 text-xs text-slate-500">已写入库存流水</div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {pageOrders.length === 0 ? (
-                <tr>
-                  <td className="table-cell" colSpan={6}>
-                    <EmptyState
-                      icon={ClipboardList}
-                      title={loading ? "正在读取单据" : "没有符合条件的单据"}
-                      detail={loading ? "系统正在从数据库读取业务单据。" : "调整业务类型筛选或刷新后再查看。"}
-                    />
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-        {result.total > 0 ? (
-          <PaginationBar
-            page={currentPage}
-            pageSize={pageSize}
-            total={result.total}
-            onPageChange={setPage}
-          />
-        ) : null}
-      </section>
-    </div>
-  );
-}
-
-function formatOrderKind(kind: OrderKind) {
-  const labels: Record<OrderKind, string> = {
-    inbound: "入库单",
-    outbound: "出库单",
-    sales_return: "销售退回单"
-  };
-  return labels[kind];
-}
-
-function formatOrderFilterLabel(kind: OrderKind | "all") {
-  if (kind === "all") return "全部单据";
-  return formatOrderKind(kind);
-}
-
-function PaginationBar({
-  page,
-  pageSize,
-  total,
-  onPageChange
-}: {
-  page: number;
-  pageSize: number;
-  total: number;
-  onPageChange: (page: number) => void;
-}) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
-  const end = Math.min(total, page * pageSize);
-
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm">
-      <span className="text-xs text-muted">
-        显示 {start}-{end} / {total}
-      </span>
-      <div className="flex items-center gap-2">
-        <button className="secondary-button h-9 px-3" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
-          上一页
-        </button>
-        <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
-          {page} / {totalPages}
-        </span>
-        <button
-          className="secondary-button h-9 px-3"
-          onClick={() => onPageChange(page + 1)}
-          disabled={page >= totalPages}
-        >
-          下一页
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function downloadCsv(filename: string, rows: string[][]) {
-  const csv = rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
-  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function escapeCsvCell(value: string) {
-  return `"${value.replace(/"/g, '""')}"`;
-}
 
 function SystemMaintenanceView({
   onResetComplete,
@@ -3936,724 +3485,7 @@ function SystemMaintenanceView({
   );
 }
 
-function InventoryView(props: {
-  state: WarehouseState;
-  filters: InventoryFilters;
-  setFilters: (value: InventoryFilters) => void;
-  selectedBarcode: string;
-  setSelectedBarcode: (barcode: string) => void;
-  showToast: (toast: Toast) => void;
-  canDeleteInventory: boolean;
-}) {
-  const { filters, showToast } = props;
-  const [detailBarcode, setDetailBarcode] = useState<string | null>(null);
-  const [detailResult, setDetailResult] = useState<InventoryDetailResult | null>(null);
-  const [pageSize, setPageSize] = useState(20);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [inventoryResult, setInventoryResult] = useState<InventoryListResult>({
-    items: [],
-    latestMovements: [],
-    total: 0,
-    warehouseResultCount: 0,
-    salesResultCount: 0,
-    page: 1,
-    pageSize: 20
-  });
-  const latestMovementByBarcode = useMemo(
-    () => new Map(inventoryResult.latestMovements.map((movement) => [movement.barcode, movement])),
-    [inventoryResult.latestMovements]
-  );
 
-  const loadInventoryPage = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        keyword: filters.keyword,
-        ownerScope: filters.ownerScope,
-        warehouseId: filters.warehouseId,
-        salespersonId: filters.salespersonId,
-        goodsId: filters.goodsId,
-        page: String(page),
-        pageSize: String(pageSize)
-      });
-      setInventoryResult(await getJson<InventoryListResult>(`/api/inventory?${params.toString()}`));
-    } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "读取库存失败") });
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    page,
-    pageSize,
-    filters.goodsId,
-    filters.keyword,
-    filters.ownerScope,
-    filters.salespersonId,
-    filters.warehouseId,
-    showToast
-  ]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadInventoryPage();
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [loadInventoryPage]);
-
-  async function openDetail(barcode: string) {
-    props.setSelectedBarcode(barcode);
-    setDetailBarcode(barcode);
-    setDetailResult(null);
-    try {
-      setDetailResult(await getJson<InventoryDetailResult>(`/api/inventory/${encodeURIComponent(barcode)}`));
-    } catch (error) {
-      setDetailBarcode(null);
-      showToast({ tone: "error", message: apiErrorMessage(error, "读取条码详情失败") });
-    }
-  }
-
-  useEffect(() => {
-    if (!detailBarcode) return;
-
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setDetailBarcode(null);
-        setDetailResult(null);
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [detailBarcode]);
-
-  function exportMovements(barcode: string, movements: StockMovement[]) {
-    if (!barcode || movements.length === 0) return;
-
-    const header = ["时间", "业务类型", "条码", "货物", "来源", "去向", "操作人", "说明"];
-    const rows = movements.map((movement) => [
-      movement.occurredAt,
-      formatMovementType(movement.type),
-      movement.barcode,
-      goodsLabel(movement.goodsId, props.state.goods),
-      movement.fromLabel,
-      movement.toLabel,
-      movement.operator,
-      movement.note
-    ]);
-    downloadCsv(`${barcode}-流水.csv`, [header, ...rows]);
-  }
-
-	  function clearInventoryFilters() {
-	    props.setFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
-	  }
-
-  async function deleteInventoryBarcode(barcode: string) {
-    if (!props.canDeleteInventory) return;
-    const confirmed = window.confirm(`确定删除条码「${barcode}」吗？该条码的库存记录、流转记录和相关单据明细会一并删除。`);
-    if (!confirmed) return;
-
-    try {
-      const response = await fetch(`/api/inventory/${encodeURIComponent(barcode)}`, {
-        method: "DELETE",
-        credentials: "same-origin"
-      });
-      const payload = (await response.json()) as ApiResponse<{ deleted: boolean }>;
-      if (!response.ok || !("data" in payload)) {
-        throw new ClientApiError("error" in payload ? payload.error : "删除库存条码失败", response.status);
-      }
-      setDetailBarcode(null);
-      setDetailResult(null);
-      await loadInventoryPage();
-      showToast({ tone: "success", message: `条码 ${barcode} 已删除` });
-    } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "删除库存条码失败") });
-    }
-  }
-
-  const warehouseResultCount = inventoryResult.warehouseResultCount;
-  const salesResultCount = inventoryResult.salesResultCount;
-  const activeFilterCount = [
-    props.filters.keyword.trim(),
-    props.filters.ownerScope !== "all" ? props.filters.ownerScope : "",
-    props.filters.warehouseId !== "all" ? props.filters.warehouseId : "",
-    props.filters.salespersonId !== "all" ? props.filters.salespersonId : "",
-    props.filters.goodsId !== "all" ? props.filters.goodsId : ""
-  ].filter(Boolean).length;
-  const totalPages = Math.max(1, Math.ceil(inventoryResult.total / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pageItems = inventoryResult.items;
-  const warehouseStockRows = props.state.warehouseStocks
-    .map((stock) => ({
-      stock,
-      warehouse: props.state.warehouses.find((warehouse) => warehouse.id === stock.warehouseId),
-      goods: props.state.goods.find((goods) => goods.id === stock.goodsId)
-    }))
-    .filter(({ stock, warehouse, goods }) => {
-      if (!warehouse || !goods) return false;
-      if (props.filters.ownerScope === "salesperson") return false;
-      if (props.filters.warehouseId !== "all" && stock.warehouseId !== props.filters.warehouseId) return false;
-      if (props.filters.goodsId !== "all" && stock.goodsId !== props.filters.goodsId) return false;
-      const keyword = props.filters.keyword.trim().toLowerCase();
-      if (!keyword) return true;
-      return (
-        warehouse.name.toLowerCase().includes(keyword) ||
-        goods.name.toLowerCase().includes(keyword) ||
-        goods.code.toLowerCase().includes(keyword)
-      );
-    })
-    .sort((a, b) => {
-      const warehouseSort = (a.warehouse?.name ?? "").localeCompare(b.warehouse?.name ?? "", "zh-CN");
-      if (warehouseSort !== 0) return warehouseSort;
-      return (a.goods?.code ?? "").localeCompare(b.goods?.code ?? "", "zh-CN");
-    });
-
-  useEffect(() => {
-    setPage(1);
-  }, [props.filters, pageSize]);
-
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
-
-  return (
-    <div className="grid gap-4">
-      <section className="panel p-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-          <div>
-            <SectionHeader icon={Search} title="库存查询" compact />
-            <p className="mt-2 text-xs text-muted">
-              当前筛选 {inventoryResult.total} 件 · 仓库在库 {warehouseResultCount} 件 · 销售人员名下{" "}
-              {salesResultCount} 件 · 已用筛选 {activeFilterCount} 项
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button className="secondary-button whitespace-nowrap" onClick={() => void loadInventoryPage()} disabled={loading}>
-              <RotateCcw className="h-4 w-4" />
-              {loading ? "刷新中" : "刷新数据"}
-            </button>
-            <button className="secondary-button whitespace-nowrap" onClick={clearInventoryFilters}>
-              <X className="h-4 w-4" />
-              清空筛选
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.2fr)_150px_180px_180px_180px_130px] xl:items-end">
-          <div>
-            <label className="label" htmlFor="inventory-keyword">
-              关键字
-            </label>
-            <input
-              id="inventory-keyword"
-              className="field"
-              placeholder="货物名称、编码或条码"
-              value={props.filters.keyword}
-              onChange={(event) => props.setFilters({ ...props.filters, keyword: event.target.value })}
-            />
-          </div>
-          <FieldSelect
-            label="归属类型"
-            value={props.filters.ownerScope}
-            onChange={(value) =>
-              props.setFilters({
-                ...props.filters,
-                ownerScope: value as InventoryOwnerScope,
-                warehouseId: "all",
-                salespersonId: "all"
-              })
-            }
-            options={[
-              { value: "all", label: "全部库存" },
-              { value: "warehouse", label: "仓库库存" },
-              { value: "salesperson", label: "销售人员名下" }
-            ]}
-          />
-          {props.filters.ownerScope === "warehouse" ? (
-            <FieldSelect
-              label="具体仓库"
-              value={props.filters.warehouseId}
-              onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value })}
-              options={[
-                { value: "all", label: "全部仓库" },
-                ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
-              ]}
-            />
-          ) : props.filters.ownerScope === "salesperson" ? (
-            <FieldSelect
-              label="具体销售人员"
-              value={props.filters.salespersonId}
-              onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
-              options={[
-                { value: "all", label: "全部销售人员" },
-                ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
-              ]}
-            />
-          ) : (
-            <ReadOnlyField label="具体范围" value="全部仓库与销售人员" />
-          )}
-          <FieldSelect
-            label="货物"
-            value={props.filters.goodsId}
-            onChange={(value) => props.setFilters({ ...props.filters, goodsId: value })}
-            options={[
-              { value: "all", label: "全部货物" },
-              ...props.state.goods.map((goods) => ({ value: goods.id, label: goods.name }))
-            ]}
-          />
-          <FieldSelect
-            label="单页显示"
-            value={String(pageSize)}
-            onChange={(value) => setPageSize(Number(value))}
-            options={pageSizeOptions.map((size) => ({ value: String(size), label: `${size} 件` }))}
-          />
-        </div>
-      </section>
-
-      <div className="grid gap-4">
-        <section className="panel overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
-            <SectionHeader icon={Boxes} title="仓库商品库存" compact />
-            <p className="text-xs text-muted">当前筛选 {warehouseStockRows.length} 条库存数量记录</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px]">
-              <thead className="table-head">
-                <tr>
-                  <th className="px-4 py-3">仓库</th>
-                  <th className="px-4 py-3">货物</th>
-                  <th className="px-4 py-3">当前库存</th>
-                  <th className="px-4 py-3">最近变动</th>
-                </tr>
-              </thead>
-              <tbody>
-                {warehouseStockRows.map(({ stock, warehouse, goods }) => (
-                  <tr key={stock.id} className="hover:bg-slate-50">
-                    <td className="table-cell font-medium text-ink">{warehouse?.name}</td>
-                    <td className="table-cell">
-                      <p className="font-medium text-ink">{goods?.name}</p>
-                      <p className="text-xs text-muted">{goods?.code}</p>
-                    </td>
-                    <td className="table-cell text-lg font-semibold text-ink">
-                      {stock.quantity.toLocaleString("zh-CN")} {goods?.unit}
-                    </td>
-                    <td className="table-cell text-slate-600">{stock.lastChangedAt}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {warehouseStockRows.length === 0 ? (
-              <div className="border-t border-slate-200 p-4">
-                <EmptyState icon={Boxes} title="没有匹配的仓库库存" detail="销售人员名下筛选只影响下方条码追踪列表；仓库库存数量只展示仓库内商品数量。" />
-              </div>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="panel overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
-            <SectionHeader icon={Barcode} title="可追踪条码列表" compact />
-            <p className="text-xs text-muted">
-              共 {inventoryResult.total} 件 · 第 {currentPage} / {totalPages} 页 · 点击条码查看详情
-            </p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px]">
-              <thead className="table-head">
-                <tr>
-                  <th className="px-4 py-3">条码 / 货物</th>
-                  <th className="px-4 py-3">当前归属</th>
-                  <th className="px-4 py-3">生产 / 保质期</th>
-                  <th className="px-4 py-3">最近流转</th>
-                  <th className="px-4 py-3">状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageItems.map((item) => {
-                  const goods = props.state.goods.find((entry) => entry.id === item.goodsId);
-                  const selected = props.selectedBarcode === item.barcode;
-                  const latestMovement = latestMovementByBarcode.get(item.barcode);
-                  return (
-                    <tr
-                      key={item.id}
-                      className={`cursor-pointer hover:bg-slate-50 ${selected ? "bg-emerald-50" : ""}`}
-                      onClick={() => {
-                        void openDetail(item.barcode);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          void openDetail(item.barcode);
-                        }
-                      }}
-                      tabIndex={0}
-                    >
-                      <td className="table-cell">
-                        <div className="font-mono text-sm font-semibold text-work">{item.barcode}</div>
-                        <div className="mt-1 font-medium text-ink">{goods?.name ?? "未知货物"}</div>
-                        <div className="mt-0.5 text-xs text-slate-500">
-                          {goods?.code ?? "-"} · {goods ? formatCategory(goods.category) : "-"}
-                        </div>
-                      </td>
-                      <td className="table-cell text-slate-600">
-                        {ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)}
-                      </td>
-                      <td className="table-cell text-slate-600">
-                        <div>{item.productionDate ?? "-"}</div>
-                        <div className="mt-1 text-xs text-slate-500">{item.shelfLifeDate ?? "无保质期"}</div>
-                      </td>
-                      <td className="table-cell text-slate-600">
-                        <div>{latestMovement ? formatMovementType(latestMovement.type) : "-"}</div>
-                        <div className="mt-1 font-mono text-xs text-slate-500">{latestMovement?.occurredAt ?? "-"}</div>
-                      </td>
-                      <td className="table-cell">
-                        <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {inventoryResult.total === 0 ? (
-              <div className="border-t border-slate-200 p-4">
-                <EmptyState
-                  icon={Search}
-                  title={loading ? "正在读取库存" : "没有匹配的库存记录"}
-                  detail={loading ? "系统正在按当前筛选读取库存。" : "可以调整归属、仓库、销售人员、货物或关键字后重新查询。"}
-                />
-              </div>
-            ) : null}
-          </div>
-          {inventoryResult.total > 0 ? (
-            <PaginationBar
-              page={currentPage}
-              pageSize={pageSize}
-              total={inventoryResult.total}
-              onPageChange={setPage}
-            />
-          ) : null}
-        </section>
-      </div>
-
-      <InventoryDetailModal
-        item={detailResult?.item}
-        movements={detailResult?.movements ?? []}
-        state={props.state}
-        onClose={() => {
-          setDetailBarcode(null);
-          setDetailResult(null);
-        }}
-        onExport={() => exportMovements(detailBarcode ?? "", detailResult?.movements ?? [])}
-        canDelete={props.canDeleteInventory}
-        onDelete={() => {
-          if (detailResult?.item) void deleteInventoryBarcode(detailResult.item.barcode);
-        }}
-      />
-    </div>
-  );
-}
-
-function InventoryDetailModal({
-  item,
-  movements,
-  state,
-  onClose,
-  onExport,
-  canDelete,
-  onDelete
-}: {
-  item?: InventoryItem;
-  movements: StockMovement[];
-  state: WarehouseState;
-  onClose: () => void;
-  onExport: () => void;
-  canDelete: boolean;
-  onDelete: () => void;
-}) {
-  const goods = item ? state.goods.find((entry) => entry.id === item.goodsId) : undefined;
-
-  if (!item) {
-    return null;
-  }
-
-  return (
-    <div
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
-      onClick={onClose}
-      role="dialog"
-    >
-      <section
-        className="flex h-[88vh] max-h-[760px] w-full max-w-5xl flex-col overflow-hidden rounded-md bg-white shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="shrink-0 border-b border-slate-200 p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-muted">条码详情</p>
-              <p className="mt-1 break-all font-mono text-lg font-semibold text-work">{item.barcode}</p>
-            </div>
-	            <div className="flex shrink-0 items-center gap-2">
-	              <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
-              {canDelete ? (
-                <button className="secondary-button h-9 px-3 text-red-600 hover:border-red-200 hover:bg-red-50" onClick={onDelete}>
-                  <Trash2 className="h-4 w-4" />
-                  删除
-                </button>
-              ) : null}
-	              <button className="icon-button" onClick={onClose} aria-label="关闭条码详情">
-	                <X className="h-4 w-4" />
-	              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex min-h-0 flex-1 flex-col p-4">
-          <div className="shrink-0 overflow-hidden rounded-md border border-slate-200">
-            <div className="grid md:grid-cols-2 lg:grid-cols-5">
-              <DetailRow label="货物" value={goods?.name ?? "未知货物"} meta={goods?.code ?? "-"} />
-              <DetailRow label="大类" value={goods ? formatCategory(goods.category) : "-"} />
-              <DetailRow
-                label="当前归属"
-                value={ownerLabel(item, state.warehouses, state.salespeople, state.locations)}
-              />
-              <DetailRow label="生产日期" value={item.productionDate ?? "-"} />
-              <DetailRow label="保质期" value={item.shelfLifeDate ?? "无"} />
-            </div>
-          </div>
-
-          <div className="mt-4 flex min-h-0 flex-1 flex-col border-t border-slate-200 pt-4">
-            <div className="flex shrink-0 items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-ink">库存流转</p>
-                <p className="mt-1 text-xs text-muted">{movements.length} 条记录</p>
-              </div>
-              <button className="secondary-button h-9 px-3" onClick={onExport} disabled={movements.length === 0}>
-                <Download className="h-4 w-4" />
-                导出
-              </button>
-            </div>
-
-            <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
-              {movements.map((movement, index) => (
-                <div key={movement.id} className="relative pl-5">
-                  <span className="absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full bg-work" />
-                  {index < movements.length - 1 ? (
-                    <span className="absolute bottom-[-18px] left-[4px] top-5 w-px bg-slate-200" />
-                  ) : null}
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-ink">{formatMovementType(movement.type)}</p>
-                      <span className="font-mono text-xs text-slate-500">{movement.occurredAt}</span>
-                    </div>
-                    <p className="mt-2 text-sm text-slate-700">
-                      {movement.fromLabel} → {movement.toLabel}
-                    </p>
-                    <p className="mt-2 text-xs text-slate-500">{movement.note}</p>
-                  </div>
-                </div>
-              ))}
-              {movements.length === 0 ? (
-                <EmptyState
-                  icon={ClipboardList}
-                  title="暂无流转记录"
-                  detail="该条码发生入库、出库、挪仓或退回后，会显示完整流转时间线。"
-                />
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function DetailRow({ label, value, meta }: { label: string; value: string; meta?: string }) {
-  return (
-    <div className="border-b border-slate-200 px-3 py-2.5 md:border-b-0 md:border-r md:last:border-r-0">
-      <p className="text-xs text-muted">{label}</p>
-      <div>
-        <p className="break-words text-sm font-semibold text-ink">{value}</p>
-        {meta ? <p className="mt-1 break-words text-xs text-slate-500">{meta}</p> : null}
-      </div>
-    </div>
-  );
-}
-
-function BarcodeCollector({
-  title = "单件条码",
-  description,
-  input,
-  setInput,
-  barcodes,
-  setBarcodes,
-  onAdd,
-  placeholder,
-  reviewBarcode
-}: {
-  title?: string;
-  description?: string;
-  input: string;
-  setInput: (value: string) => void;
-  barcodes: string[];
-  setBarcodes: (value: string[]) => void;
-  onAdd: (input: string) => void;
-  placeholder: string;
-  reviewBarcode?: (barcode: string) => BarcodeReview;
-}) {
-  const reviews = reviewBarcode ? barcodes.map((barcode) => reviewBarcode(barcode)) : [];
-  const invalidCount = reviews.filter((review) => review.tone === "error").length;
-  const readyCount = reviewBarcode ? barcodes.length - invalidCount : barcodes.length;
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-white text-work shadow-sm">
-              <ScanLine className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-ink">{title}</p>
-              {description ? <p className="mt-0.5 text-xs text-muted">{description}</p> : null}
-            </div>
-          </div>
-          <span
-            className={`rounded-md bg-white px-3 py-1.5 text-xs font-semibold shadow-sm ${
-              invalidCount > 0 ? "text-danger" : "text-slate-600"
-            }`}
-          >
-            {reviewBarcode ? `${readyCount} / ${barcodes.length} 可提交` : `${barcodes.length} 件`}
-          </span>
-        </div>
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-          <textarea
-            className="field h-14 min-h-14 resize-none py-4 font-mono text-base"
-            placeholder={placeholder}
-            rows={1}
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                onAdd(input);
-              }
-            }}
-          />
-          <button className="primary-button h-14 shrink-0 sm:min-w-[104px]" onClick={() => onAdd(input)}>
-            <Barcode className="h-4 w-4" />
-            加入
-          </button>
-        </div>
-      </div>
-
-      <div className="min-h-[260px] rounded-md border border-slate-200 bg-white">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-          <p className="text-sm font-semibold text-slate-700">条码清单 · {barcodes.length} 件</p>
-          {barcodes.length > 0 ? (
-            <button className="secondary-button h-8 px-2 text-xs" onClick={() => setBarcodes([])}>
-              <Trash2 className="h-3.5 w-3.5" />
-              清空
-            </button>
-          ) : null}
-        </div>
-        {barcodes.length === 0 ? (
-          <div className="m-4 flex h-40 items-center justify-center rounded-md border border-dashed border-slate-300 text-sm text-slate-400">
-            等待扫码录入
-          </div>
-        ) : (
-          <div className="grid max-h-[380px] gap-2 overflow-y-auto p-4 sm:grid-cols-2">
-            {barcodes.map((barcode) => {
-              const review = reviewBarcode?.(barcode);
-              return (
-                <div
-                  className={`rounded-md border px-3 py-2 text-sm ${barcodeCardClass(review?.tone ?? "neutral")}`}
-                  key={barcode}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate font-mono text-slate-700">{barcode}</span>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {review ? <BarcodeReviewBadge review={review} /> : null}
-                      <button
-                        aria-label={`移除条码 ${barcode}`}
-                        className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-white hover:text-danger"
-                        onClick={() => setBarcodes(barcodes.filter((entry) => entry !== barcode))}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                  {review?.detail ? (
-                    <p className={`mt-1 truncate text-xs ${review.tone === "error" ? "text-danger" : "text-muted"}`}>
-                      {review.detail}
-                    </p>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function BarcodeReviewBadge({ review }: { review: BarcodeReview }) {
-  return (
-    <span
-      className={`rounded-md border px-2 py-1 text-[11px] font-semibold leading-none ${barcodeBadgeClass(
-        review.tone
-      )}`}
-    >
-      {review.label}
-    </span>
-  );
-}
-
-function barcodeCardClass(tone: BarcodeReviewTone) {
-  if (tone === "success") return "border-emerald-200 bg-emerald-50";
-  if (tone === "warning") return "border-amber-200 bg-amber-50";
-  if (tone === "error") return "border-red-200 bg-red-50";
-  return "border-slate-200 bg-slate-50";
-}
-
-function barcodeBadgeClass(tone: BarcodeReviewTone) {
-  if (tone === "success") return "border-emerald-200 bg-white text-work";
-  if (tone === "warning") return "border-amber-200 bg-white text-amber";
-  if (tone === "error") return "border-red-200 bg-white text-danger";
-  return "border-slate-200 bg-white text-slate-500";
-}
-
-function FieldSelect({
-  label,
-  value,
-  onChange,
-  options
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-}) {
-  return (
-    <div>
-      {label ? <label className="label">{label}</label> : null}
-      <select className="field" value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
 
 function SegmentedControl({
   options,
@@ -4678,32 +3510,5 @@ function SegmentedControl({
         </button>
       ))}
     </div>
-  );
-}
-
-function SectionHeader({
-  icon: Icon,
-  title,
-  compact = false
-}: {
-  icon: typeof Home;
-  title: string;
-  compact?: boolean;
-}) {
-  return (
-    <div className={`flex items-center gap-2 ${compact ? "" : "border-b border-slate-200 px-4 py-3"}`}>
-      <div className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-50 text-work">
-        <Icon className="h-4 w-4" />
-      </div>
-      <h2 className="text-sm font-semibold text-ink">{title}</h2>
-    </div>
-  );
-}
-
-function StatusBadge({ label }: { label: string }) {
-  return (
-    <span className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800">
-      {label}
-    </span>
   );
 }

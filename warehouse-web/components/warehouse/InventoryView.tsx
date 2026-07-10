@@ -1,0 +1,861 @@
+"use client";
+
+import { AlertCircle, Barcode, Boxes, ClipboardList, Download, Pencil, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { EmptyState, FieldSelect, PaginationBar, ReadOnlyField, SectionHeader, StatusBadge } from "@/components/warehouse/CommonUi";
+import { ConfirmDialog, ReasonDialog, type ConfirmDialogState } from "@/components/warehouse/FeedbackDialogs";
+import { apiErrorMessage, deleteJson, getJson, patchJson, postJson } from "@/lib/client-api";
+import type { InventoryDetailResult, InventoryItem, InventoryListResult, StockMovement, Toast, WarehouseState } from "@/lib/types";
+import { formatCategory, formatMovementType, goodsLabel, ownerLabel } from "@/lib/warehouse-utils";
+
+export type InventoryOwnerScope = "all" | "warehouse" | "salesperson";
+export type InventoryFilters = {
+  keyword: string;
+  ownerScope: InventoryOwnerScope;
+  warehouseId: string;
+  salespersonId: string;
+  goodsId: string;
+};
+
+const pageSizeOptions = [20, 50, 100];
+
+function downloadCsv(filename: string, rows: string[][]) {
+  const csv = rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
+  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function escapeCsvCell(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+export function InventoryView(props: {
+  state: WarehouseState;
+  filters: InventoryFilters;
+  setFilters: (value: InventoryFilters) => void;
+  selectedBarcode: string;
+  setSelectedBarcode: (barcode: string) => void;
+  showToast: (toast: Toast) => void;
+  canDeleteInventory: boolean;
+  onDataChanged: () => Promise<void>;
+}) {
+  const { filters, showToast } = props;
+  const [detailBarcode, setDetailBarcode] = useState<string | null>(null);
+  const [detailResult, setDetailResult] = useState<InventoryDetailResult | null>(null);
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [writeOffOpen, setWriteOffOpen] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState<ConfirmDialogState | null>(null);
+  const [adjustmentStock, setAdjustmentStock] = useState<WarehouseState["warehouseStocks"][number] | null>(null);
+  const inventoryRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
+  const [inventoryResult, setInventoryResult] = useState<InventoryListResult>({
+    items: [],
+    latestMovements: [],
+    total: 0,
+    warehouseResultCount: 0,
+    salesResultCount: 0,
+    page: 1,
+    pageSize: 20
+  });
+  const latestMovementByBarcode = useMemo(
+    () => new Map(inventoryResult.latestMovements.map((movement) => [movement.barcode, movement])),
+    [inventoryResult.latestMovements]
+  );
+
+  const loadInventoryPage = useCallback(async () => {
+    const requestId = inventoryRequestRef.current + 1;
+    inventoryRequestRef.current = requestId;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        keyword: filters.keyword,
+        ownerScope: filters.ownerScope,
+        warehouseId: filters.warehouseId,
+        salespersonId: filters.salespersonId,
+        goodsId: filters.goodsId,
+        page: String(page),
+        pageSize: String(pageSize)
+      });
+      const result = await getJson<InventoryListResult>(`/api/inventory?${params.toString()}`);
+      if (requestId === inventoryRequestRef.current) setInventoryResult(result);
+    } catch (error) {
+      if (requestId === inventoryRequestRef.current) {
+        showToast({ tone: "error", message: apiErrorMessage(error, "读取库存失败") });
+      }
+    } finally {
+      if (requestId === inventoryRequestRef.current) setLoading(false);
+    }
+  }, [
+    page,
+    pageSize,
+    filters.goodsId,
+    filters.keyword,
+    filters.ownerScope,
+    filters.salespersonId,
+    filters.warehouseId,
+    showToast
+  ]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadInventoryPage();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [loadInventoryPage]);
+
+  async function openDetail(barcode: string) {
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
+    props.setSelectedBarcode(barcode);
+    setDetailBarcode(barcode);
+    setDetailResult(null);
+    try {
+      const result = await getJson<InventoryDetailResult>(`/api/inventory/${encodeURIComponent(barcode)}`);
+      if (requestId === detailRequestRef.current) setDetailResult(result);
+    } catch (error) {
+      if (requestId === detailRequestRef.current) {
+        setDetailBarcode(null);
+        showToast({ tone: "error", message: apiErrorMessage(error, "读取条码详情失败") });
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!detailBarcode) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDetailBarcode(null);
+        setDetailResult(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [detailBarcode]);
+
+  function exportMovements(barcode: string, movements: StockMovement[]) {
+    if (!barcode || movements.length === 0) return;
+
+    const header = ["时间", "业务类型", "条码", "货物", "来源", "去向", "操作人", "说明"];
+    const rows = movements.map((movement) => [
+      movement.occurredAt,
+      formatMovementType(movement.type),
+      movement.barcode,
+      goodsLabel(movement.goodsId, props.state.goods),
+      movement.fromLabel,
+      movement.toLabel,
+      movement.operator,
+      movement.note
+    ]);
+    downloadCsv(`${barcode}-流水.csv`, [header, ...rows]);
+  }
+
+	  function clearInventoryFilters() {
+	    props.setFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+	  }
+
+  function deleteInventoryBarcode(barcode: string) {
+    if (!props.canDeleteInventory) return;
+    setDeleteDialog({
+      title: "彻底删除错误档案",
+      message: `只允许删除从未被单据、流水或条码更正引用的空白档案。\n确定尝试删除条码「${barcode}」吗？`,
+      confirmLabel: "确认删除",
+      destructive: true
+    });
+  }
+
+  async function confirmInventoryDelete() {
+    const barcode = detailResult?.item.barcode;
+    if (!barcode) return;
+    setMaintenanceBusy(true);
+    try {
+      await deleteJson<{ deleted: boolean }>(`/api/inventory/${encodeURIComponent(barcode)}`);
+      setDetailBarcode(null);
+      setDetailResult(null);
+      setDeleteDialog(null);
+      await loadInventoryPage();
+      showToast({ tone: "success", message: `条码 ${barcode} 已删除` });
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "删除库存条码失败") });
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  async function correctInventoryBarcode(newBarcode: string, reason: string) {
+    const barcode = detailResult?.item.barcode;
+    if (!barcode) return;
+    setMaintenanceBusy(true);
+    try {
+      const result = await patchJson<{ corrected: boolean; barcode: string }>(
+        `/api/inventory/${encodeURIComponent(barcode)}/correct`,
+        { newBarcode, reason }
+      );
+      setCorrectionOpen(false);
+      await loadInventoryPage();
+      await openDetail(result.barcode);
+      showToast({ tone: "success", message: `条码已更正为 ${result.barcode}` });
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "条码更正失败") });
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  async function writeOffInventoryBarcode(reason: string) {
+    const barcode = detailResult?.item.barcode;
+    if (!barcode) return;
+    setMaintenanceBusy(true);
+    try {
+      await postJson(`/api/inventory/${encodeURIComponent(barcode)}/write-off`, { reason });
+      setWriteOffOpen(false);
+      setDetailBarcode(null);
+      setDetailResult(null);
+      await Promise.all([loadInventoryPage(), props.onDataChanged()]);
+      showToast({ tone: "success", message: `条码 ${barcode} 已核销并保留完整历史` });
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "货物核销失败") });
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  async function adjustWarehouseInventory(quantityChange: number, reason: string) {
+    if (!adjustmentStock) return;
+    setMaintenanceBusy(true);
+    try {
+      await postJson("/api/warehouse-stocks/adjust", {
+        warehouseId: adjustmentStock.warehouseId,
+        goodsId: adjustmentStock.goodsId,
+        quantityChange,
+        reason
+      });
+      setAdjustmentStock(null);
+      await Promise.all([loadInventoryPage(), props.onDataChanged()]);
+      showToast({ tone: "success", message: `库存已修正 ${quantityChange > 0 ? "+" : ""}${quantityChange} 件` });
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "库存修正失败") });
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  const warehouseResultCount = inventoryResult.warehouseResultCount;
+  const salesResultCount = inventoryResult.salesResultCount;
+  const activeFilterCount = [
+    props.filters.keyword.trim(),
+    props.filters.ownerScope !== "all" ? props.filters.ownerScope : "",
+    props.filters.warehouseId !== "all" ? props.filters.warehouseId : "",
+    props.filters.salespersonId !== "all" ? props.filters.salespersonId : "",
+    props.filters.goodsId !== "all" ? props.filters.goodsId : ""
+  ].filter(Boolean).length;
+  const totalPages = Math.max(1, Math.ceil(inventoryResult.total / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageItems = inventoryResult.items;
+  const warehouseStockRows = props.state.warehouseStocks
+    .map((stock) => ({
+      stock,
+      warehouse: props.state.warehouses.find((warehouse) => warehouse.id === stock.warehouseId),
+      goods: props.state.goods.find((goods) => goods.id === stock.goodsId)
+    }))
+    .filter(({ stock, warehouse, goods }) => {
+      if (!warehouse || !goods) return false;
+      if (props.filters.ownerScope === "salesperson") return false;
+      if (props.filters.warehouseId !== "all" && stock.warehouseId !== props.filters.warehouseId) return false;
+      if (props.filters.goodsId !== "all" && stock.goodsId !== props.filters.goodsId) return false;
+      const keyword = props.filters.keyword.trim().toLowerCase();
+      if (!keyword) return true;
+      return (
+        warehouse.name.toLowerCase().includes(keyword) ||
+        goods.name.toLowerCase().includes(keyword) ||
+        goods.code.toLowerCase().includes(keyword)
+      );
+    })
+    .sort((a, b) => {
+      const warehouseSort = (a.warehouse?.name ?? "").localeCompare(b.warehouse?.name ?? "", "zh-CN");
+      if (warehouseSort !== 0) return warehouseSort;
+      return (a.goods?.code ?? "").localeCompare(b.goods?.code ?? "", "zh-CN");
+    });
+
+  useEffect(() => {
+    setPage(1);
+  }, [props.filters, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  return (
+    <div className="grid gap-4">
+      <section className="panel p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <SectionHeader icon={Search} title="库存查询" compact />
+            <p className="mt-2 text-xs text-muted">
+              当前筛选 {inventoryResult.total} 件 · 仓库在库 {warehouseResultCount} 件 · 销售人员名下{" "}
+              {salesResultCount} 件 · 已用筛选 {activeFilterCount} 项
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button whitespace-nowrap" onClick={() => void loadInventoryPage()} disabled={loading}>
+              <RotateCcw className="h-4 w-4" />
+              {loading ? "刷新中" : "刷新数据"}
+            </button>
+            <button className="secondary-button whitespace-nowrap" onClick={clearInventoryFilters}>
+              <X className="h-4 w-4" />
+              清空筛选
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.2fr)_150px_180px_180px_180px_130px] xl:items-end">
+          <div>
+            <label className="label" htmlFor="inventory-keyword">
+              关键字
+            </label>
+            <input
+              id="inventory-keyword"
+              className="field"
+              placeholder="货物名称、编码或条码"
+              value={props.filters.keyword}
+              onChange={(event) => props.setFilters({ ...props.filters, keyword: event.target.value })}
+            />
+          </div>
+          <FieldSelect
+            label="归属类型"
+            value={props.filters.ownerScope}
+            onChange={(value) =>
+              props.setFilters({
+                ...props.filters,
+                ownerScope: value as InventoryOwnerScope,
+                warehouseId: "all",
+                salespersonId: "all"
+              })
+            }
+            options={[
+              { value: "all", label: "全部库存" },
+              { value: "warehouse", label: "仓库库存" },
+              { value: "salesperson", label: "销售人员名下" }
+            ]}
+          />
+          {props.filters.ownerScope === "warehouse" ? (
+            <FieldSelect
+              label="具体仓库"
+              value={props.filters.warehouseId}
+              onChange={(value) => props.setFilters({ ...props.filters, warehouseId: value })}
+              options={[
+                { value: "all", label: "全部仓库" },
+                ...props.state.warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))
+              ]}
+            />
+          ) : props.filters.ownerScope === "salesperson" ? (
+            <FieldSelect
+              label="具体销售人员"
+              value={props.filters.salespersonId}
+              onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
+              options={[
+                { value: "all", label: "全部销售人员" },
+                ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))
+              ]}
+            />
+          ) : (
+            <ReadOnlyField label="具体范围" value="全部仓库与销售人员" />
+          )}
+          <FieldSelect
+            label="货物"
+            value={props.filters.goodsId}
+            onChange={(value) => props.setFilters({ ...props.filters, goodsId: value })}
+            options={[
+              { value: "all", label: "全部货物" },
+              ...props.state.goods.map((goods) => ({ value: goods.id, label: goods.name }))
+            ]}
+          />
+          <FieldSelect
+            label="单页显示"
+            value={String(pageSize)}
+            onChange={(value) => setPageSize(Number(value))}
+            options={pageSizeOptions.map((size) => ({ value: String(size), label: `${size} 件` }))}
+          />
+        </div>
+      </section>
+
+      <div className="grid gap-4">
+        <section className="panel overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
+            <SectionHeader icon={Boxes} title="仓库商品库存" compact />
+            <p className="text-xs text-muted">当前筛选 {warehouseStockRows.length} 条库存数量记录</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px]">
+              <thead className="table-head">
+                <tr>
+                  <th className="px-4 py-3">仓库</th>
+                  <th className="px-4 py-3">货物</th>
+                  <th className="px-4 py-3">当前库存</th>
+                  <th className="px-4 py-3">最近变动</th>
+                  {props.canDeleteInventory ? <th className="px-4 py-3">操作</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {warehouseStockRows.map(({ stock, warehouse, goods }) => (
+                  <tr key={stock.id} className="hover:bg-slate-50">
+                    <td className="table-cell font-medium text-ink">{warehouse?.name}</td>
+                    <td className="table-cell">
+                      <p className="font-medium text-ink">{goods?.name}</p>
+                      <p className="text-xs text-muted">{goods?.code}</p>
+                    </td>
+                    <td className="table-cell text-lg font-semibold text-ink">
+                      {stock.quantity.toLocaleString("zh-CN")} {goods?.unit}
+                    </td>
+                    <td className="table-cell text-slate-600">{stock.lastChangedAt}</td>
+                    {props.canDeleteInventory ? (
+                      <td className="table-cell">
+                        <button className="secondary-button h-8 px-2 text-xs" onClick={() => setAdjustmentStock(stock)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                          修正库存
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {warehouseStockRows.length === 0 ? (
+              <div className="border-t border-slate-200 p-4">
+                <EmptyState icon={Boxes} title="没有匹配的仓库库存" detail="销售人员名下筛选只影响下方条码追踪列表；仓库库存数量只展示仓库内商品数量。" />
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="panel overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
+            <SectionHeader icon={Barcode} title="可追踪条码列表" compact />
+            <p className="text-xs text-muted">
+              共 {inventoryResult.total} 件 · 第 {currentPage} / {totalPages} 页 · 点击条码查看详情
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px]">
+              <thead className="table-head">
+                <tr>
+                  <th className="px-4 py-3">条码 / 货物</th>
+                  <th className="px-4 py-3">当前归属</th>
+                  <th className="px-4 py-3">生产 / 保质期</th>
+                  <th className="px-4 py-3">最近流转</th>
+                  <th className="px-4 py-3">状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageItems.map((item) => {
+                  const goods = props.state.goods.find((entry) => entry.id === item.goodsId);
+                  const selected = props.selectedBarcode === item.barcode;
+                  const latestMovement = latestMovementByBarcode.get(item.barcode);
+                  return (
+                    <tr
+                      key={item.id}
+                      className={`cursor-pointer hover:bg-slate-50 ${selected ? "bg-emerald-50" : ""}`}
+                      onClick={() => {
+                        void openDetail(item.barcode);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          void openDetail(item.barcode);
+                        }
+                      }}
+                      tabIndex={0}
+                    >
+                      <td className="table-cell">
+                        <div className="font-mono text-sm font-semibold text-work">{item.barcode}</div>
+                        <div className="mt-1 font-medium text-ink">{goods?.name ?? "未知货物"}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          {goods?.code ?? "-"} · {goods ? formatCategory(goods.category) : "-"}
+                        </div>
+                      </td>
+                      <td className="table-cell text-slate-600">
+                        {ownerLabel(item, props.state.warehouses, props.state.salespeople, props.state.locations)}
+                      </td>
+                      <td className="table-cell text-slate-600">
+                        <div>{item.productionDate ?? "-"}</div>
+                        <div className="mt-1 text-xs text-slate-500">{item.shelfLifeDate ?? "无保质期"}</div>
+                      </td>
+                      <td className="table-cell text-slate-600">
+                        <div>{latestMovement ? formatMovementType(latestMovement.type) : "-"}</div>
+                        <div className="mt-1 font-mono text-xs text-slate-500">{latestMovement?.occurredAt ?? "-"}</div>
+                      </td>
+                      <td className="table-cell">
+                        <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {inventoryResult.total === 0 ? (
+              <div className="border-t border-slate-200 p-4">
+                <EmptyState
+                  icon={Search}
+                  title={loading ? "正在读取库存" : "没有匹配的库存记录"}
+                  detail={loading ? "系统正在按当前筛选读取库存。" : "可以调整归属、仓库、销售人员、货物或关键字后重新查询。"}
+                />
+              </div>
+            ) : null}
+          </div>
+          {inventoryResult.total > 0 ? (
+            <PaginationBar
+              page={currentPage}
+              pageSize={pageSize}
+              total={inventoryResult.total}
+              onPageChange={setPage}
+            />
+          ) : null}
+        </section>
+      </div>
+
+      <InventoryDetailModal
+        item={detailResult?.item}
+        movements={detailResult?.movements ?? []}
+        corrections={detailResult?.corrections ?? []}
+        state={props.state}
+        onClose={() => {
+          setDetailBarcode(null);
+          setDetailResult(null);
+        }}
+        onExport={() => exportMovements(detailBarcode ?? "", detailResult?.movements ?? [])}
+        canMaintain={props.canDeleteInventory}
+        onCorrect={() => setCorrectionOpen(true)}
+        onWriteOff={() => setWriteOffOpen(true)}
+        onDelete={() => {
+          if (detailResult?.item) deleteInventoryBarcode(detailResult.item.barcode);
+        }}
+      />
+      <BarcodeCorrectionDialog
+        item={correctionOpen ? detailResult?.item : undefined}
+        busy={maintenanceBusy}
+        onCancel={() => setCorrectionOpen(false)}
+        onConfirm={(newBarcode, reason) => void correctInventoryBarcode(newBarcode, reason)}
+      />
+      <ReasonDialog
+        title="货物核销"
+        message="核销后条码及全部历史仍会保留；若货物当前在仓库，仓库数量将同时减少 1 件。"
+        confirmLabel="确认核销"
+        open={writeOffOpen}
+        busy={maintenanceBusy}
+        onCancel={() => setWriteOffOpen(false)}
+        onConfirm={(reason) => void writeOffInventoryBarcode(reason)}
+      />
+      <ConfirmDialog
+        dialog={deleteDialog}
+        busy={maintenanceBusy}
+        onCancel={() => setDeleteDialog(null)}
+        onConfirm={() => void confirmInventoryDelete()}
+      />
+      <StockAdjustmentDialog
+        stock={adjustmentStock}
+        state={props.state}
+        busy={maintenanceBusy}
+        onCancel={() => setAdjustmentStock(null)}
+        onConfirm={(quantityChange, reason) => void adjustWarehouseInventory(quantityChange, reason)}
+      />
+    </div>
+  );
+}
+
+function InventoryDetailModal({
+  item,
+  movements,
+  corrections,
+  state,
+  onClose,
+  onExport,
+  canMaintain,
+  onCorrect,
+  onWriteOff,
+  onDelete
+}: {
+  item?: InventoryItem;
+  movements: StockMovement[];
+  corrections: InventoryDetailResult["corrections"];
+  state: WarehouseState;
+  onClose: () => void;
+  onExport: () => void;
+  canMaintain: boolean;
+  onCorrect: () => void;
+  onWriteOff: () => void;
+  onDelete: () => void;
+}) {
+  const goods = item ? state.goods.find((entry) => entry.id === item.goodsId) : undefined;
+
+  if (!item) {
+    return null;
+  }
+
+  return (
+    <div
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+      onClick={onClose}
+      role="dialog"
+    >
+      <section
+        className="flex h-[88vh] max-h-[760px] w-full max-w-5xl flex-col overflow-hidden rounded-md bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="shrink-0 border-b border-slate-200 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-muted">条码详情</p>
+              <p className="mt-1 break-all font-mono text-lg font-semibold text-work">{item.barcode}</p>
+            </div>
+	            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+	              <StatusBadge label={formatItemStatus(item)} />
+              {canMaintain ? (
+                <>
+                  <button className="secondary-button h-9 px-3" onClick={onCorrect}>
+                    <Pencil className="h-4 w-4" />
+                    更正条码
+                  </button>
+                  <button className="secondary-button h-9 px-3 text-red-600 hover:border-red-200 hover:bg-red-50" onClick={onWriteOff}>
+                    <AlertCircle className="h-4 w-4" />
+                    货物核销
+                  </button>
+                  <button className="secondary-button h-9 px-3 text-red-600 hover:border-red-200 hover:bg-red-50" onClick={onDelete}>
+                    <Trash2 className="h-4 w-4" />
+                    删除错误档案
+                  </button>
+                </>
+              ) : null}
+	              <button className="icon-button" onClick={onClose} aria-label="关闭条码详情">
+	                <X className="h-4 w-4" />
+	              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <div className="shrink-0 overflow-hidden rounded-md border border-slate-200">
+            <div className="grid md:grid-cols-2 lg:grid-cols-5">
+              <DetailRow label="货物" value={goods?.name ?? "未知货物"} meta={goods?.code ?? "-"} />
+              <DetailRow label="大类" value={goods ? formatCategory(goods.category) : "-"} />
+              <DetailRow
+                label="当前归属"
+                value={ownerLabel(item, state.warehouses, state.salespeople, state.locations)}
+              />
+              <DetailRow label="生产日期" value={item.productionDate ?? "-"} />
+              <DetailRow label="保质期" value={item.shelfLifeDate ?? "无"} />
+            </div>
+          </div>
+
+          {corrections.length > 0 ? (
+            <div className="mt-3 shrink-0 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+              <span className="font-semibold">条码更正 {corrections.length} 次：</span>{" "}
+              最近由 {corrections[0].oldBarcode} 更正为 {corrections[0].newBarcode}，原因：{corrections[0].reason}
+            </div>
+          ) : null}
+
+          <div className="mt-4 flex min-h-0 flex-1 flex-col border-t border-slate-200 pt-4">
+            <div className="flex shrink-0 items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-ink">库存流转</p>
+                <p className="mt-1 text-xs text-muted">{movements.length} 条记录</p>
+              </div>
+              <button className="secondary-button h-9 px-3" onClick={onExport} disabled={movements.length === 0}>
+                <Download className="h-4 w-4" />
+                导出
+              </button>
+            </div>
+
+            <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
+              {movements.map((movement, index) => (
+                <div key={movement.id} className="relative pl-5">
+                  <span className="absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full bg-work" />
+                  {index < movements.length - 1 ? (
+                    <span className="absolute bottom-[-18px] left-[4px] top-5 w-px bg-slate-200" />
+                  ) : null}
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-ink">{formatMovementType(movement.type)}</p>
+                      <span className="font-mono text-xs text-slate-500">{movement.occurredAt}</span>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-700">
+                      {movement.fromLabel} → {movement.toLabel}
+                    </p>
+                    <p className="mt-2 text-xs text-slate-500">{movement.note}</p>
+                  </div>
+                </div>
+              ))}
+              {movements.length === 0 ? (
+                <EmptyState
+                  icon={ClipboardList}
+                  title="暂无流转记录"
+                  detail="该条码发生入库、出库、挪仓或退回后，会显示完整流转时间线。"
+                />
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function formatItemStatus(item: InventoryItem) {
+  if (item.status === "written_off") return "已核销";
+  if (item.status === "voided") return "已撤销追踪";
+  return item.ownerType === "warehouse" ? "在库" : "销售人员名下";
+}
+
+function BarcodeCorrectionDialog({
+  item,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  item?: InventoryItem;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (newBarcode: string, reason: string) => void;
+}) {
+  const [newBarcode, setNewBarcode] = useState("");
+  const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    if (item) {
+      setNewBarcode("");
+      setReason("");
+    }
+  }, [item]);
+
+  if (!item) return null;
+  const valid = newBarcode.trim().length > 0 && newBarcode.trim() !== item.barcode && reason.trim().length >= 2;
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-4">
+      <section className="w-full max-w-lg rounded-md bg-white p-5 shadow-2xl" role="dialog" aria-modal="true">
+        <h2 className="text-base font-semibold text-ink">更正单件条码</h2>
+        <p className="mt-2 text-sm text-slate-600">货物身份和库存不变，原条码仍可查询到新条码及完整历史。</p>
+        <label className="label mt-4">原条码</label>
+        <input className="field font-mono" value={item.barcode} readOnly />
+        <label className="label mt-4" htmlFor="corrected-barcode">新条码</label>
+        <input
+          id="corrected-barcode"
+          className="field font-mono"
+          maxLength={128}
+          autoFocus
+          value={newBarcode}
+          onChange={(event) => setNewBarcode(event.target.value)}
+        />
+        <label className="label mt-4" htmlFor="correction-reason">更正原因</label>
+        <textarea
+          id="correction-reason"
+          className="field min-h-20 resize-y"
+          maxLength={200}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+        />
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="secondary-button" onClick={onCancel} disabled={busy}>取消</button>
+          <button className="primary-button" onClick={() => onConfirm(newBarcode.trim(), reason.trim())} disabled={busy || !valid}>
+            {busy ? "处理中" : "确认更正"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function StockAdjustmentDialog({
+  stock,
+  state,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  stock: WarehouseState["warehouseStocks"][number] | null;
+  state: WarehouseState;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (quantityChange: number, reason: string) => void;
+}) {
+  const [quantity, setQuantity] = useState("");
+  const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    if (stock) {
+      setQuantity("");
+      setReason("");
+    }
+  }, [stock]);
+
+  if (!stock) return null;
+  const warehouse = state.warehouses.find((item) => item.id === stock.warehouseId);
+  const goods = state.goods.find((item) => item.id === stock.goodsId);
+  const quantityChange = Number(quantity);
+  const valid = Number.isInteger(quantityChange) && quantityChange !== 0 && reason.trim().length >= 2;
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-4">
+      <section className="w-full max-w-lg rounded-md bg-white p-5 shadow-2xl" role="dialog" aria-modal="true">
+        <h2 className="text-base font-semibold text-ink">人工库存修正</h2>
+        <p className="mt-2 text-sm text-slate-600">
+          {warehouse?.name ?? "未知仓库"} · {goods?.name ?? "未知货物"}，当前 {stock.quantity} 件。
+        </p>
+        <label className="label mt-4" htmlFor="stock-quantity-change">增减数量</label>
+        <input
+          id="stock-quantity-change"
+          className="field"
+          type="number"
+          step="1"
+          placeholder="增加填正数，减少填负数"
+          autoFocus
+          value={quantity}
+          onChange={(event) => setQuantity(event.target.value)}
+        />
+        <label className="label mt-4" htmlFor="stock-adjustment-reason">修正原因</label>
+        <textarea
+          id="stock-adjustment-reason"
+          className="field min-h-20 resize-y"
+          maxLength={200}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+        />
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="secondary-button" onClick={onCancel} disabled={busy}>取消</button>
+          <button className="danger-button" onClick={() => onConfirm(quantityChange, reason.trim())} disabled={busy || !valid}>
+            {busy ? "处理中" : "确认修正"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DetailRow({ label, value, meta }: { label: string; value: string; meta?: string }) {
+  return (
+    <div className="border-b border-slate-200 px-3 py-2.5 md:border-b-0 md:border-r md:last:border-r-0">
+      <p className="text-xs text-muted">{label}</p>
+      <div>
+        <p className="break-words text-sm font-semibold text-ink">{value}</p>
+        {meta ? <p className="mt-1 break-words text-xs text-slate-500">{meta}</p> : null}
+      </div>
+    </div>
+  );
+}

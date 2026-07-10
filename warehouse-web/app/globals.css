@@ -60,6 +60,10 @@ textarea:focus-visible {
     @apply inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-700 transition hover:border-work hover:bg-emerald-50 hover:text-work disabled:cursor-not-allowed disabled:text-slate-400;
   }
 
+  .danger-button {
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-md bg-red-600 px-3.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300;
+  }
+
   .table-head {
     @apply bg-slate-50 text-left text-xs font-semibold tracking-normal text-slate-500;
   }

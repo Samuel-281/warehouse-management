@@ -5,15 +5,8 @@ import type {
   MovementType,
   Salesperson,
   StorageLocation,
-  Warehouse,
-  WarehouseState
+  Warehouse
 } from "./types";
-
-export const STORAGE_KEY = "warehouse-prototype-state-v1";
-
-export function cloneInitialState(state: WarehouseState): WarehouseState {
-  return JSON.parse(JSON.stringify(state)) as WarehouseState;
-}
 
 export function formatCategory(category: GoodsCategory) {
   return category === "health_wine" ? "保健酒" : "白酒";
