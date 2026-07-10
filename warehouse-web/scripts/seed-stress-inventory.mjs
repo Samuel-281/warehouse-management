@@ -327,9 +327,10 @@ async function createSalesReturn(records, context, occurredAt) {
   await client.query(
     `
       INSERT INTO sales_return_orders (
-        id, "orderNo", "returnWarehouseId", "returnLocationId", "operatorId", "operatorName", "createdAt"
+        id, "orderNo", "returnWarehouseId", "returnLocationId", "operatorId", "operatorName",
+        "reversalSupported", "createdAt"
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, false, $7)
     `,
     [
       orderId,
@@ -413,9 +414,10 @@ async function insertInboundOrder({ id, orderNo, source, warehouseId, locationId
   await client.query(
     `
       INSERT INTO inbound_orders (
-        id, "orderNo", source, "warehouseId", "locationId", "terminalStoreId", "operatorId", "operatorName", "createdAt"
+        id, "orderNo", source, "warehouseId", "locationId", "terminalStoreId", "operatorId", "operatorName",
+        "reversalSupported", "createdAt"
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9)
     `,
     [id, orderNo, source, warehouseId, locationId, terminalStoreId, context.operatorId, context.operatorName, occurredAt]
   );
@@ -436,9 +438,9 @@ async function insertOutboundOrder({
     `
       INSERT INTO outbound_orders (
         id, "orderNo", type, "sourceWarehouseId", "targetWarehouseId", "targetLocationId",
-        "salespersonId", "operatorId", "operatorName", "createdAt"
+        "salespersonId", "operatorId", "operatorName", "reversalSupported", "createdAt"
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10)
     `,
     [
       id,

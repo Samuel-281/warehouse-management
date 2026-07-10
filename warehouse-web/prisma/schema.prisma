@@ -36,6 +36,7 @@ enum ItemStatus {
 enum InboundSource {
   FACTORY
   TERMINAL_RETURN
+  OUTBOUND_SCAN
 }
 
 enum OutboundType {
@@ -338,11 +339,10 @@ model StockMovement {
   goods    Goods         @relation(fields: [goodsId], references: [id])
   operator User?         @relation(fields: [operatorId], references: [id])
 
-  @@index([barcode])
-  @@index([itemId])
   @@index([goodsId])
   @@index([occurredAt])
-  @@index([barcode, occurredAt])
+  @@index([barcode, occurredAt(sort: Desc)])
+  @@index([itemId, occurredAt(sort: Desc)])
   @@index([orderKind, orderId])
   @@map("stock_movements")
 }

@@ -1,10 +1,9 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import { getPrisma } from "@/lib/db";
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type {
-  InboundSource,
   InventoryDetailResult,
   InventoryItem,
   InventoryListResult,
@@ -12,11 +11,12 @@ import type {
   MovementType,
   OwnerType,
   StockMovement,
+  TrackingSource,
   WarehouseStock,
   WarehouseStockMovement
 } from "@/lib/types";
 
-type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
+type DbInboundSource = "FACTORY" | "TERMINAL_RETURN" | "OUTBOUND_SCAN";
 type DbMovementType =
   | "FACTORY_INBOUND"
   | "TERMINAL_RETURN_INBOUND"
@@ -111,7 +111,8 @@ export async function listInventory(input: InventoryQueryInput): Promise<Invento
   const prisma = getPrisma();
   const page = normalizePage(input.page);
   const pageSize = normalizePageSize(input.pageSize);
-  const where = buildInventoryWhere(input);
+  const exactItemId = await resolveExactBarcode(input.keyword);
+  const where = buildInventoryWhere(input, exactItemId);
 
   const [total, warehouseResultCount, salesResultCount, items] = await Promise.all([
     prisma.inventoryItem.count({ where }),
@@ -125,8 +126,7 @@ export async function listInventory(input: InventoryQueryInput): Promise<Invento
     })
   ]);
 
-  const barcodes = items.map((item) => item.barcode);
-  const latestMovements = await latestMovementForBarcodes(barcodes);
+  const latestMovements = await latestMovementForItems(items.map((item) => item.id));
 
   return {
     items: items.map(mapInventoryItem),
@@ -322,7 +322,7 @@ export async function validateBarcodes(input: BarcodeValidationInput): Promise<B
   });
 }
 
-function buildInventoryWhere(input: InventoryQueryInput): Prisma.InventoryItemWhereInput {
+function buildInventoryWhere(input: InventoryQueryInput, exactItemId?: string): Prisma.InventoryItemWhereInput {
   const where: Prisma.InventoryItemWhereInput = { status: { in: ["IN_STOCK", "WITH_SALESPERSON"] } };
   const keyword = input.keyword?.trim();
 
@@ -338,7 +338,9 @@ function buildInventoryWhere(input: InventoryQueryInput): Prisma.InventoryItemWh
     where.goodsId = input.goodsId;
   }
 
-  if (keyword) {
+  if (exactItemId) {
+    where.id = exactItemId;
+  } else if (keyword) {
     where.OR = [
       { barcode: { contains: keyword, mode: "insensitive" } },
       { goods: { name: { contains: keyword, mode: "insensitive" } } },
@@ -349,21 +351,30 @@ function buildInventoryWhere(input: InventoryQueryInput): Prisma.InventoryItemWh
   return where;
 }
 
-async function latestMovementForBarcodes(barcodes: string[]) {
-  if (barcodes.length === 0) return [];
+async function latestMovementForItems(itemIds: string[]) {
+  if (itemIds.length === 0) return [];
   const prisma = getPrisma();
-  const movements = await prisma.stockMovement.findMany({
-    where: { barcode: { in: barcodes } },
-    orderBy: [{ barcode: "asc" }, { occurredAt: "desc" }]
+  const movements = await prisma.$queryRaw<DbStockMovement[]>(Prisma.sql`
+    SELECT DISTINCT ON ("itemId")
+      id, "itemId", barcode, "goodsId", type, "fromLabel", "toLabel", "operatorName", "occurredAt", note
+    FROM "stock_movements"
+    WHERE "itemId" IN (${Prisma.join(itemIds)})
+    ORDER BY "itemId", "occurredAt" DESC
+  `);
+  return movements.map(mapStockMovement);
+}
+
+async function resolveExactBarcode(keyword?: string) {
+  const barcode = keyword?.trim();
+  if (!barcode) return undefined;
+  const prisma = getPrisma();
+  const item = await prisma.inventoryItem.findUnique({ where: { barcode }, select: { id: true } });
+  if (item) return item.id;
+  const correction = await prisma.barcodeCorrection.findUnique({
+    where: { oldBarcode: barcode },
+    select: { itemId: true }
   });
-  const seen = new Set<string>();
-  const latest: StockMovement[] = [];
-  for (const movement of movements) {
-    if (seen.has(movement.barcode)) continue;
-    seen.add(movement.barcode);
-    latest.push(mapStockMovement(movement));
-  }
-  return latest;
+  return correction?.itemId;
 }
 
 function normalizePage(page?: number) {
@@ -375,8 +386,10 @@ function normalizePageSize(pageSize?: number) {
   return Math.min(100, Math.max(1, Math.floor(pageSize)));
 }
 
-function mapInboundSource(source: DbInboundSource): InboundSource {
-  return source === "FACTORY" ? "factory" : "terminal_return";
+function mapInboundSource(source: DbInboundSource): TrackingSource {
+  if (source === "FACTORY") return "factory";
+  if (source === "TERMINAL_RETURN") return "terminal_return";
+  return "outbound_scan";
 }
 
 function mapOwnerType(type: DbInventoryItem["ownerType"]): OwnerType {

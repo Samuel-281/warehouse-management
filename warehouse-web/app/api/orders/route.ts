@@ -5,7 +5,16 @@ import { listOrderSummaries } from "@/lib/services/order-service";
 export async function GET(request: Request) {
   try {
     await requireCurrentUser(request);
-    return ok(await listOrderSummaries());
+    const url = new URL(request.url);
+    return ok(
+      await listOrderSummaries({
+        kind: (url.searchParams.get("kind") ?? "all") as "all" | "inbound" | "outbound" | "sales_return",
+        status: (url.searchParams.get("status") ?? "all") as "all" | "active" | "voided",
+        barcode: url.searchParams.get("barcode") ?? "",
+        page: Number(url.searchParams.get("page") ?? "1"),
+        pageSize: Number(url.searchParams.get("pageSize") ?? "20")
+      })
+    );
   } catch (error) {
     return fail(error);
   }

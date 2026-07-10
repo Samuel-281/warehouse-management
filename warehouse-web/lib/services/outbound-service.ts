@@ -1,5 +1,3 @@
-import type { Prisma } from "@prisma/client";
-
 import { getPrisma } from "@/lib/db";
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
@@ -7,7 +5,7 @@ import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InventoryItem, MovementType, OutboundType, StockMovement } from "@/lib/types";
 
 type DbOutboundType = "TRANSFER" | "SALES";
-type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
+type DbInboundSource = "FACTORY" | "TERMINAL_RETURN" | "OUTBOUND_SCAN";
 type DbMovementType =
   | "FACTORY_INBOUND"
   | "TERMINAL_RETURN_INBOUND"
@@ -186,97 +184,105 @@ export async function submitOutbound(input: SubmitOutboundInput) {
       }
     }
 
-    const updatedItems: InventoryItem[] = [];
-    const movements: StockMovement[] = [];
-
-    for (const line of lines) {
-      const goods = goodsById.get(line.goodsId);
-      if (!goods) throw new Error("请选择有效的货物");
-
-      for (const barcode of line.barcodes) {
-        const existingItem = itemByBarcode.get(barcode);
-        const item =
-          existingItem ??
-          (await tx.inventoryItem.create({
-            data: {
-              barcode,
-              goodsId: goods.id,
-              ownerType: "WAREHOUSE",
-              warehouseId: sourceWarehouse.id,
-              locationId: sourceLocation.id,
-              status: "IN_STOCK",
-              productionDate: null,
-              shelfLifeDate: null,
-              inboundSource: "FACTORY",
-              lastMovedAt: time
-            }
-          }));
-
-        const fromLabel = await warehouseLabel(tx, item.warehouseId, item.locationId);
-        const toLabel =
-          destinationType === "transfer"
-            ? `${targetWarehouse?.name ?? "目标仓库"} / ${targetLocation?.name ?? "默认库位"}`
-            : `销售人员：${salesperson?.name ?? "未知"}`;
-
-        const updated = await tx.inventoryItem.update({
-          where: { id: item.id },
-          data:
-            destinationType === "transfer"
-              ? {
-                  ownerType: "WAREHOUSE",
-                  warehouseId: targetWarehouse?.id,
-                  locationId: targetLocation?.id,
-                  salespersonId: null,
-                  status: "IN_STOCK",
-                  lastMovedAt: time
-                }
-              : {
-                  ownerType: "SALESPERSON",
-                  warehouseId: null,
-                  locationId: null,
-                  salespersonId: salesperson?.id,
-                  status: "WITH_SALESPERSON",
-                  lastMovedAt: time
-                }
-        });
-
-        const movement = await tx.stockMovement.create({
-          data: {
-            itemId: updated.id,
-            barcode: updated.barcode,
-            goodsId: updated.goodsId,
-            type: destinationType === "transfer" ? "TRANSFER" : "SALES_OUTBOUND",
-            fromLabel,
-            toLabel,
-            operatorName: input.operatorName,
-            occurredAt: time,
-            note: destinationType === "transfer" ? "扫码出库发往仓库" : "扫码出库分配销售",
-            orderKind: "outbound",
-            orderId: order.id,
-            orderNo: order.orderNo
-          }
-        });
-
-        await tx.outboundOrderItem.create({
-          data: {
-            orderId: order.id,
-            inventoryItemId: updated.id,
-            barcode: updated.barcode,
-            goodsId: updated.goodsId,
-            beforeOwnerType: "WAREHOUSE",
-            beforeWarehouseId: sourceWarehouse.id,
-            beforeLocationId: item.locationId ?? sourceLocation.id,
-            beforeSalespersonId: null,
-            createdTrackingItem: !existingItem
-          }
-        });
-
-        updatedItems.push(mapInventoryItem(updated));
-        movements.push(mapStockMovement(movement));
-      }
+    const missingBarcodes = barcodes.filter((barcode) => !itemByBarcode.has(barcode));
+    if (missingBarcodes.length > 0) {
+      await tx.inventoryItem.createMany({
+        data: missingBarcodes.map((barcode) => ({
+          barcode,
+          goodsId: lineByBarcode.get(barcode)!.goodsId,
+          ownerType: destinationType === "transfer" ? "WAREHOUSE" : "SALESPERSON",
+          warehouseId: destinationType === "transfer" ? targetWarehouse!.id : null,
+          locationId: destinationType === "transfer" ? targetLocation!.id : null,
+          salespersonId: destinationType === "sales" ? salesperson!.id : null,
+          status: destinationType === "transfer" ? "IN_STOCK" : "WITH_SALESPERSON",
+          productionDate: null,
+          shelfLifeDate: null,
+          inboundSource: "OUTBOUND_SCAN",
+          lastMovedAt: time
+        }))
+      });
     }
 
-    return { orderId: order.id, items: updatedItems, movements };
+    if (items.length > 0) {
+      const updated = await tx.inventoryItem.updateMany({
+        where: {
+          id: { in: items.map((item) => item.id) },
+          ownerType: "WAREHOUSE",
+          status: "IN_STOCK",
+          warehouseId: sourceWarehouse.id
+        },
+        data:
+          destinationType === "transfer"
+            ? {
+                ownerType: "WAREHOUSE",
+                warehouseId: targetWarehouse!.id,
+                locationId: targetLocation!.id,
+                salespersonId: null,
+                status: "IN_STOCK",
+                lastMovedAt: time
+              }
+            : {
+                ownerType: "SALESPERSON",
+                warehouseId: null,
+                locationId: null,
+                salespersonId: salesperson!.id,
+                status: "WITH_SALESPERSON",
+                lastMovedAt: time
+              }
+      });
+      if (updated.count !== items.length) throw new Error("部分条码已被其他设备处理，请刷新条码校验后重试");
+    }
+
+    const persistedItems = await tx.inventoryItem.findMany({
+      where: { barcode: { in: barcodes } },
+      orderBy: { barcode: "asc" }
+    });
+    if (persistedItems.length !== barcodes.length) throw new Error("条码写入不完整，请重试");
+
+    const fromLabel = `${sourceWarehouse.name} / ${sourceLocation.name}`;
+    const toLabel =
+      destinationType === "transfer"
+        ? `${targetWarehouse!.name} / ${targetLocation!.name}`
+        : `销售人员：${salesperson!.name}`;
+    const createdMovements = await tx.stockMovement.createManyAndReturn({
+      data: persistedItems.map((item) => ({
+        itemId: item.id,
+        barcode: item.barcode,
+        goodsId: item.goodsId,
+        type: destinationType === "transfer" ? "TRANSFER" : "SALES_OUTBOUND",
+        fromLabel,
+        toLabel,
+        operatorName: input.operatorName,
+        occurredAt: time,
+        note: destinationType === "transfer" ? "扫码出库发往仓库" : "扫码出库分配销售",
+        orderKind: "outbound",
+        orderId: order.id,
+        orderNo: order.orderNo
+      }))
+    });
+
+    await tx.outboundOrderItem.createMany({
+      data: persistedItems.map((item) => {
+        const previous = itemByBarcode.get(item.barcode);
+        return {
+          orderId: order.id,
+          inventoryItemId: item.id,
+          barcode: item.barcode,
+          goodsId: item.goodsId,
+          beforeOwnerType: "WAREHOUSE",
+          beforeWarehouseId: sourceWarehouse.id,
+          beforeLocationId: previous?.locationId ?? sourceLocation.id,
+          beforeSalespersonId: null,
+          createdTrackingItem: !previous
+        };
+      })
+    });
+
+    return {
+      orderId: order.id,
+      items: persistedItems.map(mapInventoryItem),
+      movements: createdMovements.map(mapStockMovement)
+    };
   });
 }
 
@@ -336,22 +342,10 @@ function toDbOutboundType(type: OutboundType): DbOutboundType {
   return type === "transfer" ? "TRANSFER" : "SALES";
 }
 
-async function warehouseLabel(
-  tx: Prisma.TransactionClient,
-  warehouseId: string | null,
-  locationId: string | null
-) {
-  if (!warehouseId) return "未知仓库";
-  const [warehouse, location] = await Promise.all([
-    tx.warehouse.findUnique({ where: { id: warehouseId } }),
-    locationId ? tx.storageLocation.findUnique({ where: { id: locationId } }) : null
-  ]);
-  if (!warehouse) return "未知仓库";
-  return location ? `${warehouse.name} / ${location.name}` : warehouse.name;
-}
-
 function mapInboundSource(source: DbInboundSource) {
-  return source === "FACTORY" ? "factory" : "terminal_return";
+  if (source === "FACTORY") return "factory";
+  if (source === "TERMINAL_RETURN") return "terminal_return";
+  return "outbound_scan";
 }
 
 function mapOwnerType(type: DbInventoryItem["ownerType"]) {

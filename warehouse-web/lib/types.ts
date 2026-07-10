@@ -4,6 +4,7 @@ export type OwnerType = "warehouse" | "salesperson";
 export type ItemStatus = "in_stock" | "with_salesperson" | "written_off" | "voided";
 export type OrderStatus = "active" | "voided";
 export type InboundSource = "factory" | "terminal_return";
+export type TrackingSource = InboundSource | "outbound_scan";
 export type OutboundType = "transfer" | "sales" | "direct";
 export type MovementType =
   | "factory_inbound"
@@ -93,7 +94,7 @@ export type InventoryItem = {
   status: ItemStatus;
   productionDate?: string;
   shelfLifeDate?: string;
-  inboundSource: InboundSource;
+  inboundSource: TrackingSource;
   lastMovedAt: string;
 };
 
@@ -210,6 +211,18 @@ export type OrderSummary = {
   voidedAt?: string;
   voidedBy?: string;
   voidReason?: string;
+};
+
+export type OrderListResult = {
+  items: OrderSummary[];
+  total: number;
+  counts: {
+    inbound: number;
+    outbound: number;
+    salesReturn: number;
+  };
+  page: number;
+  pageSize: number;
 };
 
 export type WarehouseState = {

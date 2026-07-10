@@ -1,12 +1,10 @@
-import type { Prisma } from "@prisma/client";
-
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { getPrisma } from "@/lib/db";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InventoryItem, MovementType, StockMovement } from "@/lib/types";
 
-type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
+type DbInboundSource = "FACTORY" | "TERMINAL_RETURN" | "OUTBOUND_SCAN";
 type DbMovementType =
   | "FACTORY_INBOUND"
   | "TERMINAL_RETURN_INBOUND"
@@ -96,8 +94,6 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
       }
     });
 
-    const updatedItems: InventoryItem[] = [];
-    const movements: StockMovement[] = [];
     const toLabel = `${returnWarehouse.name} / ${returnLocation.name}`;
     const goodsQuantities = new Map<string, number>();
     for (const item of items) {
@@ -120,31 +116,46 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
       });
     }
 
-    for (const barcode of barcodes) {
-      const item = itemByBarcode.get(barcode);
-      if (!item || !item.salespersonId) continue;
+    const salespersonIds = [...new Set(items.map((item) => item.salespersonId).filter((id): id is string => Boolean(id)))];
+    const salespersonNames = new Map(
+      (
+        await tx.salesperson.findMany({
+          where: { id: { in: salespersonIds } },
+          select: { id: true, name: true }
+        })
+      ).map((person) => [person.id, person.name])
+    );
 
-      const fromLabel = await salespersonLabel(tx, item.salespersonId);
-      const previousSalespersonId = item.salespersonId;
-      const updated = await tx.inventoryItem.update({
-        where: { id: item.id },
-        data: {
-          ownerType: "WAREHOUSE",
-          warehouseId: returnWarehouse.id,
-          locationId: returnLocation.id,
-          salespersonId: null,
-          status: "IN_STOCK",
-          lastMovedAt: time
-        }
-      });
+    const updated = await tx.inventoryItem.updateMany({
+      where: {
+        id: { in: items.map((item) => item.id) },
+        ownerType: "SALESPERSON",
+        status: "WITH_SALESPERSON"
+      },
+      data: {
+        ownerType: "WAREHOUSE",
+        warehouseId: returnWarehouse.id,
+        locationId: returnLocation.id,
+        salespersonId: null,
+        status: "IN_STOCK",
+        lastMovedAt: time
+      }
+    });
+    if (updated.count !== items.length) throw new Error("部分条码已被其他设备处理，请刷新条码校验后重试");
 
-      const movement = await tx.stockMovement.create({
-        data: {
-          itemId: updated.id,
-          barcode: updated.barcode,
-          goodsId: updated.goodsId,
-          type: "SALES_RETURN",
-          fromLabel,
+    const persistedItems = await tx.inventoryItem.findMany({
+      where: { id: { in: items.map((item) => item.id) } },
+      orderBy: { barcode: "asc" }
+    });
+    const createdMovements = await tx.stockMovement.createManyAndReturn({
+      data: persistedItems.map((item) => {
+        const previous = itemByBarcode.get(item.barcode)!;
+        return {
+          itemId: item.id,
+          barcode: item.barcode,
+          goodsId: item.goodsId,
+          type: "SALES_RETURN" as const,
+          fromLabel: `销售人员：${salespersonNames.get(previous.salespersonId!) ?? "未知"}`,
           toLabel,
           operatorName: input.operatorName,
           occurredAt: time,
@@ -152,28 +163,31 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
           orderKind: "sales_return",
           orderId: order.id,
           orderNo: order.orderNo
-        }
-      });
-
-      await tx.salesReturnOrderItem.create({
-        data: {
+        };
+      })
+    });
+    await tx.salesReturnOrderItem.createMany({
+      data: persistedItems.map((item) => {
+        const previous = itemByBarcode.get(item.barcode)!;
+        return {
           orderId: order.id,
-          inventoryItemId: updated.id,
-          barcode: updated.barcode,
-          goodsId: updated.goodsId,
-          fromSalespersonId: previousSalespersonId,
-          beforeOwnerType: "SALESPERSON",
+          inventoryItemId: item.id,
+          barcode: item.barcode,
+          goodsId: item.goodsId,
+          fromSalespersonId: previous.salespersonId!,
+          beforeOwnerType: "SALESPERSON" as const,
           beforeWarehouseId: null,
           beforeLocationId: null,
-          beforeSalespersonId: previousSalespersonId
-        }
-      });
+          beforeSalespersonId: previous.salespersonId
+        };
+      })
+    });
 
-      updatedItems.push(mapInventoryItem(updated));
-      movements.push(mapStockMovement(movement));
-    }
-
-    return { orderId: order.id, items: updatedItems, movements };
+    return {
+      orderId: order.id,
+      items: persistedItems.map(mapInventoryItem),
+      movements: createdMovements.map(mapStockMovement)
+    };
   });
 }
 
@@ -182,13 +196,10 @@ function makeOrderNo(prefix: string) {
   return `${prefix}${Date.now()}${random}`;
 }
 
-async function salespersonLabel(tx: Prisma.TransactionClient, salespersonId: string) {
-  const salesperson = await tx.salesperson.findUnique({ where: { id: salespersonId } });
-  return `销售人员：${salesperson?.name ?? "未知"}`;
-}
-
 function mapInboundSource(source: DbInboundSource) {
-  return source === "FACTORY" ? "factory" : "terminal_return";
+  if (source === "FACTORY") return "factory";
+  if (source === "TERMINAL_RETURN") return "terminal_return";
+  return "outbound_scan";
 }
 
 function mapOwnerType(type: DbInventoryItem["ownerType"]) {

@@ -42,6 +42,8 @@ import type {
   ManagedUser,
   OperationLog,
   OrderKind,
+  OrderListResult,
+  OrderStatus,
   OrderSummary,
   OutboundType,
   StockMovement,
@@ -271,7 +273,13 @@ export default function WarehousePrototype() {
     salespersonId: "all",
     goodsId: "all"
   });
-  const [orders, setOrders] = useState<OrderSummary[]>([]);
+  const [orderResult, setOrderResult] = useState<OrderListResult>({
+    items: [],
+    total: 0,
+    counts: { inbound: 0, outbound: 0, salesReturn: 0 },
+    page: 1,
+    pageSize: 20
+  });
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orderKindFilter, setOrderKindFilter] = useState<OrderKind | "all">("all");
   const [orderBarcodeFilter, setOrderBarcodeFilter] = useState("");
@@ -487,27 +495,29 @@ export default function WarehousePrototype() {
     }
   }, [directOutboundGoodsId, state.goods]);
 
-  const filteredOrders = useMemo(() => {
-    if (orderKindFilter === "all") return orders;
-    return orders.filter((order) => order.kind === orderKindFilter);
-  }, [orderKindFilter, orders]);
-
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (query: {
+    kind: OrderKind | "all";
+    status: OrderStatus | "all";
+    barcode: string;
+    page: number;
+    pageSize: number;
+  }) => {
     setOrdersLoading(true);
     try {
-      setOrders(await getJson<OrderSummary[]>("/api/orders"));
+      const params = new URLSearchParams({
+        kind: query.kind,
+        status: query.status,
+        barcode: query.barcode.trim(),
+        page: String(query.page),
+        pageSize: String(query.pageSize)
+      });
+      setOrderResult(await getJson<OrderListResult>(`/api/orders?${params.toString()}`));
     } catch (error) {
       showToast({ tone: "error", message: handleRequestError(error, "读取单据失败") });
     } finally {
       setOrdersLoading(false);
     }
   }, [handleRequestError, showToast]);
-
-  useEffect(() => {
-    if (activeView === "orders" && loggedIn) {
-      void loadOrders();
-    }
-  }, [activeView, loadOrders, loggedIn]);
 
   async function logout() {
     try {
@@ -1180,7 +1190,8 @@ export default function WarehousePrototype() {
           ) : null}
           {activeView === "orders" ? (
             <OrdersView
-              orders={filteredOrders}
+              orders={orderResult.items}
+              result={orderResult}
               loading={ordersLoading}
               kindFilter={orderKindFilter}
               setKindFilter={setOrderKindFilter}
@@ -3339,6 +3350,7 @@ function SalesReturnView(props: {
 
 function OrdersView({
   orders,
+  result,
   loading,
   kindFilter,
   setKindFilter,
@@ -3349,44 +3361,50 @@ function OrdersView({
   canDeleteOrders
 }: {
   orders: OrderSummary[];
+  result: OrderListResult;
   loading: boolean;
   kindFilter: OrderKind | "all";
   setKindFilter: (value: OrderKind | "all") => void;
   barcodeFilter: string;
   setBarcodeFilter: (value: string) => void;
-  refreshOrders: () => void;
+  refreshOrders: (query: {
+    kind: OrderKind | "all";
+    status: OrderStatus | "all";
+    barcode: string;
+    page: number;
+    pageSize: number;
+  }) => Promise<void>;
   showToast: (toast: Toast) => void;
   canDeleteOrders: boolean;
 }) {
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
-  const barcodeKeyword = barcodeFilter.trim().toLowerCase();
-  const barcodeFilteredOrders = useMemo(
-    () =>
-      orders.filter(
-        (order) =>
-          !barcodeKeyword || order.barcodes.some((barcode) => barcode.toLowerCase().includes(barcodeKeyword))
-      ),
-    [barcodeKeyword, orders]
-  );
-  const inboundCount = barcodeFilteredOrders.filter((order) => order.kind === "inbound").length;
-  const outboundCount = barcodeFilteredOrders.filter((order) => order.kind === "outbound").length;
-  const returnCount = barcodeFilteredOrders.filter((order) => order.kind === "sales_return").length;
-  const totalPages = Math.max(1, Math.ceil(barcodeFilteredOrders.length / pageSize));
+  const [statusFilter, setStatusFilter] = useState<OrderStatus | "all">("all");
+  const inboundCount = result.counts.inbound;
+  const outboundCount = result.counts.outbound;
+  const returnCount = result.counts.salesReturn;
+  const totalPages = Math.max(1, Math.ceil(result.total / pageSize));
   const currentPage = Math.min(page, totalPages);
-  const pageOrders = barcodeFilteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const selectedOrders = barcodeFilteredOrders.filter((order) => selectedOrderIds.includes(order.id));
+  const pageOrders = orders;
+  const selectedOrders = orders.filter((order) => selectedOrderIds.includes(order.id));
   const pageSelectedOrders = pageOrders.filter((order) => selectedOrderIds.includes(order.id));
   const allVisibleSelected = pageOrders.length > 0 && pageSelectedOrders.length === pageOrders.length;
 
   useEffect(() => {
-    setSelectedOrderIds((previous) => previous.filter((id) => barcodeFilteredOrders.some((order) => order.id === id)));
-  }, [barcodeFilteredOrders]);
+    setSelectedOrderIds((previous) => previous.filter((id) => orders.some((order) => order.id === id)));
+  }, [orders]);
 
   useEffect(() => {
     setPage(1);
-  }, [barcodeFilter, kindFilter, pageSize]);
+  }, [barcodeFilter, kindFilter, pageSize, statusFilter]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshOrders({ kind: kindFilter, status: statusFilter, barcode: barcodeFilter, page, pageSize });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [barcodeFilter, kindFilter, page, pageSize, refreshOrders, statusFilter]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -3407,32 +3425,39 @@ function OrdersView({
     );
   }
 
-  function exportSelectedOrders() {
+  async function exportSelectedOrders() {
     if (selectedOrders.length === 0) return;
-
-    const header = ["单据号", "单据类型", "业务类型", "来源 / 去向", "往来方", "数量", "货物", "条码", "操作人", "创建时间"];
-    const rows = selectedOrders.flatMap((order) => {
-      const barcodes = order.barcodes.length > 0 ? order.barcodes : ["-"];
-      return barcodes.map((barcode) => [
-        order.orderNo,
-        formatOrderKind(order.kind),
-        order.businessType,
-        order.primaryTarget,
-        order.counterparty ?? "-",
-        `${order.itemCount}`,
-        order.goodsSummary || "-",
-        barcode,
-        order.operator,
-        order.createdAt
-      ]);
-    });
-    const timestamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
-    downloadCsv(`业务单据导出-${timestamp}.csv`, [header, ...rows]);
-    showToast({ tone: "success", message: `已导出 ${selectedOrders.length} 张单据` });
+    try {
+      const response = await fetch("/api/orders/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ orders: selectedOrders.map((order) => ({ id: order.id, kind: order.kind })) })
+      });
+      if (!response.ok) {
+        const payload = (await response.json()) as ApiResponse<never>;
+        throw new ClientApiError("error" in payload ? payload.error : "导出单据失败", response.status);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `业务单据导出-${new Date().toISOString().slice(0, 10)}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      showToast({ tone: "success", message: `已导出 ${selectedOrders.length} 张单据` });
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "导出单据失败") });
+    }
   }
 
   async function deleteSelectedOrders() {
     if (!canDeleteOrders || selectedOrders.length === 0) return;
+    const invalid = selectedOrders.find((order) => order.status === "voided" || !order.reversalSupported);
+    if (invalid) {
+      showToast({ tone: "error", message: `单据 ${invalid.orderNo} 已作废或不支持撤销` });
+      return;
+    }
     const reason = window.prompt(
       `将撤销已选 ${selectedOrders.length} 张单据，并恢复其库存影响。请输入撤销原因：`
     )?.trim();
@@ -3453,7 +3478,7 @@ function OrdersView({
         throw new ClientApiError("error" in payload ? payload.error : "撤销单据失败", response.status);
       }
       setSelectedOrderIds([]);
-      await refreshOrders();
+      await refreshOrders({ kind: kindFilter, status: statusFilter, barcode: barcodeFilter, page, pageSize });
       showToast({ tone: "success", message: `已撤销 ${payload.data.voided} 张单据，库存影响已恢复` });
     } catch (error) {
       showToast({ tone: "error", message: apiErrorMessage(error, "撤销单据失败") });
@@ -3467,10 +3492,10 @@ function OrdersView({
           <div>
             <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
             <p className="mt-2 text-xs text-muted">
-              当前 {barcodeFilteredOrders.length} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
+              当前筛选 {result.total} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-[180px_220px_120px_auto_auto_auto_auto] sm:items-end">
+          <div className="grid gap-2 sm:grid-cols-[160px_150px_220px_120px_auto_auto_auto_auto] sm:items-end">
             <div>
               <FieldSelect
                 label="业务类型"
@@ -3484,6 +3509,16 @@ function OrdersView({
                 ]}
               />
             </div>
+            <FieldSelect
+              label="单据状态"
+              value={statusFilter}
+              onChange={(value) => setStatusFilter(value as OrderStatus | "all")}
+              options={[
+                { value: "all", label: "全部状态" },
+                { value: "active", label: "正常" },
+                { value: "voided", label: "已作废" }
+              ]}
+            />
             <div>
               <label className="label" htmlFor="order-barcode-filter">
                 条码
@@ -3502,7 +3537,11 @@ function OrdersView({
               onChange={(value) => setPageSize(Number(value))}
               options={pageSizeOptions.map((size) => ({ value: String(size), label: `${size} 张` }))}
             />
-            <button className="secondary-button" onClick={refreshOrders} disabled={loading}>
+            <button
+              className="secondary-button"
+              onClick={() => void refreshOrders({ kind: kindFilter, status: statusFilter, barcode: barcodeFilter, page, pageSize })}
+              disabled={loading}
+            >
               <RotateCcw className="h-4 w-4" />
               {loading ? "刷新中" : "刷新单据"}
             </button>
@@ -3533,7 +3572,7 @@ function OrdersView({
           <SectionHeader icon={ClipboardList} title="单据列表" compact />
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
             <span>
-              当前 {formatOrderFilterLabel(kindFilter)} · {barcodeFilteredOrders.length} 张 · 第 {currentPage} /{" "}
+              当前 {formatOrderFilterLabel(kindFilter)} · {result.total} 张 · 第 {currentPage} /{" "}
               {totalPages} 页
             </span>
             <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
@@ -3579,6 +3618,7 @@ function OrdersView({
                     <td className="table-cell">
                       <div className="font-mono text-sm font-semibold text-work">{order.orderNo}</div>
                       <div className="mt-1 text-xs text-slate-500">{order.createdAt}</div>
+                      {order.status === "voided" ? <div className="mt-1 text-xs font-semibold text-red-600">已作废</div> : null}
                     </td>
                     <td className="table-cell">
                       <StatusBadge label={order.businessType} />
@@ -3600,7 +3640,7 @@ function OrdersView({
                   </tr>
                 );
               })}
-              {barcodeFilteredOrders.length === 0 ? (
+              {pageOrders.length === 0 ? (
                 <tr>
                   <td className="table-cell" colSpan={6}>
                     <EmptyState
@@ -3614,11 +3654,11 @@ function OrdersView({
             </tbody>
           </table>
         </div>
-        {barcodeFilteredOrders.length > 0 ? (
+        {result.total > 0 ? (
           <PaginationBar
             page={currentPage}
             pageSize={pageSize}
-            total={barcodeFilteredOrders.length}
+            total={result.total}
             onPageChange={setPage}
           />
         ) : null}

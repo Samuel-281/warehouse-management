@@ -2,9 +2,9 @@ import { getPrisma } from "@/lib/db";
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { addYears, formatAppDateTime } from "@/lib/warehouse-utils";
-import type { InboundSource, InventoryItem, MovementType, StockMovement } from "@/lib/types";
+import type { InboundSource, InventoryItem, MovementType, StockMovement, TrackingSource } from "@/lib/types";
 
-type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
+type DbInboundSource = "FACTORY" | "TERMINAL_RETURN" | "OUTBOUND_SCAN";
 type DbMovementType = "FACTORY_INBOUND" | "TERMINAL_RETURN_INBOUND";
 
 type DbInventoryItem = {
@@ -145,66 +145,82 @@ export async function submitInbound(input: SubmitInboundInput) {
     const shelfLifeDate = goods.category === "HEALTH_WINE" && input.productionDate ? new Date(addYears(input.productionDate, 3)) : null;
     const fromLabel = terminalStore?.name ?? "终端店铺";
 
-    const items: InventoryItem[] = [];
-    const movements: StockMovement[] = [];
     const existingItemByBarcode = new Map(existingItems.map((item) => [item.barcode, item]));
+    const goodsMismatch = existingItems.find((item) => item.goodsId !== goods.id);
+    if (goodsMismatch) throw new Error(`条码 ${goodsMismatch.barcode} 已绑定其他货物，不能按当前货物入库`);
 
-    for (const barcode of barcodes) {
-      const existingItem = existingItemByBarcode.get(barcode);
-      if (existingItem && existingItem.goodsId !== goods.id) {
-        throw new Error(`条码 ${barcode} 已绑定其他货物，不能按当前货物入库`);
-      }
-
-      const nextProductionDate = existingItem?.productionDate ?? productionDate;
-      const nextShelfLifeDate = existingItem?.productionDate ? existingItem.shelfLifeDate : shelfLifeDate;
-      const item = existingItem
-        ? await tx.inventoryItem.update({
-            where: { id: existingItem.id },
-            data: {
-              ownerType: "WAREHOUSE",
-              warehouseId: warehouse.id,
-              locationId: location.id,
-              salespersonId: null,
-              status: "IN_STOCK",
-              productionDate: nextProductionDate,
-              shelfLifeDate: nextShelfLifeDate,
-              inboundSource: source,
-              lastMovedAt: time
-            }
-          })
-        : await tx.inventoryItem.create({
-            data: {
-              barcode,
-              goodsId: goods.id,
-              ownerType: "WAREHOUSE",
-              warehouseId: warehouse.id,
-              locationId: location.id,
-              status: "IN_STOCK",
-              productionDate,
-              shelfLifeDate,
-              inboundSource: source,
-              lastMovedAt: time
-            }
-          });
-      const movement = await tx.stockMovement.create({
+    const existingWithDate = existingItems.filter((item) => item.productionDate);
+    const existingWithoutDate = existingItems.filter((item) => !item.productionDate);
+    for (const [group, includeProductionDate] of [
+      [existingWithDate, false],
+      [existingWithoutDate, true]
+    ] as const) {
+      if (group.length === 0) continue;
+      const updated = await tx.inventoryItem.updateMany({
+        where: {
+          id: { in: group.map((item) => item.id) },
+          ownerType: "SALESPERSON",
+          status: "WITH_SALESPERSON"
+        },
         data: {
-          itemId: item.id,
-          barcode: item.barcode,
-          goodsId: goods.id,
-          type: movementType,
-          fromLabel,
-          toLabel,
-          operatorName: input.operatorName,
-          occurredAt: time,
-          note: `终端店铺退换货入库，生产日期 ${input.productionDate}`,
-          orderKind: "inbound",
-          orderId: order.id,
-          orderNo: order.orderNo
+          ownerType: "WAREHOUSE",
+          warehouseId: warehouse.id,
+          locationId: location.id,
+          salespersonId: null,
+          status: "IN_STOCK",
+          ...(includeProductionDate ? { productionDate, shelfLifeDate } : {}),
+          inboundSource: source,
+          lastMovedAt: time
         }
       });
+      if (updated.count !== group.length) throw new Error("部分条码已被其他设备处理，请刷新条码校验后重试");
+    }
 
-      await tx.inboundOrderItem.create({
-        data: {
+    const newBarcodes = barcodes.filter((barcode) => !existingItemByBarcode.has(barcode));
+    if (newBarcodes.length > 0) {
+      await tx.inventoryItem.createMany({
+        data: newBarcodes.map((barcode) => ({
+          barcode,
+          goodsId: goods.id,
+          ownerType: "WAREHOUSE",
+          warehouseId: warehouse.id,
+          locationId: location.id,
+          status: "IN_STOCK",
+          productionDate,
+          shelfLifeDate,
+          inboundSource: source,
+          lastMovedAt: time
+        }))
+      });
+    }
+
+    const persistedItems = await tx.inventoryItem.findMany({
+      where: { barcode: { in: barcodes } },
+      orderBy: { barcode: "asc" }
+    });
+    if (persistedItems.length !== barcodes.length) throw new Error("条码写入不完整，请重试");
+
+    const createdMovements = await tx.stockMovement.createManyAndReturn({
+      data: persistedItems.map((item) => ({
+        itemId: item.id,
+        barcode: item.barcode,
+        goodsId: goods.id,
+        type: movementType,
+        fromLabel,
+        toLabel,
+        operatorName: input.operatorName,
+        occurredAt: time,
+        note: `终端店铺退换货入库，生产日期 ${input.productionDate}`,
+        orderKind: "inbound",
+        orderId: order.id,
+        orderNo: order.orderNo
+      }))
+    });
+
+    await tx.inboundOrderItem.createMany({
+      data: persistedItems.map((item) => {
+        const previous = existingItemByBarcode.get(item.barcode);
+        return {
           orderId: order.id,
           inventoryItemId: item.id,
           barcode: item.barcode,
@@ -212,33 +228,34 @@ export async function submitInbound(input: SubmitInboundInput) {
           quantity: 1,
           productionDate,
           shelfLifeDate,
-          beforeOwnerType: existingItem?.ownerType,
-          beforeWarehouseId: existingItem?.warehouseId,
-          beforeLocationId: existingItem?.locationId,
-          beforeSalespersonId: existingItem?.salespersonId,
-          createdTrackingItem: !existingItem
-        }
-      });
-      await adjustWarehouseStock(tx, {
-        warehouseId: warehouse.id,
-        goodsId: goods.id,
-        quantityChange: 1,
-        type: "TERMINAL_RETURN_INBOUND",
-        orderKind: "inbound",
-        orderId: order.id,
-        orderNo: order.orderNo,
-        barcode: item.barcode,
-        counterparty: fromLabel,
-        operatorName: input.operatorName,
-        occurredAt: time,
-        note: `终端店铺退换货入库，生产日期 ${input.productionDate}`
-      });
+          beforeOwnerType: previous?.ownerType,
+          beforeWarehouseId: previous?.warehouseId,
+          beforeLocationId: previous?.locationId,
+          beforeSalespersonId: previous?.salespersonId,
+          createdTrackingItem: !previous
+        };
+      })
+    });
+    await adjustWarehouseStock(tx, {
+      warehouseId: warehouse.id,
+      goodsId: goods.id,
+      quantityChange: persistedItems.length,
+      type: "TERMINAL_RETURN_INBOUND",
+      orderKind: "inbound",
+      orderId: order.id,
+      orderNo: order.orderNo,
+      counterparty: fromLabel,
+      operatorName: input.operatorName,
+      occurredAt: time,
+      note: `终端店铺退换货入库，生产日期 ${input.productionDate}`
+    });
 
-      items.push(mapInventoryItem(item));
-      movements.push(mapStockMovement(movement));
-    }
-
-    return { orderId: order.id, quantity: items.length, items, movements };
+    return {
+      orderId: order.id,
+      quantity: persistedItems.length,
+      items: persistedItems.map(mapInventoryItem),
+      movements: createdMovements.map(mapStockMovement)
+    };
   });
 }
 
@@ -259,8 +276,10 @@ function toDbMovementType(source: InboundSource): DbMovementType {
   return source === "factory" ? "FACTORY_INBOUND" : "TERMINAL_RETURN_INBOUND";
 }
 
-function mapInboundSource(source: DbInboundSource): InboundSource {
-  return source === "FACTORY" ? "factory" : "terminal_return";
+function mapInboundSource(source: DbInboundSource): TrackingSource {
+  if (source === "FACTORY") return "factory";
+  if (source === "TERMINAL_RETURN") return "terminal_return";
+  return "outbound_scan";
 }
 
 function mapMovementType(type: DbStockMovement["type"]): MovementType {
