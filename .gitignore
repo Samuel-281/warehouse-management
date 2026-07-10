@@ -23,6 +23,9 @@ warehouse-web/.next/
 warehouse-web/out/
 warehouse-web/dist/
 warehouse-web/tsconfig.tsbuildinfo
+warehouse-web/backups/
+warehouse-web/runtime/
+warehouse-web/scripts/backup.env
 
 # Package manager caches
 .npm/

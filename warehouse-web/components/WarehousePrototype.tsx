@@ -57,7 +57,9 @@ import { BarcodeCollector, type BarcodeReview } from "@/components/warehouse/Bar
 import { hasAnyRole } from "@/lib/role-utils";
 import type {
   CurrentUser,
+  BackupStatus,
   ConsistencyAuditResult,
+  HealthStatus,
   InboundSource,
   InventoryItem,
   InventorySummary,
@@ -73,6 +75,7 @@ import type {
   Warehouse as WarehouseRecord,
   WarehouseState
 } from "@/lib/types";
+import { apiContractVersion, webVersion } from "@/lib/version";
 import {
   addYears,
   enabledLocationsForWarehouse,
@@ -989,6 +992,7 @@ export default function WarehousePrototype() {
                 退出登录
               </button>
             </div>
+            <p className="mt-3 text-center text-[11px] text-slate-400">Web v{webVersion} · API v{apiContractVersion}</p>
           </div>
         </div>
       </aside>
@@ -3371,6 +3375,13 @@ function AuditSummary({
   );
 }
 
+function formatFileSize(bytes?: number) {
+  if (!Number.isFinite(bytes) || !bytes) return "-";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function AuditSeverity({ severity }: { severity: "error" | "warning" | "info" }) {
   const styles = {
     error: "border-red-200 bg-red-50 text-red-700",
@@ -3476,6 +3487,9 @@ function SystemMaintenanceView({
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [audit, setAudit] = useState<ConsistencyAuditResult | null>(null);
   const [auditBusy, setAuditBusy] = useState(false);
+  const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  const [runtimeStatusBusy, setRuntimeStatusBusy] = useState(false);
   const [editingUser, setEditingUser] = useState<ManagedUser | null>(null);
   const [resettingPasswordFor, setResettingPasswordFor] = useState<ManagedUser | null>(null);
   const [userDraft, setUserDraft] = useState({
@@ -3485,6 +3499,23 @@ function SystemMaintenanceView({
     roleCode: "WAREHOUSE_ADMIN" as UserRoleCode
   });
 
+  const loadRuntimeStatus = useCallback(async () => {
+    setRuntimeStatusBusy(true);
+    try {
+      const [healthResponse, backup] = await Promise.all([
+        fetch("/api/health", { credentials: "same-origin" }),
+        getJson<BackupStatus>("/api/system/backup-status")
+      ]);
+      const payload = (await healthResponse.json()) as { data?: HealthStatus };
+      setHealth(payload.data ?? null);
+      setBackupStatus(backup);
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "读取运行状态失败") });
+    } finally {
+      setRuntimeStatusBusy(false);
+    }
+  }, [showToast]);
+
   useEffect(() => {
     getJson<OperationLog[]>("/api/operation-logs")
       .then(setLogs)
@@ -3492,7 +3523,8 @@ function SystemMaintenanceView({
     getJson<ManagedUser[]>("/api/users")
       .then(setUsers)
       .catch(() => undefined);
-  }, []);
+    void loadRuntimeStatus();
+  }, [loadRuntimeStatus]);
 
   async function createManagedUser() {
     const username = userDraft.username.trim();
@@ -3698,6 +3730,48 @@ function SystemMaintenanceView({
           </button>
         </section>
       </div>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
+          <div>
+            <SectionHeader icon={Power} title="运行与备份状态" compact />
+            <p className="mt-1 text-xs text-muted">用于确认服务器版本、数据库连接和最近一次自动备份结果。</p>
+          </div>
+          <button className="secondary-button" onClick={() => void loadRuntimeStatus()} disabled={runtimeStatusBusy}>
+            <RotateCcw className={`h-4 w-4 ${runtimeStatusBusy ? "animate-spin" : ""}`} />
+            {runtimeStatusBusy ? "正在读取" : "刷新状态"}
+          </button>
+        </div>
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <AuditSummary
+            label="应用状态"
+            value={health?.status === "ok" ? "运行正常" : health ? "运行异常" : "读取中"}
+            tone={health?.status === "ok" ? "success" : health ? "error" : "neutral"}
+          />
+          <AuditSummary
+            label="数据库"
+            value={health?.database === "ok" ? "连接正常" : health ? "连接失败" : "读取中"}
+            tone={health?.database === "ok" ? "success" : health ? "error" : "neutral"}
+          />
+          <AuditSummary
+            label="版本"
+            value={health ? `Web ${health.webVersion} / API ${health.apiContractVersion}` : `Web ${webVersion} / API ${apiContractVersion}`}
+            tone="neutral"
+          />
+          <AuditSummary
+            label="最近备份"
+            value={backupStatus?.status === "success" ? "成功" : backupStatus?.status === "failure" ? "失败" : "尚无记录"}
+            tone={backupStatus?.status === "success" ? "success" : backupStatus?.status === "failure" ? "error" : "neutral"}
+          />
+        </div>
+        <div className="grid gap-2 border-t border-slate-200 px-4 py-3 text-xs text-muted md:grid-cols-2">
+          <p>服务器时间：{health ? new Date(health.serverTime).toLocaleString("zh-CN", { hour12: false }) : "-"}</p>
+          <p>备份时间：{backupStatus?.completedAt ? new Date(backupStatus.completedAt).toLocaleString("zh-CN", { hour12: false }) : "-"}</p>
+          <p>备份文件：{backupStatus?.fileName ?? "-"}</p>
+          <p>文件大小：{formatFileSize(backupStatus?.sizeBytes)}</p>
+          <p className="md:col-span-2">说明：{backupStatus?.message ?? "尚未执行自动备份"}</p>
+        </div>
+      </section>
 
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">

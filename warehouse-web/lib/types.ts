@@ -210,6 +210,24 @@ export type ConsistencyAuditResult = {
   issues: ConsistencyAuditIssue[];
 };
 
+export type HealthStatus = {
+  status: "ok" | "error";
+  database: "ok" | "error";
+  webVersion: string;
+  apiContractVersion: string;
+  serverTime: string;
+};
+
+export type BackupStatus = {
+  status: "success" | "failure" | "unknown";
+  completedAt?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  checksumVerified?: boolean;
+  destination?: "oss" | "local";
+  message?: string;
+};
+
 export type OrderKind = "inbound" | "outbound" | "sales_return";
 
 export type OrderSummary = {

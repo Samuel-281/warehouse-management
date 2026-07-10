@@ -19,6 +19,8 @@
     "db:seed-stress": "node scripts/seed-stress-inventory.mjs",
     "db:benchmark": "tsx scripts/benchmark-large-data.ts",
     "db:cleanup-runtime": "node scripts/cleanup-runtime-data.mjs",
+    "backup:oss": "node scripts/backup-postgres-to-oss.mjs",
+    "backup:local": "node scripts/backup-postgres-to-oss.mjs --local-only",
     "db:studio": "prisma studio"
   },
   "dependencies": {

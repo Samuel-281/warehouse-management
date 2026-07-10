@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { rm, writeFile } from "node:fs/promises";
 import { after, beforeEach, test } from "node:test";
 
 import { getPrisma } from "@/lib/db";
@@ -16,6 +17,8 @@ import { changeOwnPassword, createUser, resetUserPassword, updateUser } from "@/
 import { verifyPassword } from "@/lib/password";
 import type { CurrentUser } from "@/lib/types";
 import { GET as getConsistencyAudit } from "@/app/api/system/consistency-audit/route";
+import { GET as getHealth } from "@/app/api/health/route";
+import { GET as getBackupStatus } from "@/app/api/system/backup-status/route";
 
 const prisma = getPrisma();
 const operatorName = "集成测试管理员";
@@ -352,6 +355,48 @@ test("一致性检查区分错误和历史基线提示，并限制普通账号�
   assert.equal(response.status, 403);
   assert.equal(await prisma.operationLog.count({ where: { targetType: "SYSTEM" } }), 1);
   assert.ok(viewer.id);
+});
+
+test("健康检查返回应用、数据库和接口版本", async () => {
+  const response = await getHealth();
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    data: { status: string; database: string; webVersion: string; apiContractVersion: string; serverTime: string };
+  };
+  assert.equal(payload.data.status, "ok");
+  assert.equal(payload.data.database, "ok");
+  assert.match(payload.data.webVersion, /^\d+\.\d+\.\d+$/);
+  assert.equal(payload.data.apiContractVersion, "1");
+  assert.ok(Date.parse(payload.data.serverTime));
+
+  const statusFile = `/tmp/warehouse-backup-status-${process.pid}.json`;
+  const previousStatusFile = process.env.BACKUP_STATUS_FILE;
+  process.env.BACKUP_STATUS_FILE = statusFile;
+  await writeFile(statusFile, JSON.stringify({
+    status: "success",
+    completedAt: "2026-07-10T10:00:00.000Z",
+    fileName: "warehouse_test.dump",
+    sizeBytes: 1024,
+    checksumVerified: true,
+    destination: "oss",
+    message: "测试备份成功"
+  }));
+  await prisma.userSession.create({
+    data: { token: "health-super-session", userId: currentUser.id, expiresAt: new Date(Date.now() + 60_000) }
+  });
+  try {
+    const backupResponse = await getBackupStatus(new Request("http://localhost/api/system/backup-status", {
+      headers: { cookie: "warehouse_session=health-super-session" }
+    }));
+    assert.equal(backupResponse.status, 200);
+    const backupPayload = (await backupResponse.json()) as { data: { status: string; destination: string } };
+    assert.equal(backupPayload.data.status, "success");
+    assert.equal(backupPayload.data.destination, "oss");
+  } finally {
+    if (previousStatusFile === undefined) delete process.env.BACKUP_STATUS_FILE;
+    else process.env.BACKUP_STATUS_FILE = previousStatusFile;
+    await rm(statusFile, { force: true });
+  }
 });
 
 test("500 条批量出库与精确查询达到本地性能门槛", async () => {

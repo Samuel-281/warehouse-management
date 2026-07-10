@@ -296,3 +296,4 @@ The July 2026 cleanup established these additional invariants:
 10. Web business submissions use an optional `clientRequestId` for idempotency. Existing PDA clients may omit it, but new clients should retain the same value while retrying an uncertain submission.
 11. Users may change their own password. Super administrators may edit, enable, disable, and reset other accounts, but the system must retain at least one enabled super administrator.
 12. The super-administrator consistency audit is diagnostic only. It must not automatically repair quantity balances, barcode ownership, movements, or voided orders.
+13. Production health is exposed at `/api/health` without secrets. PostgreSQL backups are verified locally and uploaded to a private OSS bucket through an ECS RAM role; long-lived OSS AccessKeys must not be committed or stored in application environment files.

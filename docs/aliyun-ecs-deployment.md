@@ -96,20 +96,75 @@ http://127.0.0.1:3000
 
 如果暂时没有域名，也可以先用 ECS 公网 IP 访问 `http://服务器IP`。若使用中国内地区域和域名，需要先完成备案；香港区域通常不需要 ICP 备案。
 
-## 8. 备份
+## 8. OSS 自动备份
 
-建议每天执行一次 PostgreSQL 逻辑备份，至少保留 7 天。
+### 8.1 创建 OSS 和 RAM 角色
 
-示例命令：
+1. 在阿里云 OSS 创建与 ECS 同地域的私有 Bucket，不要开启公共读写。
+2. 为 `warehouse-management/` 前缀设置生命周期规则：对象保存 30 天后自动删除。
+3. 创建 ECS 实例 RAM 角色并绑定当前 ECS。角色只授予目标 Bucket 和前缀的 `oss:PutObject`、`oss:GetObject`、`oss:ListObjects` 权限。
+4. 不创建或保存长期 AccessKey。`ossutil` 通过 ECS RAM Role 获取临时凭据。
+
+参考：[ossutil 使用 ECS RAM Role](https://help.aliyun.com/en/oss/developer-reference/ossutil-overview/)、[OSS RAM 权限](https://help.aliyun.com/en/oss/user-guide/ram-policy/)。
+
+### 8.2 配置备份程序
+
+安装 `ossutil` 2.2 或更高版本，然后在项目目录执行：
 
 ```bash
-mkdir -p /www/backup/warehouse-management
-pg_dump "postgresql://warehouse_app:数据库密码@127.0.0.1:5432/warehouse_management" | gzip > "/www/backup/warehouse-management/warehouse_$(date +%F_%H%M).sql.gz"
+cd /www/wwwroot/warehouse-management/warehouse-web
+cp scripts/backup.env.example scripts/backup.env
+nano scripts/backup.env
+mkdir -p /www/backup/warehouse-management runtime
 ```
 
-宝塔计划任务中可配置每日执行。正式使用前至少做一次恢复演练，确认备份文件可用。
+填写私有 Bucket、地域和目录，不要填写 AccessKey。先完成本机备份验证，再上传 OSS：
 
-## 9. 上线检查
+```bash
+npm run backup:local
+npm run backup:oss
+cat runtime/backup-status.json
+```
+
+脚本使用 PostgreSQL 自定义格式备份，执行 `pg_restore --list` 验证，生成 SHA-256 校验文件，再上传 OSS。本机默认保留 7 天。
+
+### 8.3 每日任务
+
+通过 `command -v npm` 确认 npm 绝对路径，然后执行 `crontab -e`，每天清理运行期记录并备份：
+
+```cron
+30 2 * * * cd /www/wwwroot/warehouse-management/warehouse-web && /usr/bin/npm run db:cleanup-runtime >> /var/log/warehouse-maintenance.log 2>&1
+40 2 * * * cd /www/wwwroot/warehouse-management/warehouse-web && /usr/bin/npm run backup:oss >> /var/log/warehouse-backup.log 2>&1
+```
+
+如果 `npm` 不在 `/usr/bin/npm`，替换为实际路径。系统维护页会显示最近一次备份状态。
+
+### 8.4 恢复演练
+
+不要直接覆盖生产数据库。下载一份备份并恢复到临时数据库：
+
+```bash
+sha256sum -c warehouse_YYYYMMDD_HHMMSS.dump.sha256
+createdb -h 127.0.0.1 -U warehouse_app warehouse_restore_test
+pg_restore -h 127.0.0.1 -U warehouse_app -d warehouse_restore_test --no-owner --no-privileges warehouse_YYYYMMDD_HHMMSS.dump
+psql -h 127.0.0.1 -U warehouse_app -d warehouse_restore_test -c 'SELECT COUNT(*) FROM warehouse_stocks;'
+psql -h 127.0.0.1 -U warehouse_app -d warehouse_restore_test -c 'SELECT COUNT(*) FROM inventory_items;'
+dropdb -h 127.0.0.1 -U warehouse_app warehouse_restore_test
+```
+
+正式使用前至少成功完成一次恢复演练。
+
+## 9. 健康检查
+
+服务器更新后执行：
+
+```bash
+curl -i http://127.0.0.1:3000/api/health
+```
+
+HTTP `200` 且 `status`、`database` 均为 `ok` 才表示应用和数据库正常。HTTP `503` 表示数据库不可用。页面左下角显示 Web/API 版本，系统维护页显示完整运行和备份状态。
+
+## 10. 上线检查
 
 上线后检查：
 
@@ -119,3 +174,5 @@ pg_dump "postgresql://warehouse_app:数据库密码@127.0.0.1:5432/warehouse_man
 4. 入库、出库、销售退回、库存查询和单据导出正常。
 5. 网页端数据重置入口仅超级管理员可执行，且必须输入确认文字。
 6. 备份任务已启用，并能生成备份文件。
+7. `/api/health` 返回 200，页面显示的 Web/API 版本与本次发布一致。
+8. OSS Bucket 保持私有，已完成一次临时数据库恢复演练。
