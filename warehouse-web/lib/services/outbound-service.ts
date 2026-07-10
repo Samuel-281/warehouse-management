@@ -1,13 +1,23 @@
 import type { Prisma } from "@prisma/client";
 
 import { getPrisma } from "@/lib/db";
+import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InventoryItem, MovementType, OutboundType, StockMovement } from "@/lib/types";
 
 type DbOutboundType = "TRANSFER" | "SALES";
 type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
-type DbMovementType = "FACTORY_INBOUND" | "TERMINAL_RETURN_INBOUND" | "TRANSFER" | "SALES_OUTBOUND" | "SALES_RETURN";
+type DbMovementType =
+  | "FACTORY_INBOUND"
+  | "TERMINAL_RETURN_INBOUND"
+  | "TRANSFER"
+  | "SALES_OUTBOUND"
+  | "SALES_RETURN"
+  | "ORDER_REVERSAL"
+  | "BARCODE_CORRECTION"
+  | "WRITE_OFF"
+  | "MANUAL_ADJUSTMENT";
 
 type DbInventoryItem = {
   id: string;
@@ -17,7 +27,7 @@ type DbInventoryItem = {
   warehouseId: string | null;
   locationId: string | null;
   salespersonId: string | null;
-  status: "IN_STOCK" | "WITH_SALESPERSON";
+  status: "IN_STOCK" | "WITH_SALESPERSON" | "WRITTEN_OFF" | "VOIDED";
   productionDate: Date | null;
   shelfLifeDate: Date | null;
   inboundSource: DbInboundSource;
@@ -64,6 +74,7 @@ export type SubmitOutboundInput = {
 export async function submitOutbound(input: SubmitOutboundInput) {
   const lines = normalizeOutboundLines(input);
   const barcodes = lines.flatMap((line) => line.barcodes);
+  assertBarcodeBatchLimit(barcodes);
 
   if (barcodes.length === 0) {
     throw new Error("请先扫描或录入条码");
@@ -123,7 +134,7 @@ export async function submitOutbound(input: SubmitOutboundInput) {
     const goodsMismatch = items.find((item) => lineByBarcode.get(item.barcode)?.goodsId !== item.goodsId);
     if (goodsMismatch) throw new Error(`条码 ${goodsMismatch.barcode} 已绑定其他货物，不能按当前货物出库`);
     const invalid = items.find(
-      (item) => item.ownerType !== "WAREHOUSE" || item.warehouseId !== sourceWarehouse.id
+      (item) => item.status !== "IN_STOCK" || item.ownerType !== "WAREHOUSE" || item.warehouseId !== sourceWarehouse.id
     );
     if (invalid) throw new Error(`条码 ${invalid.barcode} 当前不在所选出库仓库`);
 
@@ -136,7 +147,8 @@ export async function submitOutbound(input: SubmitOutboundInput) {
         targetLocationId: destinationType === "transfer" ? targetLocation?.id : undefined,
         salespersonId: destinationType === "sales" ? salesperson?.id : undefined,
         operatorName: input.operatorName,
-        createdAt: time
+        createdAt: time,
+        reversalSupported: true
       }
     });
 
@@ -150,6 +162,7 @@ export async function submitOutbound(input: SubmitOutboundInput) {
         type: destinationType === "transfer" ? "TRANSFER" : "SALES_OUTBOUND",
         orderKind: "outbound",
         orderId: order.id,
+        orderNo: order.orderNo,
         counterparty:
           destinationType === "transfer" ? targetWarehouse?.name ?? "目标仓库" : `销售人员：${salesperson?.name ?? "未知"}`,
         operatorName: input.operatorName,
@@ -164,6 +177,7 @@ export async function submitOutbound(input: SubmitOutboundInput) {
           type: "TRANSFER",
           orderKind: "outbound",
           orderId: order.id,
+          orderNo: order.orderNo,
           counterparty: sourceWarehouse.name,
           operatorName: input.operatorName,
           occurredAt: time,
@@ -180,8 +194,9 @@ export async function submitOutbound(input: SubmitOutboundInput) {
       if (!goods) throw new Error("请选择有效的货物");
 
       for (const barcode of line.barcodes) {
+        const existingItem = itemByBarcode.get(barcode);
         const item =
-          itemByBarcode.get(barcode) ??
+          existingItem ??
           (await tx.inventoryItem.create({
             data: {
               barcode,
@@ -235,7 +250,10 @@ export async function submitOutbound(input: SubmitOutboundInput) {
             toLabel,
             operatorName: input.operatorName,
             occurredAt: time,
-            note: destinationType === "transfer" ? "扫码出库发往仓库" : "扫码出库分配销售"
+            note: destinationType === "transfer" ? "扫码出库发往仓库" : "扫码出库分配销售",
+            orderKind: "outbound",
+            orderId: order.id,
+            orderNo: order.orderNo
           }
         });
 
@@ -244,7 +262,12 @@ export async function submitOutbound(input: SubmitOutboundInput) {
             orderId: order.id,
             inventoryItemId: updated.id,
             barcode: updated.barcode,
-            goodsId: updated.goodsId
+            goodsId: updated.goodsId,
+            beforeOwnerType: "WAREHOUSE",
+            beforeWarehouseId: sourceWarehouse.id,
+            beforeLocationId: item.locationId ?? sourceLocation.id,
+            beforeSalespersonId: null,
+            createdTrackingItem: !existingItem
           }
         });
 
@@ -336,7 +359,10 @@ function mapOwnerType(type: DbInventoryItem["ownerType"]) {
 }
 
 function mapItemStatus(status: DbInventoryItem["status"]) {
-  return status === "IN_STOCK" ? "in_stock" : "with_salesperson";
+  if (status === "IN_STOCK") return "in_stock";
+  if (status === "WITH_SALESPERSON") return "with_salesperson";
+  if (status === "WRITTEN_OFF") return "written_off";
+  return "voided";
 }
 
 function mapMovementType(type: DbMovementType): MovementType {
@@ -345,7 +371,11 @@ function mapMovementType(type: DbMovementType): MovementType {
     TERMINAL_RETURN_INBOUND: "terminal_return_inbound",
     TRANSFER: "transfer",
     SALES_OUTBOUND: "sales_outbound",
-    SALES_RETURN: "sales_return"
+    SALES_RETURN: "sales_return",
+    ORDER_REVERSAL: "order_reversal",
+    BARCODE_CORRECTION: "barcode_correction",
+    WRITE_OFF: "write_off",
+    MANUAL_ADJUSTMENT: "manual_adjustment"
   };
 
   return movementTypes[type];

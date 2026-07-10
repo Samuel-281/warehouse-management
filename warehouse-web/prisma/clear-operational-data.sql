@@ -9,6 +9,7 @@ TRUNCATE TABLE
   inbound_order_items,
   inbound_orders,
   operation_logs,
+  barcode_corrections,
   stock_movements,
   warehouse_stock_movements,
   inventory_items,

@@ -116,8 +116,8 @@ async function createStressMasterData(runPrefix) {
 
   await bulkInsert(
     "warehouses",
-    ["id", "code", "name", "type", "parentId", "manager", "createdAt", "updatedAt"],
-    branches.map((item) => [item.id, item.code, item.name, "MAIN", null, item.manager, now, now])
+    ["id", "code", "name", "manager", "createdAt", "updatedAt"],
+    branches.map((item) => [item.id, item.code, item.name, item.manager, now, now])
   );
 
   await bulkInsert(

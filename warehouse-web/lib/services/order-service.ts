@@ -59,7 +59,12 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
         itemCount,
         goodsSummary: summarizeGoodsQuantities(order.items.map((item) => ({ name: item.goods.name, quantity: item.quantity }))),
         barcodePreview: summarizeBarcodes(barcodes),
-        barcodes
+        barcodes,
+        status: order.status === "VOIDED" ? "voided" : "active",
+        reversalSupported: order.reversalSupported,
+        voidedAt: order.voidedAt ? formatDateTime(order.voidedAt) : undefined,
+        voidedBy: order.voidedByName ?? undefined,
+        voidReason: order.voidReason ?? undefined
       };
     }),
     ...outboundOrders.map((order): OrderSummary => {
@@ -79,7 +84,12 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
         itemCount: order.items.length,
         goodsSummary: summarizeGoods(order.items.map((item) => item.goods.name)),
         barcodePreview: summarizeBarcodes(barcodes),
-        barcodes
+        barcodes,
+        status: order.status === "VOIDED" ? "voided" : "active",
+        reversalSupported: order.reversalSupported,
+        voidedAt: order.voidedAt ? formatDateTime(order.voidedAt) : undefined,
+        voidedBy: order.voidedByName ?? undefined,
+        voidReason: order.voidReason ?? undefined
       };
     }),
     ...salesReturnOrders.map((order): OrderSummary => {
@@ -96,7 +106,12 @@ export async function listOrderSummaries(): Promise<OrderSummary[]> {
         itemCount: order.items.length,
         goodsSummary: summarizeGoods(order.items.map((item) => item.goods.name)),
         barcodePreview: summarizeBarcodes(barcodes),
-        barcodes
+        barcodes,
+        status: order.status === "VOIDED" ? "voided" : "active",
+        reversalSupported: order.reversalSupported,
+        voidedAt: order.voidedAt ? formatDateTime(order.voidedAt) : undefined,
+        voidedBy: order.voidedByName ?? undefined,
+        voidReason: order.voidReason ?? undefined
       };
     })
   ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));

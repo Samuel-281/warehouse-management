@@ -1,12 +1,22 @@
 import type { Prisma } from "@prisma/client";
 
+import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { getPrisma } from "@/lib/db";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InventoryItem, MovementType, StockMovement } from "@/lib/types";
 
 type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
-type DbMovementType = "FACTORY_INBOUND" | "TERMINAL_RETURN_INBOUND" | "TRANSFER" | "SALES_OUTBOUND" | "SALES_RETURN";
+type DbMovementType =
+  | "FACTORY_INBOUND"
+  | "TERMINAL_RETURN_INBOUND"
+  | "TRANSFER"
+  | "SALES_OUTBOUND"
+  | "SALES_RETURN"
+  | "ORDER_REVERSAL"
+  | "BARCODE_CORRECTION"
+  | "WRITE_OFF"
+  | "MANUAL_ADJUSTMENT";
 
 type DbInventoryItem = {
   id: string;
@@ -16,7 +26,7 @@ type DbInventoryItem = {
   warehouseId: string | null;
   locationId: string | null;
   salespersonId: string | null;
-  status: "IN_STOCK" | "WITH_SALESPERSON";
+  status: "IN_STOCK" | "WITH_SALESPERSON" | "WRITTEN_OFF" | "VOIDED";
   productionDate: Date | null;
   shelfLifeDate: Date | null;
   inboundSource: DbInboundSource;
@@ -45,6 +55,7 @@ export type SubmitSalesReturnInput = {
 
 export async function submitSalesReturn(input: SubmitSalesReturnInput) {
   const barcodes = Array.from(new Set(input.barcodes.map((barcode) => barcode.trim()).filter(Boolean)));
+  assertBarcodeBatchLimit(barcodes);
 
   if (barcodes.length === 0) {
     throw new Error("请先扫描或录入销售人员名下条码");
@@ -68,7 +79,9 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
     const missing = barcodes.find((barcode) => !itemByBarcode.has(barcode));
     if (missing) throw new Error(`条码 ${missing} 不存在`);
 
-    const invalid = items.find((item) => item.ownerType !== "SALESPERSON" || !item.salespersonId);
+    const invalid = items.find(
+      (item) => item.status !== "WITH_SALESPERSON" || item.ownerType !== "SALESPERSON" || !item.salespersonId
+    );
     if (invalid) throw new Error(`条码 ${invalid.barcode} 当前不在销售人员名下`);
 
     const time = new Date();
@@ -78,7 +91,8 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
         returnWarehouseId: returnWarehouse.id,
         returnLocationId: returnLocation.id,
         operatorName: input.operatorName,
-        createdAt: time
+        createdAt: time,
+        reversalSupported: true
       }
     });
 
@@ -98,6 +112,7 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
         type: "SALES_RETURN",
         orderKind: "sales_return",
         orderId: order.id,
+        orderNo: order.orderNo,
         counterparty: "销售人员名下",
         operatorName: input.operatorName,
         occurredAt: time,
@@ -133,7 +148,10 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
           toLabel,
           operatorName: input.operatorName,
           occurredAt: time,
-          note: "销售退回，仅将条码回流仓库"
+          note: "销售退回，仅将条码回流仓库",
+          orderKind: "sales_return",
+          orderId: order.id,
+          orderNo: order.orderNo
         }
       });
 
@@ -143,7 +161,11 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
           inventoryItemId: updated.id,
           barcode: updated.barcode,
           goodsId: updated.goodsId,
-          fromSalespersonId: previousSalespersonId
+          fromSalespersonId: previousSalespersonId,
+          beforeOwnerType: "SALESPERSON",
+          beforeWarehouseId: null,
+          beforeLocationId: null,
+          beforeSalespersonId: previousSalespersonId
         }
       });
 
@@ -174,7 +196,10 @@ function mapOwnerType(type: DbInventoryItem["ownerType"]) {
 }
 
 function mapItemStatus(status: DbInventoryItem["status"]) {
-  return status === "IN_STOCK" ? "in_stock" : "with_salesperson";
+  if (status === "IN_STOCK") return "in_stock";
+  if (status === "WITH_SALESPERSON") return "with_salesperson";
+  if (status === "WRITTEN_OFF") return "written_off";
+  return "voided";
 }
 
 function mapMovementType(type: DbMovementType): MovementType {
@@ -183,7 +208,11 @@ function mapMovementType(type: DbMovementType): MovementType {
     TERMINAL_RETURN_INBOUND: "terminal_return_inbound",
     TRANSFER: "transfer",
     SALES_OUTBOUND: "sales_outbound",
-    SALES_RETURN: "sales_return"
+    SALES_RETURN: "sales_return",
+    ORDER_REVERSAL: "order_reversal",
+    BARCODE_CORRECTION: "barcode_correction",
+    WRITE_OFF: "write_off",
+    MANUAL_ADJUSTMENT: "manual_adjustment"
   };
 
   return movementTypes[type];

@@ -1,4 +1,5 @@
 import { getPrisma } from "@/lib/db";
+import { hashPassword } from "@/lib/password";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { ManagedUser, UserRoleCode } from "@/lib/types";
 
@@ -36,6 +37,9 @@ export async function createUser(input: CreateUserInput): Promise<ManagedUser> {
   if (!username || !displayName || !password) {
     throw new Error("请完整填写账号、姓名和密码");
   }
+  if (password.length < 8) {
+    throw new Error("密码至少需要 8 个字符");
+  }
   if (!isRoleCode(input.roleCode)) {
     throw new Error("请选择有效角色");
   }
@@ -49,7 +53,7 @@ export async function createUser(input: CreateUserInput): Promise<ManagedUser> {
       data: {
         username,
         displayName,
-        passwordHash: password,
+        passwordHash: await hashPassword(password),
         status: "ENABLED"
       }
     });

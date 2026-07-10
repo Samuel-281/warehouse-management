@@ -1,7 +1,8 @@
 export type GoodsCategory = "health_wine" | "baijiu";
 export type WarehouseType = "warehouse";
 export type OwnerType = "warehouse" | "salesperson";
-export type ItemStatus = "in_stock" | "with_salesperson";
+export type ItemStatus = "in_stock" | "with_salesperson" | "written_off" | "voided";
+export type OrderStatus = "active" | "voided";
 export type InboundSource = "factory" | "terminal_return";
 export type OutboundType = "transfer" | "sales" | "direct";
 export type MovementType =
@@ -9,7 +10,11 @@ export type MovementType =
   | "terminal_return_inbound"
   | "transfer"
   | "sales_outbound"
-  | "sales_return";
+  | "sales_return"
+  | "order_reversal"
+  | "barcode_correction"
+  | "write_off"
+  | "manual_adjustment";
 
 export type UserRoleCode = "SUPER_ADMIN" | "WAREHOUSE_ADMIN" | "INVENTORY_VIEWER";
 
@@ -160,6 +165,16 @@ export type InventoryListResult = {
 export type InventoryDetailResult = {
   item: InventoryItem;
   movements: StockMovement[];
+  corrections: BarcodeCorrection[];
+};
+
+export type BarcodeCorrection = {
+  id: string;
+  oldBarcode: string;
+  newBarcode: string;
+  reason: string;
+  operator: string;
+  occurredAt: string;
 };
 
 export type OperationLog = {
@@ -190,6 +205,11 @@ export type OrderSummary = {
   goodsSummary: string;
   barcodePreview: string;
   barcodes: string[];
+  status: OrderStatus;
+  reversalSupported: boolean;
+  voidedAt?: string;
+  voidedBy?: string;
+  voidReason?: string;
 };
 
 export type WarehouseState = {

@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import { getPrisma } from "@/lib/db";
+import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type {
   InboundSource,
@@ -16,7 +17,16 @@ import type {
 } from "@/lib/types";
 
 type DbInboundSource = "FACTORY" | "TERMINAL_RETURN";
-type DbMovementType = "FACTORY_INBOUND" | "TERMINAL_RETURN_INBOUND" | "TRANSFER" | "SALES_OUTBOUND" | "SALES_RETURN";
+type DbMovementType =
+  | "FACTORY_INBOUND"
+  | "TERMINAL_RETURN_INBOUND"
+  | "TRANSFER"
+  | "SALES_OUTBOUND"
+  | "SALES_RETURN"
+  | "ORDER_REVERSAL"
+  | "BARCODE_CORRECTION"
+  | "WRITE_OFF"
+  | "MANUAL_ADJUSTMENT";
 
 type DbInventoryItem = {
   id: string;
@@ -26,7 +36,7 @@ type DbInventoryItem = {
   warehouseId: string | null;
   locationId: string | null;
   salespersonId: string | null;
-  status: "IN_STOCK" | "WITH_SALESPERSON";
+  status: "IN_STOCK" | "WITH_SALESPERSON" | "WRITTEN_OFF" | "VOIDED";
   productionDate: Date | null;
   shelfLifeDate: Date | null;
   inboundSource: DbInboundSource;
@@ -131,19 +141,41 @@ export async function listInventory(input: InventoryQueryInput): Promise<Invento
 
 export async function getInventoryDetail(barcode: string): Promise<InventoryDetailResult> {
   const prisma = getPrisma();
-  const item = await prisma.inventoryItem.findUnique({ where: { barcode } });
+  const normalizedBarcode = barcode.trim();
+  const directItem = await prisma.inventoryItem.findUnique({ where: { barcode: normalizedBarcode } });
+  const correction = directItem
+    ? null
+    : await prisma.barcodeCorrection.findUnique({
+        where: { oldBarcode: normalizedBarcode },
+        include: { item: true }
+      });
+  const item = directItem ?? correction?.item;
   if (!item) {
     throw new Error(`条码 ${barcode} 不存在`);
   }
 
-  const movements = await prisma.stockMovement.findMany({
-    where: { barcode },
-    orderBy: { occurredAt: "desc" }
-  });
+  const [movements, corrections] = await Promise.all([
+    prisma.stockMovement.findMany({
+      where: { itemId: item.id },
+      orderBy: { occurredAt: "desc" }
+    }),
+    prisma.barcodeCorrection.findMany({
+      where: { itemId: item.id },
+      orderBy: { occurredAt: "desc" }
+    })
+  ]);
 
   return {
     item: mapInventoryItem(item),
-    movements: movements.map(mapStockMovement)
+    movements: movements.map(mapStockMovement),
+    corrections: corrections.map((entry) => ({
+      id: entry.id,
+      oldBarcode: entry.oldBarcode,
+      newBarcode: entry.newBarcode,
+      reason: entry.reason,
+      operator: entry.operatorName,
+      occurredAt: formatAppDateTime(entry.occurredAt)
+    }))
   };
 }
 
@@ -156,30 +188,18 @@ export async function deleteInventoryItemByBarcode(barcode: string) {
     const item = await tx.inventoryItem.findUnique({ where: { barcode: normalizedBarcode } });
     if (!item) throw new Error(`条码 ${normalizedBarcode} 不存在`);
 
-    const [inboundItems, outboundItems, salesReturnItems] = await Promise.all([
-      tx.inboundOrderItem.findMany({ where: { inventoryItemId: item.id }, select: { orderId: true } }),
-      tx.outboundOrderItem.findMany({ where: { inventoryItemId: item.id }, select: { orderId: true } }),
-      tx.salesReturnOrderItem.findMany({ where: { inventoryItemId: item.id }, select: { orderId: true } })
+    const [movementCount, correctionCount, inboundCount, outboundCount, salesReturnCount] = await Promise.all([
+      tx.stockMovement.count({ where: { itemId: item.id } }),
+      tx.barcodeCorrection.count({ where: { itemId: item.id } }),
+      tx.inboundOrderItem.count({ where: { inventoryItemId: item.id } }),
+      tx.outboundOrderItem.count({ where: { inventoryItemId: item.id } }),
+      tx.salesReturnOrderItem.count({ where: { inventoryItemId: item.id } })
     ]);
-    const inboundOrderIds = inboundItems.map((entry) => entry.orderId);
-    const outboundOrderIds = outboundItems.map((entry) => entry.orderId);
-    const salesReturnOrderIds = salesReturnItems.map((entry) => entry.orderId);
+    if (movementCount + correctionCount + inboundCount + outboundCount + salesReturnCount > 0) {
+      throw new Error("该条码已有单据、流转或更正历史，不能彻底删除；请使用单据撤销或货物核销");
+    }
 
-    await tx.inboundOrderItem.deleteMany({ where: { inventoryItemId: item.id } });
-    await tx.outboundOrderItem.deleteMany({ where: { inventoryItemId: item.id } });
-    await tx.salesReturnOrderItem.deleteMany({ where: { inventoryItemId: item.id } });
-    await tx.stockMovement.deleteMany({ where: { itemId: item.id } });
     await tx.inventoryItem.delete({ where: { id: item.id } });
-
-    if (inboundOrderIds.length > 0) {
-      await tx.inboundOrder.deleteMany({ where: { id: { in: inboundOrderIds }, items: { none: {} } } });
-    }
-    if (outboundOrderIds.length > 0) {
-      await tx.outboundOrder.deleteMany({ where: { id: { in: outboundOrderIds }, items: { none: {} } } });
-    }
-    if (salesReturnOrderIds.length > 0) {
-      await tx.salesReturnOrder.deleteMany({ where: { id: { in: salesReturnOrderIds }, items: { none: {} } } });
-    }
 
     return { deleted: true };
   });
@@ -199,19 +219,19 @@ export async function getInventorySummary(): Promise<InventorySummary> {
     recentStockMovements
   ] =
     await Promise.all([
-      prisma.inventoryItem.count(),
-      prisma.inventoryItem.count({ where: { ownerType: "WAREHOUSE" } }),
-      prisma.inventoryItem.count({ where: { ownerType: "SALESPERSON" } }),
+      prisma.inventoryItem.count({ where: { status: { in: ["IN_STOCK", "WITH_SALESPERSON"] } } }),
+      prisma.inventoryItem.count({ where: { ownerType: "WAREHOUSE", status: "IN_STOCK" } }),
+      prisma.inventoryItem.count({ where: { ownerType: "SALESPERSON", status: "WITH_SALESPERSON" } }),
       prisma.warehouseStock.findMany({ orderBy: [{ warehouseId: "asc" }, { goodsId: "asc" }] }),
       prisma.warehouseStock.aggregate({ _sum: { quantity: true } }),
       prisma.inventoryItem.groupBy({
         by: ["warehouseId"],
-        where: { ownerType: "WAREHOUSE", warehouseId: { not: null } },
+        where: { ownerType: "WAREHOUSE", status: "IN_STOCK", warehouseId: { not: null } },
         _count: { _all: true }
       }),
       prisma.inventoryItem.groupBy({
         by: ["salespersonId"],
-        where: { ownerType: "SALESPERSON", salespersonId: { not: null } },
+        where: { ownerType: "SALESPERSON", status: "WITH_SALESPERSON", salespersonId: { not: null } },
         _count: { _all: true }
       }),
       prisma.stockMovement.findMany({
@@ -245,6 +265,7 @@ export async function getInventorySummary(): Promise<InventorySummary> {
 export async function validateBarcodes(input: BarcodeValidationInput): Promise<BarcodeValidationResult[]> {
   const barcodes = Array.from(new Set(input.barcodes.map((barcode) => barcode.trim()).filter(Boolean)));
   if (barcodes.length === 0) return [];
+  assertBarcodeBatchLimit(barcodes);
 
   const prisma = getPrisma();
   const items = await prisma.inventoryItem.findMany({ where: { barcode: { in: barcodes } } });
@@ -252,6 +273,15 @@ export async function validateBarcodes(input: BarcodeValidationInput): Promise<B
 
   return barcodes.map((barcode) => {
     const item = itemByBarcode.get(barcode);
+    if (item?.status === "WRITTEN_OFF" || item?.status === "VOIDED") {
+      return {
+        barcode,
+        ok: false,
+        label: item.status === "WRITTEN_OFF" ? "已核销" : "已撤销",
+        detail: "该条码已经结束追踪，不能参与新的仓库业务",
+        item: mapInventoryItem(item)
+      };
+    }
     if (input.mode === "factory_inbound") {
       if (item) {
         return { barcode, ok: false, label: "已存在", detail: "厂家到货条码不可重复", item: mapInventoryItem(item) };
@@ -293,7 +323,7 @@ export async function validateBarcodes(input: BarcodeValidationInput): Promise<B
 }
 
 function buildInventoryWhere(input: InventoryQueryInput): Prisma.InventoryItemWhereInput {
-  const where: Prisma.InventoryItemWhereInput = {};
+  const where: Prisma.InventoryItemWhereInput = { status: { in: ["IN_STOCK", "WITH_SALESPERSON"] } };
   const keyword = input.keyword?.trim();
 
   if (input.ownerScope === "warehouse") {
@@ -359,7 +389,11 @@ function mapMovementType(type: DbMovementType): MovementType {
     TERMINAL_RETURN_INBOUND: "terminal_return_inbound",
     TRANSFER: "transfer",
     SALES_OUTBOUND: "sales_outbound",
-    SALES_RETURN: "sales_return"
+    SALES_RETURN: "sales_return",
+    ORDER_REVERSAL: "order_reversal",
+    BARCODE_CORRECTION: "barcode_correction",
+    WRITE_OFF: "write_off",
+    MANUAL_ADJUSTMENT: "manual_adjustment"
   };
   return movementTypes[type];
 }
@@ -377,7 +411,14 @@ function mapInventoryItem(item: DbInventoryItem): InventoryItem {
     warehouseId: item.warehouseId ?? undefined,
     locationId: item.locationId ?? undefined,
     salespersonId: item.salespersonId ?? undefined,
-    status: item.status === "IN_STOCK" ? "in_stock" : "with_salesperson",
+    status:
+      item.status === "IN_STOCK"
+        ? "in_stock"
+        : item.status === "WITH_SALESPERSON"
+          ? "with_salesperson"
+          : item.status === "WRITTEN_OFF"
+            ? "written_off"
+            : "voided",
     productionDate: formatDate(item.productionDate),
     shelfLifeDate: formatDate(item.shelfLifeDate),
     inboundSource: mapInboundSource(item.inboundSource),

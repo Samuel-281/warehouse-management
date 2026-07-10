@@ -1,4 +1,5 @@
 import { getPrisma } from "@/lib/db";
+import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { addYears, formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InboundSource, InventoryItem, MovementType, StockMovement } from "@/lib/types";
@@ -14,7 +15,7 @@ type DbInventoryItem = {
   warehouseId: string | null;
   locationId: string | null;
   salespersonId: string | null;
-  status: "IN_STOCK" | "WITH_SALESPERSON";
+  status: "IN_STOCK" | "WITH_SALESPERSON" | "WRITTEN_OFF" | "VOIDED";
   productionDate: Date | null;
   shelfLifeDate: Date | null;
   inboundSource: DbInboundSource;
@@ -26,7 +27,15 @@ type DbStockMovement = {
   itemId: string;
   barcode: string;
   goodsId: string;
-  type: DbMovementType | "TRANSFER" | "SALES_OUTBOUND" | "SALES_RETURN";
+  type:
+    | DbMovementType
+    | "TRANSFER"
+    | "SALES_OUTBOUND"
+    | "SALES_RETURN"
+    | "ORDER_REVERSAL"
+    | "BARCODE_CORRECTION"
+    | "WRITE_OFF"
+    | "MANUAL_ADJUSTMENT";
   fromLabel: string;
   toLabel: string;
   operatorName: string;
@@ -49,6 +58,7 @@ export type SubmitInboundInput = {
 export async function submitInbound(input: SubmitInboundInput) {
   const rawBarcodes = Array.isArray(input.barcodes) ? input.barcodes : [];
   const barcodes = Array.from(new Set(rawBarcodes.map((barcode) => barcode.trim()).filter(Boolean)));
+  assertBarcodeBatchLimit(barcodes);
   const quantity = normalizeQuantity(input.quantity ?? (input.source === "terminal_return" ? barcodes.length : 0));
 
   if (input.source === "factory" && quantity <= 0) {
@@ -87,7 +97,8 @@ export async function submitInbound(input: SubmitInboundInput) {
         locationId: location.id,
         terminalStoreId: input.source === "terminal_return" ? input.terminalStoreId : undefined,
         operatorName: input.operatorName,
-        createdAt: time
+        createdAt: time,
+        reversalSupported: true
       }
     });
 
@@ -106,6 +117,7 @@ export async function submitInbound(input: SubmitInboundInput) {
         type: "FACTORY_INBOUND",
         orderKind: "inbound",
         orderId: order.id,
+        orderNo: order.orderNo,
         counterparty: "厂家到货",
         operatorName: input.operatorName,
         occurredAt: time,
@@ -120,7 +132,9 @@ export async function submitInbound(input: SubmitInboundInput) {
       orderBy: { barcode: "asc" }
     });
 
-    const invalid = existingItems.find((item) => item.ownerType !== "SALESPERSON" || !item.salespersonId);
+    const invalid = existingItems.find(
+      (item) => item.status !== "WITH_SALESPERSON" || item.ownerType !== "SALESPERSON" || !item.salespersonId
+    );
     if (invalid) {
       throw new Error(`条码 ${invalid.barcode} 已在仓库或异常状态中，不能作为终端店铺退换货重复入库`);
     }
@@ -182,7 +196,10 @@ export async function submitInbound(input: SubmitInboundInput) {
           toLabel,
           operatorName: input.operatorName,
           occurredAt: time,
-          note: `终端店铺退换货入库，生产日期 ${input.productionDate}`
+          note: `终端店铺退换货入库，生产日期 ${input.productionDate}`,
+          orderKind: "inbound",
+          orderId: order.id,
+          orderNo: order.orderNo
         }
       });
 
@@ -194,7 +211,12 @@ export async function submitInbound(input: SubmitInboundInput) {
           goodsId: goods.id,
           quantity: 1,
           productionDate,
-          shelfLifeDate
+          shelfLifeDate,
+          beforeOwnerType: existingItem?.ownerType,
+          beforeWarehouseId: existingItem?.warehouseId,
+          beforeLocationId: existingItem?.locationId,
+          beforeSalespersonId: existingItem?.salespersonId,
+          createdTrackingItem: !existingItem
         }
       });
       await adjustWarehouseStock(tx, {
@@ -204,6 +226,7 @@ export async function submitInbound(input: SubmitInboundInput) {
         type: "TERMINAL_RETURN_INBOUND",
         orderKind: "inbound",
         orderId: order.id,
+        orderNo: order.orderNo,
         barcode: item.barcode,
         counterparty: fromLabel,
         operatorName: input.operatorName,
@@ -246,7 +269,11 @@ function mapMovementType(type: DbStockMovement["type"]): MovementType {
     TERMINAL_RETURN_INBOUND: "terminal_return_inbound",
     TRANSFER: "transfer",
     SALES_OUTBOUND: "sales_outbound",
-    SALES_RETURN: "sales_return"
+    SALES_RETURN: "sales_return",
+    ORDER_REVERSAL: "order_reversal",
+    BARCODE_CORRECTION: "barcode_correction",
+    WRITE_OFF: "write_off",
+    MANUAL_ADJUSTMENT: "manual_adjustment"
   };
 
   return movementTypes[type];

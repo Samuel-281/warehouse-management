@@ -30,11 +30,11 @@ VALUES
 ON CONFLICT (code)
 DO UPDATE SET "sortOrder" = EXCLUDED."sortOrder", "updatedAt" = now();
 
-INSERT INTO warehouses (id, code, name, type, "parentId", manager, status, "sortOrder", "createdAt", "updatedAt")
+INSERT INTO warehouses (id, code, name, manager, status, "sortOrder", "createdAt", "updatedAt")
 VALUES
-  ('30000000-0000-0000-0000-000000000001', 'CK-001', '市区仓库', 'MAIN', NULL, '周主管', 'ENABLED', 10, now(), now()),
-  ('30000000-0000-0000-0000-000000000002', 'CK-101', '东山县仓库', 'MAIN', NULL, '刘库管', 'ENABLED', 20, now(), now()),
-  ('30000000-0000-0000-0000-000000000003', 'CK-202', '南河镇仓库', 'MAIN', NULL, '陈库管', 'ENABLED', 30, now(), now())
+  ('30000000-0000-0000-0000-000000000001', 'CK-001', '市区仓库', '周主管', 'ENABLED', 10, now(), now()),
+  ('30000000-0000-0000-0000-000000000002', 'CK-101', '东山县仓库', '刘库管', 'ENABLED', 20, now(), now()),
+  ('30000000-0000-0000-0000-000000000003', 'CK-202', '南河镇仓库', '陈库管', 'ENABLED', 30, now(), now())
 ON CONFLICT (code)
 DO UPDATE SET "sortOrder" = EXCLUDED."sortOrder", "updatedAt" = now();
 

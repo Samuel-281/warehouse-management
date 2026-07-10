@@ -25,7 +25,11 @@ export function formatMovementType(type: MovementType) {
     terminal_return_inbound: "终端退换货入库",
     transfer: "挪仓",
     sales_outbound: "销售出库",
-    sales_return: "销售退回"
+    sales_return: "销售退回",
+    order_reversal: "单据撤销",
+    barcode_correction: "条码更正",
+    write_off: "货物核销",
+    manual_adjustment: "人工库存修正"
   };
 
   return labels[type];

@@ -11,14 +11,14 @@ enum GoodsCategory {
   BAIJIU
 }
 
-enum WarehouseType {
-  MAIN
-  BRANCH
-}
-
 enum RecordStatus {
   ENABLED
   DISABLED
+}
+
+enum OrderStatus {
+  ACTIVE
+  VOIDED
 }
 
 enum OwnerType {
@@ -29,6 +29,8 @@ enum OwnerType {
 enum ItemStatus {
   IN_STOCK
   WITH_SALESPERSON
+  WRITTEN_OFF
+  VOIDED
 }
 
 enum InboundSource {
@@ -47,6 +49,10 @@ enum MovementType {
   TRANSFER
   SALES_OUTBOUND
   SALES_RETURN
+  ORDER_REVERSAL
+  BARCODE_CORRECTION
+  WRITE_OFF
+  MANUAL_ADJUSTMENT
 }
 
 model User {
@@ -157,16 +163,12 @@ model Warehouse {
   id        String        @id @default(uuid()) @db.Uuid
   code      String        @unique
   name      String
-  type      WarehouseType
-  parentId  String?       @db.Uuid
   manager   String
   status    RecordStatus  @default(ENABLED)
   sortOrder Int           @default(0)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
-  parent              Warehouse?         @relation("WarehouseHierarchy", fields: [parentId], references: [id])
-  branches            Warehouse[]        @relation("WarehouseHierarchy")
   locations           StorageLocation[]
   inventoryItems      InventoryItem[]
   warehouseStocks     WarehouseStock[]
@@ -176,7 +178,6 @@ model Warehouse {
   targetOutboundOrders OutboundOrder[]   @relation("TargetWarehouse")
   salesReturnOrders   SalesReturnOrder[]
 
-  @@index([parentId])
   @@index([sortOrder])
   @@map("warehouses")
 }
@@ -258,6 +259,7 @@ model InventoryItem {
   inboundOrderItems     InboundOrderItem[]
   outboundOrderItems    OutboundOrderItem[]
   salesReturnOrderItems SalesReturnOrderItem[]
+  barcodeCorrections    BarcodeCorrection[]
 
   @@index([goodsId])
   @@index([warehouseId])
@@ -296,6 +298,8 @@ model WarehouseStockMovement {
   balanceAfter   Int
   orderKind    String?
   orderId      String?      @db.Uuid
+  orderNo      String?
+  reversalOfMovementId String? @db.Uuid
   barcode      String?
   counterparty String?
   operatorName String
@@ -309,6 +313,7 @@ model WarehouseStockMovement {
   @@index([goodsId])
   @@index([occurredAt])
   @@index([barcode])
+  @@index([orderKind, orderId])
   @@map("warehouse_stock_movements")
 }
 
@@ -324,6 +329,10 @@ model StockMovement {
   operatorName String
   occurredAt   DateTime
   note         String
+  orderKind    String?
+  orderId      String?      @db.Uuid
+  orderNo      String?
+  reversalOfMovementId String? @db.Uuid
 
   item     InventoryItem @relation(fields: [itemId], references: [id])
   goods    Goods         @relation(fields: [goodsId], references: [id])
@@ -334,6 +343,7 @@ model StockMovement {
   @@index([goodsId])
   @@index([occurredAt])
   @@index([barcode, occurredAt])
+  @@index([orderKind, orderId])
   @@map("stock_movements")
 }
 
@@ -347,6 +357,12 @@ model InboundOrder {
   operatorId      String?       @db.Uuid
   operatorName    String
   createdAt       DateTime      @default(now())
+  status          OrderStatus   @default(ACTIVE)
+  reversalSupported Boolean     @default(true)
+  voidedAt        DateTime?
+  voidedByUserId  String?       @db.Uuid
+  voidedByName    String?
+  voidReason      String?
 
   warehouse     Warehouse        @relation(fields: [warehouseId], references: [id])
   location      StorageLocation  @relation(fields: [locationId], references: [id])
@@ -357,6 +373,7 @@ model InboundOrder {
   @@index([source])
   @@index([warehouseId])
   @@index([createdAt])
+  @@index([status, createdAt])
   @@map("inbound_orders")
 }
 
@@ -369,6 +386,11 @@ model InboundOrderItem {
   quantity        Int       @default(1)
   productionDate  DateTime? @db.Date
   shelfLifeDate   DateTime? @db.Date
+  beforeOwnerType OwnerType?
+  beforeWarehouseId String? @db.Uuid
+  beforeLocationId String? @db.Uuid
+  beforeSalespersonId String? @db.Uuid
+  createdTrackingItem Boolean @default(false)
 
   order         InboundOrder @relation(fields: [orderId], references: [id])
   inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id])
@@ -376,6 +398,8 @@ model InboundOrderItem {
 
   @@index([barcode])
   @@index([goodsId])
+  @@index([orderId])
+  @@index([inventoryItemId])
   @@map("inbound_order_items")
 }
 
@@ -390,6 +414,12 @@ model OutboundOrder {
   operatorId        String?      @db.Uuid
   operatorName      String
   createdAt         DateTime     @default(now())
+  status            OrderStatus  @default(ACTIVE)
+  reversalSupported Boolean      @default(true)
+  voidedAt          DateTime?
+  voidedByUserId    String?      @db.Uuid
+  voidedByName      String?
+  voidReason        String?
 
   sourceWarehouse Warehouse        @relation("SourceWarehouse", fields: [sourceWarehouseId], references: [id])
   targetWarehouse Warehouse?       @relation("TargetWarehouse", fields: [targetWarehouseId], references: [id])
@@ -403,6 +433,7 @@ model OutboundOrder {
   @@index([targetWarehouseId])
   @@index([salespersonId])
   @@index([createdAt])
+  @@index([status, createdAt])
   @@map("outbound_orders")
 }
 
@@ -412,6 +443,11 @@ model OutboundOrderItem {
   inventoryItemId String @db.Uuid
   barcode         String
   goodsId         String @db.Uuid
+  beforeOwnerType OwnerType?
+  beforeWarehouseId String? @db.Uuid
+  beforeLocationId String? @db.Uuid
+  beforeSalespersonId String? @db.Uuid
+  createdTrackingItem Boolean @default(false)
 
   order         OutboundOrder @relation(fields: [orderId], references: [id])
   inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
@@ -419,6 +455,8 @@ model OutboundOrderItem {
 
   @@index([barcode])
   @@index([goodsId])
+  @@index([orderId])
+  @@index([inventoryItemId])
   @@map("outbound_order_items")
 }
 
@@ -430,6 +468,12 @@ model SalesReturnOrder {
   operatorId        String?  @db.Uuid
   operatorName      String
   createdAt         DateTime @default(now())
+  status            OrderStatus @default(ACTIVE)
+  reversalSupported Boolean @default(true)
+  voidedAt          DateTime?
+  voidedByUserId    String? @db.Uuid
+  voidedByName      String?
+  voidReason        String?
 
   returnWarehouse Warehouse        @relation(fields: [returnWarehouseId], references: [id])
   returnLocation  StorageLocation @relation(fields: [returnLocationId], references: [id])
@@ -438,6 +482,7 @@ model SalesReturnOrder {
 
   @@index([returnWarehouseId])
   @@index([createdAt])
+  @@index([status, createdAt])
   @@map("sales_return_orders")
 }
 
@@ -448,6 +493,10 @@ model SalesReturnOrderItem {
   barcode           String
   goodsId           String @db.Uuid
   fromSalespersonId String @db.Uuid
+  beforeOwnerType OwnerType? @default(SALESPERSON)
+  beforeWarehouseId String? @db.Uuid
+  beforeLocationId String? @db.Uuid
+  beforeSalespersonId String? @db.Uuid
 
   order           SalesReturnOrder @relation(fields: [orderId], references: [id])
   inventoryItem   InventoryItem    @relation(fields: [inventoryItemId], references: [id])
@@ -457,5 +506,23 @@ model SalesReturnOrderItem {
   @@index([barcode])
   @@index([goodsId])
   @@index([fromSalespersonId])
+  @@index([orderId])
+  @@index([inventoryItemId])
   @@map("sales_return_order_items")
+}
+
+model BarcodeCorrection {
+  id           String   @id @default(uuid()) @db.Uuid
+  itemId       String   @db.Uuid
+  oldBarcode   String   @unique
+  newBarcode   String
+  reason       String
+  operatorName String
+  occurredAt   DateTime @default(now())
+
+  item InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@index([itemId, occurredAt])
+  @@index([newBarcode])
+  @@map("barcode_corrections")
 }

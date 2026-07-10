@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 import { getPrisma } from "@/lib/db";
+import { hashPassword, isPasswordHash, verifyPassword } from "@/lib/password";
 import type { CurrentUser, UserRoleCode } from "@/lib/types";
 
 const defaultDemoPassword = "demo123456";
@@ -42,14 +43,14 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     }
   });
 
-  if (!user || user.status !== "ENABLED" || user.passwordHash !== password) {
+  if (!user || user.status !== "ENABLED" || !(await verifyPassword(password, user.passwordHash))) {
     throw new Error("账号或密码不正确");
   }
 
   if (
     process.env.NODE_ENV === "production" &&
     process.env.ALLOW_DEMO_PASSWORD_LOGIN !== "true" &&
-    user.passwordHash === defaultDemoPassword
+    password === defaultDemoPassword
   ) {
     throw new Error("试运行/生产环境已禁止默认演示密码登录，请先修改初始化账号密码");
   }
@@ -74,6 +75,13 @@ export async function login(input: LoginInput): Promise<LoginResult> {
 
   const sessionToken = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 12);
+  if (!isPasswordHash(user.passwordHash)) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await hashPassword(password) }
+    });
+  }
+  await prisma.userSession.deleteMany({ where: { expiresAt: { lte: new Date() } } });
   await prisma.userSession.create({
     data: {
       token: sessionToken,

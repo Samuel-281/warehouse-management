@@ -1,6 +1,14 @@
 import type { Prisma } from "@prisma/client";
 
-type DbMovementType = "FACTORY_INBOUND" | "TERMINAL_RETURN_INBOUND" | "TRANSFER" | "SALES_OUTBOUND" | "SALES_RETURN";
+type DbMovementType =
+  | "FACTORY_INBOUND"
+  | "TERMINAL_RETURN_INBOUND"
+  | "TRANSFER"
+  | "SALES_OUTBOUND"
+  | "SALES_RETURN"
+  | "ORDER_REVERSAL"
+  | "WRITE_OFF"
+  | "MANUAL_ADJUSTMENT";
 
 export type AdjustWarehouseStockInput = {
   warehouseId: string;
@@ -9,6 +17,8 @@ export type AdjustWarehouseStockInput = {
   type: DbMovementType;
   orderKind?: string;
   orderId?: string;
+  orderNo?: string;
+  reversalOfMovementId?: string;
   barcode?: string;
   counterparty?: string;
   operatorName: string;
@@ -21,37 +31,49 @@ export async function adjustWarehouseStock(tx: Prisma.TransactionClient, input: 
     throw new Error("库存变动数量必须为非零整数");
   }
 
-  const existing = await tx.warehouseStock.findUnique({
-    where: {
-      warehouseId_goodsId: {
-        warehouseId: input.warehouseId,
-        goodsId: input.goodsId
-      }
+  const stockKey = {
+    warehouseId_goodsId: {
+      warehouseId: input.warehouseId,
+      goodsId: input.goodsId
     }
-  });
-  const currentQuantity = existing?.quantity ?? 0;
-  const nextQuantity = currentQuantity + input.quantityChange;
+  };
 
-  if (nextQuantity < 0) {
-    throw new Error(`库存不足，当前可用 ${currentQuantity} 件`);
+  if (input.quantityChange < 0) {
+    const decrement = Math.abs(input.quantityChange);
+    const updated = await tx.warehouseStock.updateMany({
+      where: {
+        warehouseId: input.warehouseId,
+        goodsId: input.goodsId,
+        quantity: { gte: decrement }
+      },
+      data: {
+        quantity: { decrement },
+        lastChangedAt: input.occurredAt
+      }
+    });
+
+    if (updated.count !== 1) {
+      const current = await tx.warehouseStock.findUnique({ where: stockKey });
+      throw new Error(`库存不足，当前可用 ${current?.quantity ?? 0} 件`);
+    }
+  } else {
+    await tx.warehouseStock.upsert({
+      where: stockKey,
+      create: {
+        warehouseId: input.warehouseId,
+        goodsId: input.goodsId,
+        quantity: input.quantityChange,
+        lastChangedAt: input.occurredAt
+      },
+      update: {
+        quantity: { increment: input.quantityChange },
+        lastChangedAt: input.occurredAt
+      }
+    });
   }
 
-  const stock = existing
-    ? await tx.warehouseStock.update({
-        where: { id: existing.id },
-        data: {
-          quantity: nextQuantity,
-          lastChangedAt: input.occurredAt
-        }
-      })
-    : await tx.warehouseStock.create({
-        data: {
-          warehouseId: input.warehouseId,
-          goodsId: input.goodsId,
-          quantity: nextQuantity,
-          lastChangedAt: input.occurredAt
-        }
-      });
+  const stock = await tx.warehouseStock.findUnique({ where: stockKey });
+  if (!stock) throw new Error("库存更新失败，请重试");
 
   await tx.warehouseStockMovement.create({
     data: {
@@ -59,9 +81,11 @@ export async function adjustWarehouseStock(tx: Prisma.TransactionClient, input: 
       goodsId: input.goodsId,
       type: input.type,
       quantityChange: input.quantityChange,
-      balanceAfter: nextQuantity,
+      balanceAfter: stock.quantity,
       orderKind: input.orderKind,
       orderId: input.orderId,
+      orderNo: input.orderNo,
+      reversalOfMovementId: input.reversalOfMovementId,
       barcode: input.barcode,
       counterparty: input.counterparty,
       operatorName: input.operatorName,

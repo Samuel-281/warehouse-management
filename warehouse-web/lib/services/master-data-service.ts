@@ -15,13 +15,16 @@ import type {
 
 type DbRecordStatus = "ENABLED" | "DISABLED";
 type DbGoodsCategory = "HEALTH_WINE" | "BAIJIU";
-type DbWarehouseType = "MAIN" | "BRANCH";
 type DbMovementType =
   | "FACTORY_INBOUND"
   | "TERMINAL_RETURN_INBOUND"
   | "TRANSFER"
   | "SALES_OUTBOUND"
-  | "SALES_RETURN";
+  | "SALES_RETURN"
+  | "ORDER_REVERSAL"
+  | "BARCODE_CORRECTION"
+  | "WRITE_OFF"
+  | "MANUAL_ADJUSTMENT";
 
 type DbGoods = {
   id: string;
@@ -38,8 +41,6 @@ type DbWarehouse = {
   id: string;
   code: string;
   name: string;
-  type: DbWarehouseType;
-  parentId: string | null;
   manager: string;
   status: DbRecordStatus;
   sortOrder: number;
@@ -260,8 +261,6 @@ export async function createWarehouse(input: CreateWarehouseInput) {
       data: {
         code,
         name,
-        type: "MAIN",
-        parentId: null,
         manager: input.manager.trim(),
         status: "ENABLED",
         sortOrder
@@ -581,7 +580,11 @@ function mapMovementType(type: DbMovementType): MovementType {
     TERMINAL_RETURN_INBOUND: "terminal_return_inbound",
     TRANSFER: "transfer",
     SALES_OUTBOUND: "sales_outbound",
-    SALES_RETURN: "sales_return"
+    SALES_RETURN: "sales_return",
+    ORDER_REVERSAL: "order_reversal",
+    BARCODE_CORRECTION: "barcode_correction",
+    WRITE_OFF: "write_off",
+    MANUAL_ADJUSTMENT: "manual_adjustment"
   };
 
   return movementTypes[type];
@@ -610,7 +613,6 @@ function mapWarehouse(warehouse: DbWarehouse): Warehouse {
     code: warehouse.code,
     name: warehouse.name,
     type: "warehouse",
-    parentId: warehouse.parentId ?? undefined,
     manager: warehouse.manager,
     status: mapStatus(warehouse.status),
     sortOrder: warehouse.sortOrder

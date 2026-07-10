@@ -3433,29 +3433,30 @@ function OrdersView({
 
   async function deleteSelectedOrders() {
     if (!canDeleteOrders || selectedOrders.length === 0) return;
-    const confirmed = window.confirm(
-      `确定删除已选 ${selectedOrders.length} 张单据吗？此操作只删除单据记录，不会回滚库存状态。`
-    );
-    if (!confirmed) return;
+    const reason = window.prompt(
+      `将撤销已选 ${selectedOrders.length} 张单据，并恢复其库存影响。请输入撤销原因：`
+    )?.trim();
+    if (!reason) return;
 
     try {
-      const response = await fetch("/api/orders", {
-        method: "DELETE",
+      const response = await fetch("/api/orders/void", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
-          orders: selectedOrders.map((order) => ({ id: order.id, kind: order.kind }))
+          orders: selectedOrders.map((order) => ({ id: order.id, kind: order.kind })),
+          reason
         })
       });
-      const payload = (await response.json()) as ApiResponse<{ deleted: number }>;
+      const payload = (await response.json()) as ApiResponse<{ voided: number }>;
       if (!response.ok || !("data" in payload)) {
-        throw new ClientApiError("error" in payload ? payload.error : "删除单据失败", response.status);
+        throw new ClientApiError("error" in payload ? payload.error : "撤销单据失败", response.status);
       }
       setSelectedOrderIds([]);
       await refreshOrders();
-      showToast({ tone: "success", message: `已删除 ${payload.data.deleted} 张单据` });
+      showToast({ tone: "success", message: `已撤销 ${payload.data.voided} 张单据，库存影响已恢复` });
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "删除单据失败") });
+      showToast({ tone: "error", message: apiErrorMessage(error, "撤销单据失败") });
     }
   }
 
@@ -3512,7 +3513,7 @@ function OrdersView({
             {canDeleteOrders ? (
               <button className="secondary-button text-red-600 hover:border-red-200 hover:bg-red-50" onClick={deleteSelectedOrders} disabled={selectedOrders.length === 0}>
                 <Trash2 className="h-4 w-4" />
-                删除已选
+                撤销已选
               </button>
             ) : null}
             <button
