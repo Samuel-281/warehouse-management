@@ -293,3 +293,4 @@ The July 2026 cleanup established these additional invariants:
 7. Super administrators can perform a reasoned manual stock adjustment, which writes a dedicated movement.
 8. Passwords use scrypt; a legacy plaintext password is upgraded after a successful login.
 9. Integration tests use a local database whose name ends in `_test`; test tooling must refuse remote database hosts.
+10. Web business submissions use an optional `clientRequestId` for idempotency. Existing PDA clients may omit it, but new clients should retain the same value while retrying an uncertain submission.

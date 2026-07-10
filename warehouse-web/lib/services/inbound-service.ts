@@ -1,5 +1,6 @@
 import { getPrisma } from "@/lib/db";
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
+import { runIdempotentTransaction } from "@/lib/services/idempotency-service";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { addYears, formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InboundSource, InventoryItem, MovementType, StockMovement, TrackingSource } from "@/lib/types";
@@ -53,6 +54,8 @@ export type SubmitInboundInput = {
   quantity?: number;
   barcodes?: string[];
   operatorName: string;
+  operatorUserId?: string;
+  clientRequestId?: string;
 };
 
 export async function submitInbound(input: SubmitInboundInput) {
@@ -72,7 +75,24 @@ export async function submitInbound(input: SubmitInboundInput) {
   }
 
   const prisma = getPrisma();
-  return prisma.$transaction(async (tx) => {
+  return runIdempotentTransaction(
+    prisma,
+    {
+      userId: input.operatorUserId,
+      operationType: "INBOUND",
+      clientRequestId: input.clientRequestId,
+      payload: {
+        source: input.source,
+        warehouseId: input.warehouseId,
+        locationId: input.locationId,
+        goodsId: input.goodsId,
+        terminalStoreId: input.terminalStoreId ?? null,
+        productionDate: input.productionDate ?? null,
+        quantity,
+        barcodes
+      }
+    },
+    async (tx) => {
     const [goods, warehouse, location] = await Promise.all([
       tx.goods.findUnique({ where: { id: input.goodsId } }),
       tx.warehouse.findUnique({ where: { id: input.warehouseId } }),
@@ -256,7 +276,8 @@ export async function submitInbound(input: SubmitInboundInput) {
       items: persistedItems.map(mapInventoryItem),
       movements: createdMovements.map(mapStockMovement)
     };
-  });
+    }
+  );
 }
 
 function normalizeQuantity(quantity: number) {

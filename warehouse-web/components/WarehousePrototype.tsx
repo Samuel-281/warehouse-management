@@ -196,6 +196,9 @@ export default function WarehousePrototype() {
   const toastTimerRef = useRef<number | null>(null);
   const resultDialogTimerRef = useRef<number | null>(null);
   const orderRequestRef = useRef(0);
+  const inboundSubmitRequestRef = useRef<string | null>(null);
+  const outboundSubmitRequestRef = useRef<string | null>(null);
+  const salesReturnSubmitRequestRef = useRef<string | null>(null);
 
   const [returnBranch, setReturnBranch] = useState<ReturnBranch>("sales_return");
   const [inboundWarehouseId, setInboundWarehouseId] = useState("wh-main");
@@ -298,6 +301,15 @@ export default function WarehousePrototype() {
 
     return apiErrorMessage(error, fallback);
   }, []);
+
+  function submissionRequestId(ref: { current: string | null }) {
+    ref.current ??= crypto.randomUUID();
+    return ref.current;
+  }
+
+  function submissionOutcomeIsUncertain(error: unknown) {
+    return !(error instanceof ClientApiError) || error.status === 409 || error.status >= 500;
+  }
 
   const applyDatabaseState = useCallback((masterData: WarehouseState, options: { preserveSelection?: boolean } = {}) => {
     const enabledWarehouses = masterData.warehouses.filter((warehouse) => warehouse.status === "enabled");
@@ -703,6 +715,7 @@ export default function WarehousePrototype() {
         );
       }
       const result = await postJson<{ quantity: number; items: InventoryItem[]; movements: StockMovement[] }>("/api/inbound", {
+        clientRequestId: submissionRequestId(inboundSubmitRequestRef),
         source,
         warehouseId: inboundWarehouseId,
         locationId: inboundLocationId,
@@ -724,9 +737,18 @@ export default function WarehousePrototype() {
       setInboundQty("1");
       setProductionDate("");
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
+      inboundSubmitRequestRef.current = null;
       showResultDialog({ tone: "success", title: "入库成功", message: `已写入 ${result.quantity ?? result.items.length} 件货物，库存已更新` });
     } catch (error) {
-      showResultDialog({ tone: "error", title: "入库失败", message: handleRequestError(error, "入库提交失败") });
+      const uncertain = submissionOutcomeIsUncertain(error);
+      if (!uncertain) inboundSubmitRequestRef.current = null;
+      showResultDialog({
+        tone: "error",
+        title: uncertain ? "入库结果待确认" : "入库失败",
+        message: uncertain
+          ? `${handleRequestError(error, "暂时无法确认入库结果")}。请保持当前表单并再次点击提交，系统不会重复记账。`
+          : handleRequestError(error, "入库提交失败")
+      });
     }
   }
 
@@ -785,6 +807,7 @@ export default function WarehousePrototype() {
         setOutboundBarcodeReviews
       );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/outbound", {
+        clientRequestId: submissionRequestId(outboundSubmitRequestRef),
         type: "direct",
         sourceWarehouseId,
         goodsId: directOutboundGoodsId,
@@ -803,13 +826,22 @@ export default function WarehousePrototype() {
       setOutboundBarcodes([]);
       setOutboundBarcodeReviews({});
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
+      outboundSubmitRequestRef.current = null;
       showResultDialog({
         tone: "success",
         title: "扫码出库成功",
         message: `已处理 ${result.items.length} 件货物，库存和条码追踪已更新`
       });
     } catch (error) {
-      showResultDialog({ tone: "error", title: "出库失败", message: handleRequestError(error, "出库提交失败") });
+      const uncertain = submissionOutcomeIsUncertain(error);
+      if (!uncertain) outboundSubmitRequestRef.current = null;
+      showResultDialog({
+        tone: "error",
+        title: uncertain ? "出库结果待确认" : "出库失败",
+        message: uncertain
+          ? `${handleRequestError(error, "暂时无法确认出库结果")}。请保持当前表单并再次点击提交，系统不会重复记账。`
+          : handleRequestError(error, "出库提交失败")
+      });
     }
   }
 
@@ -830,6 +862,7 @@ export default function WarehousePrototype() {
         setReturnBarcodeReviews
       );
       const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/sales-return", {
+        clientRequestId: submissionRequestId(salesReturnSubmitRequestRef),
         returnWarehouseId,
         returnLocationId,
         barcodes,
@@ -844,13 +877,22 @@ export default function WarehousePrototype() {
       setReturnBarcodes([]);
       setReturnBarcodeReviews({});
       setSelectedBarcode(result.items[0]?.barcode ?? selectedBarcode);
+      salesReturnSubmitRequestRef.current = null;
       showResultDialog({
         tone: "success",
         title: "销售退回成功",
         message: `已退回 ${result.items.length} 件货物，未修改生产日期或保质期`
       });
     } catch (error) {
-      showResultDialog({ tone: "error", title: "销售退回失败", message: handleRequestError(error, "销售退回提交失败") });
+      const uncertain = submissionOutcomeIsUncertain(error);
+      if (!uncertain) salesReturnSubmitRequestRef.current = null;
+      showResultDialog({
+        tone: "error",
+        title: uncertain ? "销售退回结果待确认" : "销售退回失败",
+        message: uncertain
+          ? `${handleRequestError(error, "暂时无法确认销售退回结果")}。请保持当前表单并再次点击提交，系统不会重复记账。`
+          : handleRequestError(error, "销售退回提交失败")
+      });
     }
   }
 

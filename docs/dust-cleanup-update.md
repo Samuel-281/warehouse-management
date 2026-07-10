@@ -14,6 +14,7 @@
 6. 密码使用 scrypt；旧明文密码在首次成功登录后自动升级。
 7. 生产界面移除演示数据和 `localStorage` 库存回退，数据库故障时显示明确错误状态。
 8. 主前端拆分为查询页面、公共 UI、反馈弹窗、API 客户端和扫码表单模块。
+9. 入库、出库和销售退回支持 `clientRequestId` 防重复提交；相同请求重试返回首次结果，不会重复改变库存。
 
 ## 验证命令
 
@@ -24,7 +25,10 @@ npm run lint
 npm run build
 npm run prisma:validate
 npm run test:integration
+npm run db:cleanup-runtime
 ```
+
+`db:cleanup-runtime` 用于删除超过 30 天的防重复请求记录和过期登录会话，生产环境建议每日执行一次。
 
 集成测试会自动创建或重建本机 `warehouse_management_test` 数据库。测试脚本只接受 `localhost`、`127.0.0.1` 或 `::1`，且数据库名称必须以 `_test` 结尾。
 

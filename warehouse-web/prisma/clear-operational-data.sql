@@ -2,6 +2,7 @@
 -- User accounts and roles are preserved so administrators can log in after reset.
 
 TRUNCATE TABLE
+  business_requests,
   sales_return_order_items,
   sales_return_orders,
   outbound_order_items,

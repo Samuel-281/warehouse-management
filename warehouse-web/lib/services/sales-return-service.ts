@@ -1,5 +1,6 @@
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { getPrisma } from "@/lib/db";
+import { runIdempotentTransaction } from "@/lib/services/idempotency-service";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InventoryItem, MovementType, StockMovement } from "@/lib/types";
@@ -49,6 +50,8 @@ export type SubmitSalesReturnInput = {
   returnLocationId: string;
   barcodes: string[];
   operatorName: string;
+  operatorUserId?: string;
+  clientRequestId?: string;
 };
 
 export async function submitSalesReturn(input: SubmitSalesReturnInput) {
@@ -60,7 +63,19 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
   }
 
   const prisma = getPrisma();
-  return prisma.$transaction(async (tx) => {
+  return runIdempotentTransaction(
+    prisma,
+    {
+      userId: input.operatorUserId,
+      operationType: "SALES_RETURN",
+      clientRequestId: input.clientRequestId,
+      payload: {
+        returnWarehouseId: input.returnWarehouseId,
+        returnLocationId: input.returnLocationId,
+        barcodes
+      }
+    },
+    async (tx) => {
     const [returnWarehouse, returnLocation] = await Promise.all([
       tx.warehouse.findUnique({ where: { id: input.returnWarehouseId } }),
       tx.storageLocation.findUnique({ where: { id: input.returnLocationId } })
@@ -188,7 +203,8 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
       items: persistedItems.map(mapInventoryItem),
       movements: createdMovements.map(mapStockMovement)
     };
-  });
+    }
+  );
 }
 
 function makeOrderNo(prefix: string) {

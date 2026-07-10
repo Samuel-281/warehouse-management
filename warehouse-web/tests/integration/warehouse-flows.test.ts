@@ -199,6 +199,61 @@ test("并发出库不会让库存小于零", async () => {
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 0);
 });
 
+test("业务请求编号阻止重复入库、出库和退回", async () => {
+  const inboundRequestId = randomUUID();
+  const inboundInput = {
+    source: "factory" as const,
+    warehouseId: context.sourceWarehouseId,
+    locationId: context.sourceLocationId,
+    goodsId: context.goodsId,
+    quantity: 100,
+    operatorName,
+    operatorUserId: currentUser.id,
+    clientRequestId: inboundRequestId
+  };
+  const [firstInbound, repeatedInbound] = await Promise.all([
+    submitInbound(inboundInput),
+    submitInbound(inboundInput)
+  ]);
+  assert.equal(firstInbound.orderId, repeatedInbound.orderId);
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 100);
+  assert.equal(await prisma.inboundOrder.count(), 1);
+  assert.equal([firstInbound.idempotentReplay, repeatedInbound.idempotentReplay].filter(Boolean).length, 1);
+
+  await assert.rejects(
+    submitInbound({ ...inboundInput, quantity: 101 }),
+    (error: unknown) => error instanceof Error && "status" in error && error.status === 409
+  );
+
+  const outboundInput = {
+    type: "direct" as const,
+    sourceWarehouseId: context.sourceWarehouseId,
+    salespersonId: context.salespersonId,
+    goodsId: context.goodsId,
+    barcodes: ["IDEMPOTENT-SALES-001"],
+    operatorName,
+    operatorUserId: currentUser.id,
+    clientRequestId: randomUUID()
+  };
+  const firstOutbound = await submitOutbound(outboundInput);
+  const repeatedOutbound = await submitOutbound(outboundInput);
+  assert.equal(firstOutbound.orderId, repeatedOutbound.orderId);
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 99);
+
+  const returnInput = {
+    returnWarehouseId: context.sourceWarehouseId,
+    returnLocationId: context.sourceLocationId,
+    barcodes: ["IDEMPOTENT-SALES-001"],
+    operatorName,
+    operatorUserId: currentUser.id,
+    clientRequestId: randomUUID()
+  };
+  const firstReturn = await submitSalesReturn(returnInput);
+  const repeatedReturn = await submitSalesReturn(returnInput);
+  assert.equal(firstReturn.orderId, repeatedReturn.orderId);
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 100);
+});
+
 test("500 条批量出库与精确查询达到本地性能门槛", async () => {
   await factoryInbound(500);
   const barcodes = makeBarcodes("BATCH", 500);
@@ -253,6 +308,14 @@ async function seedContext() {
   const targetLocationId = randomUUID();
   const salespersonId = randomUUID();
   const storeId = randomUUID();
+  await prisma.user.create({
+    data: {
+      id: currentUser.id,
+      username: currentUser.username,
+      displayName: currentUser.displayName,
+      passwordHash: "integration-test-password"
+    }
+  });
   await prisma.goods.create({
     data: { id: goodsId, code: "TEST-GOODS", name: "集成测试货物", category: "HEALTH_WINE", unit: "瓶", spec: "500ml" }
   });

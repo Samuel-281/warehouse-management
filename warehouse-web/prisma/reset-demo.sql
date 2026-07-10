@@ -2,6 +2,7 @@
 -- This is intended for local testing only.
 
 TRUNCATE TABLE
+  business_requests,
   sales_return_order_items,
   sales_return_orders,
   outbound_order_items,
