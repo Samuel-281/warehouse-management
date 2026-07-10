@@ -31,8 +31,6 @@ try {
   const now = new Date();
   const records = Array.from({ length: inventoryCount }, (_, index) => ({
     itemId: randomUUID(),
-    factoryMovementId: randomUUID(),
-    factoryOrderItemId: randomUUID(),
     barcode: `${prefix}${String(index + 1).padStart(6, "0")}`,
     goods: context.goods[index % context.goods.length]
   }));
@@ -184,11 +182,11 @@ async function loadBaseContext() {
 
 async function createFactoryInbound(records, context, occurredAt) {
   const orderId = randomUUID();
-  const destinationLabel = mainWarehouseLabel(context);
+  const orderNo = `RK${timestampText()}STRESS`;
 
   await insertInboundOrder({
     id: orderId,
-    orderNo: `RK${timestampText()}STRESS`,
+    orderNo,
     source: "FACTORY",
     warehouseId: context.mainWarehouseId,
     locationId: context.mainLocationId,
@@ -197,51 +195,26 @@ async function createFactoryInbound(records, context, occurredAt) {
     occurredAt
   });
 
-  for (const batch of chunks(records, batchSize)) {
-    await bulkInsert(
-      "inventory_items",
-      [
-        "id",
-        "barcode",
-        "goodsId",
-        "ownerType",
-        "warehouseId",
-        "locationId",
-        "status",
-        "inboundSource",
-        "lastMovedAt",
-        "createdAt",
-        "updatedAt"
-      ],
-      batch.map((record) => [
-        record.itemId,
-        record.barcode,
-        record.goods.id,
-        "WAREHOUSE",
-        context.mainWarehouseId,
-        context.mainLocationId,
-        "IN_STOCK",
-        "FACTORY",
-        occurredAt,
-        occurredAt,
-        occurredAt
-      ])
-    );
-    await insertInboundItems(batch, orderId);
-    await insertMovements(
-      batch.map((record) => ({
-        id: record.factoryMovementId,
-        itemId: record.itemId,
-        barcode: record.barcode,
-        goodsId: record.goods.id,
-        type: "FACTORY_INBOUND",
-        fromLabel: "压测数据生成",
-        toLabel: destinationLabel,
-        note: "压测数据：厂家到货入库"
-      })),
+  const groups = groupRecordsByGoods(records);
+  await bulkInsert(
+    "inbound_order_items",
+    ["id", "orderId", "goodsId", "quantity"],
+    groups.map(({ goodsId, quantity }) => [randomUUID(), orderId, goodsId, quantity])
+  );
+  for (const group of groups) {
+    await adjustStressStock({
+      warehouseId: context.mainWarehouseId,
+      goodsId: group.goodsId,
+      quantityChange: group.quantity,
+      type: "FACTORY_INBOUND",
+      orderKind: "inbound",
+      orderId,
+      orderNo,
+      counterparty: "压测数据生成",
+      note: "压测数据：厂家到货数量入库",
       context,
       occurredAt
-    );
+    });
   }
 }
 
@@ -250,9 +223,10 @@ async function createTransfer(records, context, occurredAt) {
 
   const branch = context.branches[0];
   const orderId = randomUUID();
+  const orderNo = `CK${timestampText()}TR`;
   await insertOutboundOrder({
     id: orderId,
-    orderNo: `CK${timestampText()}TR`,
+    orderNo,
     type: "TRANSFER",
     sourceWarehouseId: context.mainWarehouseId,
     targetWarehouseId: branch.id,
@@ -262,8 +236,43 @@ async function createTransfer(records, context, occurredAt) {
     occurredAt
   });
 
+  for (const group of groupRecordsByGoods(records)) {
+    await adjustStressStock({
+      warehouseId: context.mainWarehouseId,
+      goodsId: group.goodsId,
+      quantityChange: -group.quantity,
+      type: "TRANSFER",
+      orderKind: "outbound",
+      orderId,
+      orderNo,
+      counterparty: branch.name,
+      note: "压测数据：扫码出库发往仓库",
+      context,
+      occurredAt
+    });
+    await adjustStressStock({
+      warehouseId: branch.id,
+      goodsId: group.goodsId,
+      quantityChange: group.quantity,
+      type: "TRANSFER",
+      orderKind: "outbound",
+      orderId,
+      orderNo,
+      counterparty: context.mainWarehouseName,
+      note: "压测数据：扫码出库到达仓库",
+      context,
+      occurredAt
+    });
+  }
   for (const batch of chunks(records, batchSize)) {
-    await updateItemsToWarehouse(batch, branch.id, branch.locationId, occurredAt);
+    await insertTrackedItems(batch, {
+      ownerType: "WAREHOUSE",
+      warehouseId: branch.id,
+      locationId: branch.locationId,
+      salespersonId: null,
+      status: "IN_STOCK",
+      occurredAt
+    });
     await insertOutboundItems(batch, orderId);
     await insertMovements(
       batch.map((record) => ({
@@ -287,9 +296,10 @@ async function createSalesOutbound(records, context, occurredAt) {
 
   const salesperson = context.salespeople[0];
   const orderId = randomUUID();
+  const orderNo = `CK${timestampText()}XS`;
   await insertOutboundOrder({
     id: orderId,
-    orderNo: `CK${timestampText()}XS`,
+    orderNo,
     type: "SALES",
     sourceWarehouseId: context.mainWarehouseId,
     targetWarehouseId: null,
@@ -299,8 +309,30 @@ async function createSalesOutbound(records, context, occurredAt) {
     occurredAt
   });
 
+  for (const group of groupRecordsByGoods(records)) {
+    await adjustStressStock({
+      warehouseId: context.mainWarehouseId,
+      goodsId: group.goodsId,
+      quantityChange: -group.quantity,
+      type: "SALES_OUTBOUND",
+      orderKind: "outbound",
+      orderId,
+      orderNo,
+      counterparty: `销售人员：${salesperson.name}`,
+      note: "压测数据：扫码出库分配销售",
+      context,
+      occurredAt
+    });
+  }
   for (const batch of chunks(records, batchSize)) {
-    await updateItemsToSalesperson(batch, salesperson.id, occurredAt);
+    await insertTrackedItems(batch, {
+      ownerType: "SALESPERSON",
+      warehouseId: null,
+      locationId: null,
+      salespersonId: salesperson.id,
+      status: "WITH_SALESPERSON",
+      occurredAt
+    });
     await insertOutboundItems(batch, orderId);
     await insertMovements(
       batch.map((record) => ({
@@ -324,6 +356,7 @@ async function createSalesReturn(records, context, occurredAt) {
 
   const salesperson = context.salespeople[0];
   const orderId = randomUUID();
+  const orderNo = `XT${timestampText()}SR`;
   await client.query(
     `
       INSERT INTO sales_return_orders (
@@ -334,7 +367,7 @@ async function createSalesReturn(records, context, occurredAt) {
     `,
     [
       orderId,
-      `XT${timestampText()}SR`,
+      orderNo,
       context.mainWarehouseId,
       context.mainLocationId,
       context.operatorId,
@@ -343,6 +376,21 @@ async function createSalesReturn(records, context, occurredAt) {
     ]
   );
 
+  for (const group of groupRecordsByGoods(records)) {
+    await adjustStressStock({
+      warehouseId: context.mainWarehouseId,
+      goodsId: group.goodsId,
+      quantityChange: group.quantity,
+      type: "SALES_RETURN",
+      orderKind: "sales_return",
+      orderId,
+      orderNo,
+      counterparty: `销售人员：${salesperson.name}`,
+      note: "压测数据：销售退回入库",
+      context,
+      occurredAt
+    });
+  }
   for (const batch of chunks(records, batchSize)) {
     await updateItemsToWarehouse(batch, context.mainWarehouseId, context.mainLocationId, occurredAt);
     await bulkInsert(
@@ -372,12 +420,13 @@ async function createTerminalReturnInbound(records, context, occurredAt) {
 
   const store = context.stores[0];
   const orderId = randomUUID();
+  const orderNo = `RK${timestampText()}TH`;
   const productionDate = "2026-01-01";
   const shelfLifeDate = "2029-01-01";
 
   await insertInboundOrder({
     id: orderId,
-    orderNo: `RK${timestampText()}TH`,
+    orderNo,
     source: "TERMINAL_RETURN",
     warehouseId: context.mainWarehouseId,
     locationId: context.mainLocationId,
@@ -386,6 +435,21 @@ async function createTerminalReturnInbound(records, context, occurredAt) {
     occurredAt
   });
 
+  for (const group of groupRecordsByGoods(records)) {
+    await adjustStressStock({
+      warehouseId: context.mainWarehouseId,
+      goodsId: group.goodsId,
+      quantityChange: group.quantity,
+      type: "TERMINAL_RETURN_INBOUND",
+      orderKind: "inbound",
+      orderId,
+      orderNo,
+      counterparty: store.name,
+      note: `压测数据：终端退换货入库，生产日期 ${productionDate}`,
+      context,
+      occurredAt
+    });
+  }
   for (const batch of chunks(records, batchSize)) {
     await updateItemsToWarehouse(batch, context.mainWarehouseId, context.mainLocationId, occurredAt, {
       inboundSource: "TERMINAL_RETURN",
@@ -513,6 +577,105 @@ async function insertMovements(movements, context, occurredAt) {
   );
 }
 
+async function insertTrackedItems(records, owner) {
+  await bulkInsert(
+    "inventory_items",
+    [
+      "id",
+      "barcode",
+      "goodsId",
+      "ownerType",
+      "warehouseId",
+      "locationId",
+      "salespersonId",
+      "status",
+      "inboundSource",
+      "lastMovedAt",
+      "createdAt",
+      "updatedAt"
+    ],
+    records.map((record) => [
+      record.itemId,
+      record.barcode,
+      record.goods.id,
+      owner.ownerType,
+      owner.warehouseId,
+      owner.locationId,
+      owner.salespersonId,
+      owner.status,
+      "OUTBOUND_SCAN",
+      owner.occurredAt,
+      owner.occurredAt,
+      owner.occurredAt
+    ])
+  );
+}
+
+async function adjustStressStock({
+  warehouseId,
+  goodsId,
+  quantityChange,
+  type,
+  orderKind,
+  orderId,
+  orderNo,
+  counterparty,
+  note,
+  context,
+  occurredAt
+}) {
+  const stock =
+    quantityChange < 0
+      ? await client.query(
+          `
+            UPDATE warehouse_stocks
+            SET quantity = quantity + $3, "lastChangedAt" = $4, "updatedAt" = $4
+            WHERE "warehouseId" = $1 AND "goodsId" = $2 AND quantity >= $5
+            RETURNING quantity
+          `,
+          [warehouseId, goodsId, quantityChange, occurredAt, Math.abs(quantityChange)]
+        )
+      : await client.query(
+          `
+            INSERT INTO warehouse_stocks (
+              id, "warehouseId", "goodsId", quantity, "lastChangedAt", "createdAt", "updatedAt"
+            )
+            VALUES ($1, $2, $3, $4, $5, $5, $5)
+            ON CONFLICT ("warehouseId", "goodsId") DO UPDATE
+            SET quantity = warehouse_stocks.quantity + EXCLUDED.quantity,
+                "lastChangedAt" = EXCLUDED."lastChangedAt",
+                "updatedAt" = EXCLUDED."updatedAt"
+            RETURNING quantity
+          `,
+          [randomUUID(), warehouseId, goodsId, quantityChange, occurredAt]
+        );
+  if (stock.rowCount !== 1) throw new Error(`压测库存不足：warehouse=${warehouseId}, goods=${goodsId}`);
+  await client.query(
+    `
+      INSERT INTO warehouse_stock_movements (
+        id, "warehouseId", "goodsId", type, "quantityChange", "balanceAfter", "orderKind",
+        "orderId", "orderNo", counterparty, "operatorName", "occurredAt", note
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    `,
+    [
+      randomUUID(),
+      warehouseId,
+      goodsId,
+      type,
+      quantityChange,
+      stock.rows[0].quantity,
+      orderKind,
+      orderId,
+      orderNo,
+      counterparty,
+      context.operatorName,
+      occurredAt,
+      note
+    ]
+  );
+}
+
 async function updateItemsToWarehouse(records, warehouseId, locationId, movedAt, extra = {}) {
   await client.query(
     `
@@ -542,24 +705,6 @@ async function updateItemsToWarehouse(records, warehouseId, locationId, movedAt,
   );
 }
 
-async function updateItemsToSalesperson(records, salespersonId, movedAt) {
-  await client.query(
-    `
-      UPDATE inventory_items
-      SET
-        "ownerType" = 'SALESPERSON',
-        "warehouseId" = NULL,
-        "locationId" = NULL,
-        "salespersonId" = $1,
-        status = 'WITH_SALESPERSON',
-        "lastMovedAt" = $2,
-        "updatedAt" = $2
-      WHERE id = ANY($3::uuid[])
-    `,
-    [salespersonId, movedAt, records.map((record) => record.itemId)]
-  );
-}
-
 async function bulkInsert(table, columns, rows) {
   if (rows.length === 0) return;
 
@@ -584,6 +729,14 @@ function chunks(items, size) {
     result.push(items.slice(index, index + size));
   }
   return result;
+}
+
+function groupRecordsByGoods(records) {
+  const quantities = new Map();
+  for (const record of records) {
+    quantities.set(record.goods.id, (quantities.get(record.goods.id) ?? 0) + 1);
+  }
+  return Array.from(quantities, ([goodsId, quantity]) => ({ goodsId, quantity }));
 }
 
 function addMinutes(date, minutes) {

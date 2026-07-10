@@ -6,7 +6,7 @@ This workspace is for a warehouse goods management software project. The product
 
 The software now manages goods across a flat warehouse structure. The previous `总仓` / `分仓` distinction has been removed from user-facing business logic. All physical storage sites should be treated uniformly as `仓库`.
 
-The system's core tracking model is one unique barcode per physical item. Each individual item has a single, non-repeatable `单件条形码编号`. All inbound, outbound, transfer, sales allocation, and return operations should be traceable by this barcode.
+The system uses a double-ledger model. Warehouse stock is recorded as quantity per `warehouse + goods`; physical items that enter a scanning workflow use one unique, non-repeatable `单件条形码编号` for traceability. Factory arrival inbound does not create barcode records.
 
 Version 1.0 focuses on practical desktop web warehouse operations. The desktop work can now be treated as the baseline product. Future changes should avoid broad desktop rewrites unless the user explicitly reopens desktop UI or workflow work.
 
@@ -66,7 +66,7 @@ The interactive prototype lives in `warehouse-web/` and uses:
 2. TypeScript.
 3. Tailwind CSS.
 4. `lucide-react`.
-5. PostgreSQL + Prisma for persisted business data, with local mock data retained only as a fallback/demo reference.
+5. PostgreSQL + Prisma as the only runtime business data source. The production UI must not fall back to local mock or `localStorage` inventory.
 
 The current server deployment path is documented in `docs/aliyun-ecs-deployment.md`. On the ECS server, production builds must install build-time dependencies as well as runtime dependencies. Use a command like `NPM_CONFIG_PRODUCTION=false npm ci --include=dev` before `npm run build`, because Tailwind CSS and Prisma CLI are needed during build/deploy.
 
@@ -107,7 +107,7 @@ Each physical item has one unique barcode. The barcode must not be duplicated.
 
 The system does not need to generate barcode numbers. It only needs to accept scanned or manually entered barcodes, validate uniqueness, and use them as the main traceability key.
 
-Inventory logic should be item-level, not only quantity-level. Quantities can be summarized from item barcode records.
+Warehouse quantity and barcode traceability are separate ledgers. Do not derive warehouse quantity from barcode records, and do not require every warehouse unit to have a barcode record.
 
 ## Inbound Rules
 
@@ -121,7 +121,7 @@ For `厂家到货`:
 1. Goods may enter any enabled warehouse.
 2. Production date is not mandatory.
 3. Shelf life does not need to be calculated by default.
-4. Every item still needs its unique barcode.
+4. Factory arrival records goods and quantity only; it does not scan or create individual barcode records.
 
 For `终端店铺退换货`:
 
@@ -135,7 +135,7 @@ For `终端店铺退换货`:
 
 ## Outbound Rules
 
-There are two outbound types:
+The user-facing application has one unified `扫码出库` entry with two destination types:
 
 1. `挪仓`
 2. `销售出库`
@@ -146,14 +146,14 @@ For `挪仓`:
 2. Target warehouse can be any enabled warehouse.
 3. Source and target warehouses must be different.
 4. No approval and no receiver confirmation are required.
-5. The scanned barcodes must currently belong to the selected source warehouse.
+5. The source warehouse quantity must be sufficient. A barcode not previously tracked is created during scanned outbound; an existing barcode must be valid for the selected source warehouse.
 
 For `销售出库`:
 
 1. Goods may be shipped out from any enabled warehouse.
 2. Goods are assigned to a salesperson.
 3. Goods are not assigned to a specific terminal store.
-4. The scanned barcodes must currently belong to the selected warehouse.
+4. The source warehouse quantity must be sufficient. New scanned barcodes become tracked at submission; existing barcodes must be valid for the selected source warehouse.
 5. After submission, item ownership changes from warehouse inventory to salesperson custody.
 
 ## Sales Return Rules
@@ -264,18 +264,32 @@ Run the local prototype from `warehouse-web/`:
 
 The local database should be available before testing persisted flows. For large-data testing, avoid adding frontend behavior that depends on loading every inventory item, every movement, or every barcode at once.
 
-For the next production implementation stage, prefer a data model centered on item barcode records. A practical initial model should include:
+The production data model must preserve both the warehouse quantity ledger and item barcode traceability ledger. It should include:
 
 1. Goods master data.
 2. Warehouse master data.
 3. Storage locations.
 4. Salespersons.
 5. Terminal stores.
-6. Item barcode inventory records.
-7. Inbound orders and inbound lines.
-8. Outbound orders and outbound lines.
-9. Sales return orders.
-10. Stock movement ledger.
+6. Warehouse-goods quantity balances and immutable quantity movements.
+7. Item barcode inventory records and immutable barcode movements.
+8. Inbound orders and inbound lines.
+9. Outbound orders and outbound lines.
+10. Sales return orders.
 11. Users, roles, and operation logs.
 
 Any business operation that changes item location or ownership should write an immutable movement ledger entry.
+
+## Dust Cleanup Baseline
+
+The July 2026 cleanup established these additional invariants:
+
+1. Warehouse quantity changes are atomic and protected by a database nonnegative constraint.
+2. A single scan submission is limited to 500 barcodes.
+3. Orders are server-side paginated and exact barcode search covers the full database.
+4. Business orders are voided, not deleted. Voiding requires a reason and is rejected when a barcode has a later movement.
+5. Barcode correction preserves old and current barcode history; write-off preserves the unique barcode and movement history.
+6. Hard deletion is only allowed for an unreferenced erroneous barcode profile.
+7. Super administrators can perform a reasoned manual stock adjustment, which writes a dedicated movement.
+8. Passwords use scrypt; a legacy plaintext password is upgraded after a successful login.
+9. Integration tests use a local database whose name ends in `_test`; test tooling must refuse remote database hosts.
