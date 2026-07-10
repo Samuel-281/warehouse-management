@@ -10,7 +10,7 @@ The system uses a double-ledger model. Warehouse stock is recorded as quantity p
 
 Version 1.0 focuses on practical desktop web warehouse operations. The desktop work can now be treated as the baseline product. Future changes should avoid broad desktop rewrites unless the user explicitly reopens desktop UI or workflow work.
 
-Mobile work is now starting. The original `/pda` page is only a low-fidelity sketch and should not be treated as the final mobile implementation. New mobile work should be driven by warehouse scanning workflows, small-screen ergonomics, and the separate mobile frontend requirements.
+The production PDA client is now a separate native Android project at `/Users/suhengtan/Documents/warehouse-pda-android`, backed by `https://github.com/Samuel-281/warehouse-pda-android.git`. It uses Kotlin, Jetpack Compose, Retrofit, and OkHttp. The original Web `/pda` page remains only a low-fidelity sketch and must not be treated as the production mobile client.
 
 ## Current Stage Snapshot
 
@@ -18,7 +18,7 @@ The current product state is:
 
 1. Desktop web development is mostly complete for the current business scope.
 2. The app has moved from local mock state to PostgreSQL + Prisma persisted data.
-3. The app is intended to run on an Aliyun ECS server with website, API, and PostgreSQL on the same machine.
+3. The production app runs on an Aliyun Simple Application Server with website, API, and PostgreSQL on the same machine. The production URL is currently `http://43.108.14.102`; the older ECS instance remains a test server.
 4. The user expects updates to be pushed through GitHub and then pulled on the ECS server.
 5. The high-risk web maintenance reset entry should remain available to super administrators.
 6. The web maintenance reset must clear operational/business data without re-seeding demo or test data.
@@ -197,12 +197,24 @@ The following are intentionally outside the first release unless the user change
 6. ERP, finance, ecommerce, or logistics integration.
 7. RFID.
 8. Automatic replenishment.
-9. Native mobile app unless the user explicitly requests native development.
+9. A separate iOS client or a second mobile implementation beyond the existing Android PDA app.
 10. Terminal-store-level sales allocation.
 
 ## Mobile Development Guidance
 
-The next development stage should focus on a mobile web/PDA-friendly frontend, not a native app by default. Build it in the existing Next.js application unless the user explicitly asks for a separate project. Keep the desktop backend/API behavior as the source of truth.
+The production PDA client is the separate native Android repository at `/Users/suhengtan/Documents/warehouse-pda-android`. Keep the Web backend/API in this repository as the source of truth. Do not move Android source into a Web Git branch and do not copy the Android app into `warehouse-web/`.
+
+At the start of every PDA change requested from this workspace:
+
+1. Read `/Users/suhengtan/Documents/warehouse-pda-android/AGENTS.md`.
+2. Inspect that repository's `git status`, current branch, recent commits, and tags before editing.
+3. Preserve all uncommitted and untracked PDA files unless the user explicitly asks to include or remove them.
+4. Commit Web/API and Android changes in their respective repositories.
+5. If an API contract changes, implement and verify the Web backend first, then update the Android client, then deploy the backend before publishing the APK.
+6. Keep the Android server address configurable. The current production API base URL is `http://43.108.14.102`.
+7. Verify Android changes with `./gradlew :app:assembleDebug` plus emulator or real-device checks where available.
+
+As of July 10, 2026, the Android repository `main` branch is at tag `v0.1.5`. Treat repository state as authoritative and re-check it each time rather than assuming this snapshot is still current.
 
 Mobile priorities:
 
