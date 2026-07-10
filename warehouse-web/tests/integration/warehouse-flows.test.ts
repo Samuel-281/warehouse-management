@@ -11,6 +11,8 @@ import { voidOrders } from "@/lib/services/order-reversal-service";
 import { submitOutbound } from "@/lib/services/outbound-service";
 import { submitSalesReturn } from "@/lib/services/sales-return-service";
 import { adjustStockManually } from "@/lib/services/stock-adjustment-service";
+import { changeOwnPassword, createUser, resetUserPassword, updateUser } from "@/lib/services/user-service";
+import { verifyPassword } from "@/lib/password";
 import type { CurrentUser } from "@/lib/types";
 
 const prisma = getPrisma();
@@ -254,6 +256,63 @@ test("业务请求编号阻止重复入库、出库和退回", async () => {
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 100);
 });
 
+test("账号密码、角色和启停状态按安全规则维护", async () => {
+  await prisma.userSession.createMany({
+    data: [
+      { token: "current-session", userId: currentUser.id, expiresAt: new Date(Date.now() + 60_000) },
+      { token: "other-session", userId: currentUser.id, expiresAt: new Date(Date.now() + 60_000) }
+    ]
+  });
+  await changeOwnPassword({
+    userId: currentUser.id,
+    currentPassword: "integration-test-password",
+    newPassword: "changed-test-password",
+    currentSessionToken: "current-session"
+  });
+  const changedUser = await prisma.user.findUniqueOrThrow({ where: { id: currentUser.id } });
+  assert.equal(await verifyPassword("changed-test-password", changedUser.passwordHash), true);
+  assert.equal(await prisma.userSession.count({ where: { userId: currentUser.id } }), 1);
+
+  const managed = await createUser({
+    username: "managed_test_user",
+    displayName: "被管理测试用户",
+    password: "initial-password",
+    roleCode: "WAREHOUSE_ADMIN"
+  });
+  await prisma.userSession.create({
+    data: { token: "managed-session", userId: managed.id, expiresAt: new Date(Date.now() + 60_000) }
+  });
+  const disabled = await updateUser(
+    managed.id,
+    { displayName: "被停用测试用户", roleCode: "INVENTORY_VIEWER", status: "disabled" },
+    currentUser.id
+  );
+  assert.equal(disabled.status, "disabled");
+  assert.equal(disabled.roles[0]?.code, "INVENTORY_VIEWER");
+  assert.equal(await prisma.userSession.count({ where: { userId: managed.id } }), 0);
+
+  await resetUserPassword(managed.id, "reset-password-123", currentUser.id);
+  const resetUser = await prisma.user.findUniqueOrThrow({ where: { id: managed.id } });
+  assert.equal(await verifyPassword("reset-password-123", resetUser.passwordHash), true);
+
+  await assert.rejects(
+    updateUser(
+      currentUser.id,
+      { displayName: currentUser.displayName, roleCode: "WAREHOUSE_ADMIN", status: "enabled" },
+      currentUser.id
+    ),
+    /不能停用或降级当前登录/
+  );
+  await assert.rejects(
+    updateUser(
+      currentUser.id,
+      { displayName: currentUser.displayName, roleCode: "WAREHOUSE_ADMIN", status: "enabled" },
+      randomUUID()
+    ),
+    /至少一个启用的超级管理员/
+  );
+});
+
 test("500 条批量出库与精确查询达到本地性能门槛", async () => {
   await factoryInbound(500);
   const barcodes = makeBarcodes("BATCH", 500);
@@ -308,12 +367,21 @@ async function seedContext() {
   const targetLocationId = randomUUID();
   const salespersonId = randomUUID();
   const storeId = randomUUID();
+  const superAdminRoleId = randomUUID();
+  await prisma.role.createMany({
+    data: [
+      { id: superAdminRoleId, code: "SUPER_ADMIN", name: "超级管理员" },
+      { id: randomUUID(), code: "WAREHOUSE_ADMIN", name: "仓库管理员" },
+      { id: randomUUID(), code: "INVENTORY_VIEWER", name: "只读查询人员" }
+    ]
+  });
   await prisma.user.create({
     data: {
       id: currentUser.id,
       username: currentUser.username,
       displayName: currentUser.displayName,
-      passwordHash: "integration-test-password"
+      passwordHash: "integration-test-password",
+      roles: { create: { roleId: superAdminRoleId } }
     }
   });
   await prisma.goods.create({

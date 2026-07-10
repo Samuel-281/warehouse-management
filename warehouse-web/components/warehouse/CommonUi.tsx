@@ -29,17 +29,19 @@ export function FieldSelect({
   label,
   value,
   onChange,
-  options
+  options,
+  disabled = false
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
+  disabled?: boolean;
 }) {
   return (
     <div>
       {label ? <label className="label">{label}</label> : null}
-      <select className="field" value={value} onChange={(event) => onChange(event.target.value)}>
+      <select className="field" value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}>
         {options.map((option) => (
           <option key={option.value} value={option.value}>{option.label}</option>
         ))}

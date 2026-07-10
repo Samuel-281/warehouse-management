@@ -11,6 +11,7 @@ import {
   ClipboardList,
   GripVertical,
   Home,
+  KeyRound,
   LogIn,
   LogOut,
   PackageCheck,
@@ -33,6 +34,7 @@ import {
   apiErrorMessage,
   deleteJson,
   getJson,
+  patchJson,
   postJson,
   requestJson
 } from "@/lib/client-api";
@@ -188,6 +190,7 @@ export default function WarehousePrototype() {
   const [state, setState] = useState<WarehouseState>(emptyWarehouseState);
   const [toast, setToast] = useState<Toast | null>(null);
   const [resultDialog, setResultDialog] = useState<ResultDialog | null>(null);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [selectedBarcode, setSelectedBarcode] = useState("");
   const [dataStatus, setDataStatus] = useState<"loading" | "ready" | "error">("loading");
   const [dataError, setDataError] = useState("");
@@ -975,10 +978,16 @@ export default function WarehousePrototype() {
                 {dataStatus === "ready" ? "PostgreSQL" : dataStatus === "error" ? "连接异常" : "连接中"}
               </span>
             </div>
-            <button className="secondary-button mt-3 w-full justify-center" onClick={logout}>
-              <LogOut className="h-4 w-4" />
-              退出登录
-            </button>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button className="secondary-button justify-center px-2" onClick={() => setChangePasswordOpen(true)}>
+                <KeyRound className="h-4 w-4" />
+                修改密码
+              </button>
+              <button className="secondary-button justify-center px-2" onClick={logout}>
+                <LogOut className="h-4 w-4" />
+                退出登录
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -1027,6 +1036,15 @@ export default function WarehousePrototype() {
         <div className="p-4 md:p-6">
           {toast ? <ToastBox toast={toast} /> : null}
           {resultDialog ? <ResultDialogBox dialog={resultDialog} onClose={() => setResultDialog(null)} /> : null}
+          {changePasswordOpen ? (
+            <ChangePasswordDialog
+              onClose={() => setChangePasswordOpen(false)}
+              onSuccess={() => {
+                setChangePasswordOpen(false);
+                showToast({ tone: "success", message: "密码已修改，其他设备的登录会话已失效" });
+              }}
+            />
+          ) : null}
           {dataStatus !== "ready" ? (
             <DataUnavailablePanel
               loading={dataStatus === "loading"}
@@ -1247,6 +1265,10 @@ export default function WarehousePrototype() {
           ) : null}
           {dataStatus === "ready" && activeView === "system" && canMaintainSystem ? (
             <SystemMaintenanceView
+              currentUserId={currentUser?.id ?? ""}
+              onCurrentUserUpdated={(user) => {
+                setCurrentUser((previous) => previous ? { ...previous, displayName: user.displayName, roles: user.roles } : previous);
+              }}
               onResetComplete={() => {
                 setCurrentUser(null);
                 setLoggedIn(false);
@@ -3325,13 +3347,92 @@ function SalesReturnView(props: {
     </div>
   );
 }
+function ChangePasswordDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
+  async function submit() {
+    setError("");
+    if (newPassword.length < 8) {
+      setError("新密码至少需要 8 个字符");
+      return;
+    }
+    if (newPassword !== confirmation) {
+      setError("两次输入的新密码不一致");
+      return;
+    }
+    setBusy(true);
+    try {
+      await postJson<{ changed: boolean }>("/api/auth/change-password", { currentPassword, newPassword });
+      onSuccess();
+    } catch (nextError) {
+      setError(apiErrorMessage(nextError, "修改密码失败"));
+    } finally {
+      setBusy(false);
+    }
+  }
 
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true">
+      <section className="w-full max-w-md rounded-md bg-white p-5 shadow-2xl">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-ink">修改登录密码</h2>
+            <p className="mt-1 text-xs text-muted">修改后当前设备保持登录，其他设备需要重新登录。</p>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="关闭修改密码窗口">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <label className="label mt-5" htmlFor="current-password">当前密码</label>
+        <input
+          id="current-password"
+          className="field"
+          type="password"
+          autoFocus
+          value={currentPassword}
+          onChange={(event) => setCurrentPassword(event.target.value)}
+        />
+        <label className="label mt-4" htmlFor="new-password">新密码</label>
+        <input
+          id="new-password"
+          className="field"
+          type="password"
+          value={newPassword}
+          onChange={(event) => setNewPassword(event.target.value)}
+        />
+        <label className="label mt-4" htmlFor="confirm-password">再次输入新密码</label>
+        <input
+          id="confirm-password"
+          className="field"
+          type="password"
+          value={confirmation}
+          onChange={(event) => setConfirmation(event.target.value)}
+        />
+        {error ? <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
+          <button className="primary-button" onClick={() => void submit()} disabled={busy || !currentPassword || !newPassword || !confirmation}>
+            <KeyRound className="h-4 w-4" />
+            {busy ? "正在修改" : "确认修改"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
 
 function SystemMaintenanceView({
+  currentUserId,
+  onCurrentUserUpdated,
   onResetComplete,
   showToast
 }: {
+  currentUserId: string;
+  onCurrentUserUpdated: (user: ManagedUser) => void;
   onResetComplete: () => void;
   showToast: (toast: Toast) => void;
 }) {
@@ -3339,6 +3440,8 @@ function SystemMaintenanceView({
   const [submitting, setSubmitting] = useState(false);
   const [logs, setLogs] = useState<OperationLog[]>([]);
   const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [editingUser, setEditingUser] = useState<ManagedUser | null>(null);
+  const [resettingPasswordFor, setResettingPasswordFor] = useState<ManagedUser | null>(null);
   const [userDraft, setUserDraft] = useState({
     username: "",
     displayName: "",
@@ -3380,6 +3483,32 @@ function SystemMaintenanceView({
     }
   }
 
+  async function updateManagedUser(input: { displayName: string; roleCode: UserRoleCode; status: "enabled" | "disabled" }) {
+    if (!editingUser) return;
+    try {
+      const updated = await patchJson<ManagedUser>(`/api/users/${editingUser.id}`, input);
+      setUsers((previous) => previous.map((user) => user.id === updated.id ? updated : user));
+      if (updated.id === currentUserId) onCurrentUserUpdated(updated);
+      setEditingUser(null);
+      showToast({ tone: "success", message: "账号资料已更新" });
+      setLogs(await getJson<OperationLog[]>("/api/operation-logs"));
+    } catch (error) {
+      throw new Error(apiErrorMessage(error, "更新账号失败"));
+    }
+  }
+
+  async function resetManagedPassword(password: string) {
+    if (!resettingPasswordFor) return;
+    try {
+      await postJson<{ reset: boolean }>(`/api/users/${resettingPasswordFor.id}/reset-password`, { password });
+      setResettingPasswordFor(null);
+      showToast({ tone: "success", message: "密码已重置，该账号需要重新登录" });
+      setLogs(await getJson<OperationLog[]>("/api/operation-logs"));
+    } catch (error) {
+      throw new Error(apiErrorMessage(error, "重置密码失败"));
+    }
+  }
+
   async function clearOperationalDataFromWeb() {
     if (confirmation.trim() !== resetConfirmationText) {
       showToast({ tone: "error", message: "请输入正确确认文字" });
@@ -3400,6 +3529,21 @@ function SystemMaintenanceView({
 
   return (
     <div className="grid gap-5">
+      {editingUser ? (
+        <AccountEditDialog
+          user={editingUser}
+          currentUserId={currentUserId}
+          onClose={() => setEditingUser(null)}
+          onConfirm={updateManagedUser}
+        />
+      ) : null}
+      {resettingPasswordFor ? (
+        <PasswordResetDialog
+          user={resettingPasswordFor}
+          onClose={() => setResettingPasswordFor(null)}
+          onConfirm={resetManagedPassword}
+        />
+      ) : null}
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="panel p-5">
           <SectionHeader icon={Users} title="账号管理" compact />
@@ -3438,13 +3582,14 @@ function SystemMaintenanceView({
             新增账号
           </button>
           <div className="mt-5 overflow-x-auto">
-            <table className="w-full min-w-[560px]">
+            <table className="w-full min-w-[720px]">
               <thead className="table-head">
                 <tr>
                   <th className="px-4 py-3">账号</th>
                   <th className="px-4 py-3">姓名</th>
                   <th className="px-4 py-3">角色</th>
                   <th className="px-4 py-3">状态</th>
+                  <th className="px-4 py-3">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -3455,6 +3600,20 @@ function SystemMaintenanceView({
                     <td className="table-cell">{user.roles.map((role) => roleLabels[role.code]).join("、")}</td>
                     <td className="table-cell">
                       <StatusBadge label={user.status === "enabled" ? "启用" : "停用"} />
+                    </td>
+                    <td className="table-cell">
+                      <div className="flex items-center gap-2">
+                        <button className="secondary-button h-8 px-2 text-xs" onClick={() => setEditingUser(user)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                          编辑
+                        </button>
+                        {user.id !== currentUserId ? (
+                          <button className="secondary-button h-8 px-2 text-xs" onClick={() => setResettingPasswordFor(user)}>
+                            <KeyRound className="h-3.5 w-3.5" />
+                            重置密码
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -3528,6 +3687,151 @@ function SystemMaintenanceView({
 }
 
 
+
+function AccountEditDialog({
+  user,
+  currentUserId,
+  onClose,
+  onConfirm
+}: {
+  user: ManagedUser;
+  currentUserId: string;
+  onClose: () => void;
+  onConfirm: (input: { displayName: string; roleCode: UserRoleCode; status: "enabled" | "disabled" }) => Promise<void>;
+}) {
+  const [displayName, setDisplayName] = useState(user.displayName);
+  const [roleCode, setRoleCode] = useState<UserRoleCode>(user.roles[0]?.code ?? "WAREHOUSE_ADMIN");
+  const [status, setStatus] = useState<"enabled" | "disabled">(user.status);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const isCurrentUser = user.id === currentUserId;
+
+  async function submit() {
+    if (!displayName.trim()) {
+      setError("显示姓名不能为空");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onConfirm({ displayName, roleCode, status });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "更新账号失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true">
+      <section className="w-full max-w-lg rounded-md bg-white p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-ink">编辑账号</h2>
+            <p className="mt-1 font-mono text-xs text-muted">{user.username}</p>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="关闭编辑账号窗口"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="mt-5">
+          <TextField label="显示姓名" value={displayName} onChange={setDisplayName} />
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <FieldSelect
+            label="角色"
+            value={roleCode}
+            onChange={(value) => setRoleCode(value as UserRoleCode)}
+            options={[
+              { value: "WAREHOUSE_ADMIN", label: roleLabels.WAREHOUSE_ADMIN },
+              { value: "INVENTORY_VIEWER", label: roleLabels.INVENTORY_VIEWER },
+              { value: "SUPER_ADMIN", label: roleLabels.SUPER_ADMIN }
+            ]}
+            disabled={isCurrentUser}
+          />
+          <FieldSelect
+            label="账号状态"
+            value={status}
+            onChange={(value) => setStatus(value as "enabled" | "disabled")}
+            options={[
+              { value: "enabled", label: "启用" },
+              { value: "disabled", label: "停用" }
+            ]}
+            disabled={isCurrentUser}
+          />
+        </div>
+        {isCurrentUser ? <p className="mt-3 text-xs text-muted">当前账号只能修改显示姓名，不能停用或调整自己的角色。</p> : null}
+        {error ? <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
+          <button className="primary-button" onClick={() => void submit()} disabled={busy}>
+            <Check className="h-4 w-4" />
+            {busy ? "正在保存" : "保存账号"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PasswordResetDialog({
+  user,
+  onClose,
+  onConfirm
+}: {
+  user: ManagedUser;
+  onClose: () => void;
+  onConfirm: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (password.length < 8) {
+      setError("新密码至少需要 8 个字符");
+      return;
+    }
+    if (password !== confirmation) {
+      setError("两次输入的新密码不一致");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onConfirm(password);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "重置密码失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true">
+      <section className="w-full max-w-md rounded-md bg-white p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-ink">重置账号密码</h2>
+            <p className="mt-1 text-xs text-muted">{user.displayName} · {user.username}</p>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="关闭重置密码窗口"><X className="h-4 w-4" /></button>
+        </div>
+        <label className="label mt-5" htmlFor="reset-user-password">新密码</label>
+        <input id="reset-user-password" className="field" type="password" autoFocus value={password} onChange={(event) => setPassword(event.target.value)} />
+        <label className="label mt-4" htmlFor="reset-user-password-confirmation">再次输入新密码</label>
+        <input id="reset-user-password-confirmation" className="field" type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+        {error ? <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
+          <button className="primary-button" onClick={() => void submit()} disabled={busy}>
+            <KeyRound className="h-4 w-4" />
+            {busy ? "正在重置" : "确认重置"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
 
 function SegmentedControl({
   options,
