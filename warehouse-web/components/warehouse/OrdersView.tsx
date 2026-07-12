@@ -1,11 +1,11 @@
 "use client";
 
-import { ClipboardList, Download, RotateCcw, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Barcode, ChevronRight, ClipboardList, Download, RotateCcw, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { EmptyState, FieldSelect, PaginationBar, SectionHeader, StatusBadge } from "@/components/warehouse/CommonUi";
 import { ReasonDialog } from "@/components/warehouse/FeedbackDialogs";
-import { ClientApiError, apiErrorMessage, postJson, type ApiResponse } from "@/lib/client-api";
+import { ClientApiError, apiErrorMessage, getJson, postJson, type ApiResponse } from "@/lib/client-api";
 import type { OrderKind, OrderListResult, OrderStatus, OrderSummary, Toast } from "@/lib/types";
 
 const pageSizeOptions = [20, 50, 100];
@@ -45,6 +45,9 @@ export function OrdersView({
   const [statusFilter, setStatusFilter] = useState<OrderStatus | "all">("all");
   const [voidDialogOpen, setVoidDialogOpen] = useState(false);
   const [voidingOrders, setVoidingOrders] = useState(false);
+  const [detailOrder, setDetailOrder] = useState<OrderSummary | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const detailRequestRef = useRef(0);
   const inboundCount = result.counts.inbound;
   const outboundCount = result.counts.outbound;
   const returnCount = result.counts.salesReturn;
@@ -87,6 +90,30 @@ export function OrdersView({
         ? [...new Set([...previous, ...pageOrderIds])]
         : previous.filter((orderId) => !pageOrderIds.includes(orderId))
     );
+  }
+
+  async function openOrderDetail(order: OrderSummary) {
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
+    setDetailOrder(order);
+    setDetailLoading(true);
+    try {
+      const detail = await getJson<OrderSummary>(`/api/orders/${order.kind}/${order.id}`);
+      if (requestId === detailRequestRef.current) setDetailOrder(detail);
+    } catch (error) {
+      if (requestId === detailRequestRef.current) {
+        setDetailOrder(null);
+        showToast({ tone: "error", message: apiErrorMessage(error, "读取单据详情失败") });
+      }
+    } finally {
+      if (requestId === detailRequestRef.current) setDetailLoading(false);
+    }
+  }
+
+  function closeOrderDetail() {
+    detailRequestRef.current += 1;
+    setDetailOrder(null);
+    setDetailLoading(false);
   }
 
   async function exportSelectedOrders() {
@@ -263,12 +290,24 @@ export function OrdersView({
               {pageOrders.map((order) => {
                 const selected = selectedOrderIds.includes(order.id);
                 return (
-                  <tr key={order.id} className={`${selected ? "bg-emerald-50" : ""} hover:bg-slate-50`}>
+                  <tr
+                    key={order.id}
+                    className={`${selected ? "bg-emerald-50" : ""} cursor-pointer hover:bg-slate-50`}
+                    onClick={() => void openOrderDetail(order)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        void openOrderDetail(order);
+                      }
+                    }}
+                    tabIndex={0}
+                  >
                     <td className="table-cell">
                       <input
                         aria-label={`选择单据 ${order.orderNo}`}
                         checked={selected}
                         className="h-4 w-4 rounded border-slate-300 text-work"
+                        onClick={(event) => event.stopPropagation()}
                         onChange={(event) => toggleOrderSelection(order.id, event.target.checked)}
                         type="checkbox"
                       />
@@ -292,8 +331,13 @@ export function OrdersView({
                       <div className="mt-2 font-mono text-xs text-slate-500">{order.barcodePreview || "-"}</div>
                     </td>
                     <td className="table-cell">
-                      <div className="font-medium text-ink">{order.operator}</div>
-                      <div className="mt-1 text-xs text-slate-500">已写入库存流水</div>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="font-medium text-ink">{order.operator}</div>
+                          <div className="mt-1 text-xs text-slate-500">已写入库存流水</div>
+                        </div>
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      </div>
                     </td>
                   </tr>
                 );
@@ -321,6 +365,7 @@ export function OrdersView({
           />
         ) : null}
       </section>
+      <OrderDetailDialog order={detailOrder} loading={detailLoading} onClose={closeOrderDetail} />
       <ReasonDialog
         title="撤销业务单据"
         message={`将撤销已选 ${selectedOrders.length} 张单据，并按原业务快照恢复库存与条码归属。存在后续流转时系统会拒绝整批撤销。`}
@@ -330,6 +375,112 @@ export function OrdersView({
         onCancel={() => setVoidDialogOpen(false)}
         onConfirm={(reason) => void voidSelectedOrders(reason)}
       />
+    </div>
+  );
+}
+
+function OrderDetailDialog({ order, loading, onClose }: { order: OrderSummary | null; loading: boolean; onClose: () => void }) {
+  useEffect(() => {
+    if (!order) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose, order]);
+
+  if (!order) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" onClick={onClose} role="presentation">
+      <section
+        aria-label={`单据详情 ${order.orderNo}`}
+        aria-modal="true"
+        className="flex h-[86vh] max-h-[760px] w-full max-w-4xl flex-col overflow-hidden rounded-md bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-muted">单据详情</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h2 className="break-all font-mono text-lg font-semibold text-work">{order.orderNo}</h2>
+              <StatusBadge label={order.status === "voided" ? "已作废" : "正常"} />
+            </div>
+          </div>
+          <button aria-label="关闭单据详情" className="icon-button" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {loading ? <div className="mb-4 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">正在读取完整单据明细...</div> : null}
+
+          <div className="overflow-hidden rounded-md border border-slate-200">
+            <div className="grid md:grid-cols-2 lg:grid-cols-3">
+              <OrderDetailField label="业务类型" value={order.businessType} />
+              <OrderDetailField label="单据类型" value={formatOrderKind(order.kind)} />
+              <OrderDetailField label="货物数量" value={`${order.itemCount.toLocaleString("zh-CN")} 件`} />
+              <OrderDetailField label="主要仓库" value={order.primaryTarget} />
+              <OrderDetailField label="来源 / 去向" value={order.counterparty ?? "-"} />
+              <OrderDetailField label="操作信息" value={order.operator} meta={order.createdAt} />
+            </div>
+          </div>
+
+          <section className="mt-4 border-t border-slate-200 pt-4">
+            <p className="text-sm font-semibold text-ink">货物明细</p>
+            <p className="mt-2 rounded-md bg-slate-50 px-3 py-3 text-sm text-slate-700">{order.goodsSummary || "暂无货物汇总"}</p>
+          </section>
+
+          {order.status === "voided" ? (
+            <section className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
+              <p className="font-semibold">该单据已作废</p>
+              <p className="mt-1">撤销人：{order.voidedBy ?? "-"} · 撤销时间：{order.voidedAt ?? "-"}</p>
+              <p className="mt-1">撤销原因：{order.voidReason ?? "-"}</p>
+            </section>
+          ) : null}
+
+          <section className="mt-4 border-t border-slate-200 pt-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Barcode className="h-4 w-4 text-work" />
+                <p className="text-sm font-semibold text-ink">条码明细</p>
+              </div>
+              <span className="text-xs text-muted">{order.barcodes.length.toLocaleString("zh-CN")} 条</span>
+            </div>
+            {order.barcodes.length > 0 ? (
+              <div className="mt-3 max-h-[300px] overflow-y-auto rounded-md border border-slate-200">
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3">
+                  {order.barcodes.map((barcode) => (
+                    <div key={barcode} className="border-b border-r border-slate-100 px-3 py-2 font-mono text-xs text-slate-700">
+                      {barcode}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-muted">
+                该单据按商品数量记录，不包含单件条码。
+              </div>
+            )}
+          </section>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function OrderDetailField({ label, value, meta }: { label: string; value: string; meta?: string }) {
+  return (
+    <div className="min-h-[82px] border-b border-r border-slate-200 px-4 py-3">
+      <p className="text-xs font-medium text-muted">{label}</p>
+      <p className="mt-2 font-semibold text-ink">{value}</p>
+      {meta ? <p className="mt-1 text-xs text-slate-500">{meta}</p> : null}
     </div>
   );
 }
