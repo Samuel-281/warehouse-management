@@ -54,6 +54,7 @@ import {
 import { OrdersView } from "@/components/warehouse/OrdersView";
 import { InventoryView, type InventoryFilters } from "@/components/warehouse/InventoryView";
 import { BarcodeCollector, type BarcodeReview } from "@/components/warehouse/BarcodeCollector";
+import { formatOperationAction, formatOperationDetail } from "@/lib/operation-log-labels";
 import { hasAnyRole } from "@/lib/role-utils";
 import type {
   CurrentUser,
@@ -3875,11 +3876,11 @@ function SystemMaintenanceView({
                 <tr key={log.id}>
                   <td className="table-cell text-slate-600">{log.createdAt}</td>
                   <td className="table-cell">{log.username}</td>
-                  <td className="table-cell font-semibold">{log.action}</td>
+                  <td className="table-cell font-semibold">{formatOperationAction(log.action)}</td>
                   <td className="table-cell">
                     <StatusBadge label={log.result === "SUCCESS" ? "成功" : "失败"} />
                   </td>
-                  <td className="table-cell text-slate-600">{log.detail ?? "-"}</td>
+                  <td className="table-cell text-slate-600">{formatOperationDetail(log.detail)}</td>
                 </tr>
               ))}
             </tbody>

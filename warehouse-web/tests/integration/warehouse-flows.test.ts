@@ -4,6 +4,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { after, beforeEach, test } from "node:test";
 
 import { getPrisma } from "@/lib/db";
+import { formatOperationAction, formatOperationDetail } from "@/lib/operation-log-labels";
 import { correctBarcode, writeOffBarcode } from "@/lib/services/barcode-management-service";
 import { runConsistencyAudit } from "@/lib/services/consistency-audit-service";
 import { submitInbound } from "@/lib/services/inbound-service";
@@ -42,6 +43,15 @@ beforeEach(async () => {
 
 after(async () => {
   await prisma.$disconnect();
+});
+
+test("操作日志动作和结构化说明使用中文显示", () => {
+  assert.equal(formatOperationAction("INBOUND_CREATE"), "创建入库单");
+  assert.equal(
+    formatOperationDetail("quantity=20;barcodes=0;replay=false"),
+    "数量：20；条码数量：0；重复请求：否"
+  );
+  assert.equal(formatOperationDetail("Clear operational data from web maintenance page"), "通过系统维护页面清空业务数据");
 });
 
 test("数量库存和条码追踪核心流程保持一致", async () => {
