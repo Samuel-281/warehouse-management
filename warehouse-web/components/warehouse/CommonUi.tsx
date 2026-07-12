@@ -30,18 +30,20 @@ export function FieldSelect({
   value,
   onChange,
   options,
-  disabled = false
+  disabled = false,
+  inline = false
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
   disabled?: boolean;
+  inline?: boolean;
 }) {
   return (
-    <div>
+    <div className={inline ? "flex items-center gap-2" : undefined}>
       {label ? <label className="label">{label}</label> : null}
-      <select className="field" value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}>
+      <select className={`field ${inline ? "w-auto min-w-[96px]" : ""}`} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}>
         {options.map((option) => (
           <option key={option.value} value={option.value}>{option.label}</option>
         ))}

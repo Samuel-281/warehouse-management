@@ -213,6 +213,7 @@ export async function getInventorySummary(): Promise<InventorySummary> {
     totalItems,
     inStock,
     withSales,
+    writtenOff,
     warehouseStocks,
     warehouseStockAggregate,
     warehouseGroups,
@@ -224,6 +225,7 @@ export async function getInventorySummary(): Promise<InventorySummary> {
       prisma.inventoryItem.count({ where: { status: { in: ["IN_STOCK", "WITH_SALESPERSON"] } } }),
       prisma.inventoryItem.count({ where: { ownerType: "WAREHOUSE", status: "IN_STOCK" } }),
       prisma.inventoryItem.count({ where: { ownerType: "SALESPERSON", status: "WITH_SALESPERSON" } }),
+      prisma.inventoryItem.count({ where: { status: "WRITTEN_OFF" } }),
       prisma.warehouseStock.findMany({ orderBy: [{ warehouseId: "asc" }, { goodsId: "asc" }] }),
       prisma.warehouseStock.aggregate({ _sum: { quantity: true } }),
       prisma.inventoryItem.groupBy({
@@ -253,6 +255,7 @@ export async function getInventorySummary(): Promise<InventorySummary> {
     totalItems,
     inStock,
     withSales,
+    writtenOff,
     totalWarehouseQuantity: warehouseStockAggregate._sum.quantity ?? 0,
     warehouseStocks: warehouseStocks.map(mapWarehouseStock),
     recentStockMovements: recentStockMovements.map(mapWarehouseStockMovement),

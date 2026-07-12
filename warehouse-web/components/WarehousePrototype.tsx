@@ -156,6 +156,7 @@ const emptyInventorySummary: InventorySummary = {
   totalItems: 0,
   inStock: 0,
   withSales: 0,
+  writtenOff: 0,
   totalWarehouseQuantity: 0,
   warehouseStocks: [],
   recentStockMovements: [],
@@ -1284,6 +1285,7 @@ export default function WarehousePrototype() {
           {dataStatus === "ready" && activeView === "inventory" ? (
             <InventoryView
               state={state}
+              summary={dashboardSummary}
               filters={inventoryFilters}
               setFilters={setInventoryFilters}
               selectedBarcode={selectedBarcode}

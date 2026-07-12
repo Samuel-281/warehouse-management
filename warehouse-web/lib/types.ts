@@ -140,6 +140,7 @@ export type InventorySummary = {
   totalItems: number;
   inStock: number;
   withSales: number;
+  writtenOff: number;
   totalWarehouseQuantity: number;
   warehouseStocks: WarehouseStock[];
   recentStockMovements: WarehouseStockMovement[];
