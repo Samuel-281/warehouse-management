@@ -309,8 +309,26 @@ export default function WarehousePrototype() {
     return apiErrorMessage(error, fallback);
   }, []);
 
+  function createClientRequestId() {
+    if (typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID();
+    }
+
+    const randomValues = new Uint32Array(4);
+    if (typeof globalThis.crypto?.getRandomValues === "function") {
+      globalThis.crypto.getRandomValues(randomValues);
+    } else {
+      for (let index = 0; index < randomValues.length; index += 1) {
+        randomValues[index] = Math.floor(Math.random() * 0x1_0000_0000);
+      }
+    }
+
+    const randomPart = Array.from(randomValues, (value) => value.toString(16).padStart(8, "0")).join("");
+    return `req-${Date.now().toString(36)}-${randomPart}`;
+  }
+
   function submissionRequestId(ref: { current: string | null }) {
-    ref.current ??= crypto.randomUUID();
+    ref.current ??= createClientRequestId();
     return ref.current;
   }
 
