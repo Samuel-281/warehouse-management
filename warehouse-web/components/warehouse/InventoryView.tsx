@@ -6,12 +6,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState, FieldSelect, PaginationBar, ReadOnlyField, SectionHeader, StatusBadge } from "@/components/warehouse/CommonUi";
 import { ConfirmDialog, ReasonDialog, type ConfirmDialogState } from "@/components/warehouse/FeedbackDialogs";
 import { apiErrorMessage, deleteJson, getJson, patchJson, postJson } from "@/lib/client-api";
-import type { InventoryDetailResult, InventoryItem, InventoryListResult, StockMovement, Toast, WarehouseState } from "@/lib/types";
+import type {
+  InventoryDetailResult,
+  InventoryItem,
+  InventoryListResult,
+  InventoryStatusScope,
+  StockMovement,
+  Toast,
+  WarehouseState
+} from "@/lib/types";
 import { formatCategory, formatMovementType, goodsLabel, ownerLabel } from "@/lib/warehouse-utils";
 
 export type InventoryOwnerScope = "all" | "warehouse" | "salesperson";
 export type InventoryFilters = {
   keyword: string;
+  statusScope: InventoryStatusScope;
   ownerScope: InventoryOwnerScope;
   warehouseId: string;
   salespersonId: string;
@@ -81,6 +90,7 @@ export function InventoryView(props: {
     try {
       const params = new URLSearchParams({
         keyword: filters.keyword,
+        statusScope: filters.statusScope,
         ownerScope: filters.ownerScope,
         warehouseId: filters.warehouseId,
         salespersonId: filters.salespersonId,
@@ -104,6 +114,7 @@ export function InventoryView(props: {
     filters.keyword,
     filters.ownerScope,
     filters.salespersonId,
+    filters.statusScope,
     filters.warehouseId,
     showToast
   ]);
@@ -171,7 +182,14 @@ export function InventoryView(props: {
   }
 
 	  function clearInventoryFilters() {
-	    props.setFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+	    props.setFilters({
+        keyword: "",
+        statusScope: "active",
+        ownerScope: "all",
+        warehouseId: "all",
+        salespersonId: "all",
+        goodsId: "all"
+      });
 	  }
 
   function deleteInventoryBarcode(barcode: string) {
@@ -264,6 +282,7 @@ export function InventoryView(props: {
   const salesResultCount = inventoryResult.salesResultCount;
   const activeFilterCount = [
     props.filters.keyword.trim(),
+    props.filters.statusScope !== "active" ? props.filters.statusScope : "",
     props.filters.ownerScope !== "all" ? props.filters.ownerScope : "",
     props.filters.warehouseId !== "all" ? props.filters.warehouseId : "",
     props.filters.salespersonId !== "all" ? props.filters.salespersonId : "",
@@ -272,6 +291,9 @@ export function InventoryView(props: {
   const totalPages = Math.max(1, Math.ceil(inventoryResult.total / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageItems = inventoryResult.items;
+  const exactEndedItem = props.filters.keyword.trim()
+    ? pageItems.find((item) => item.status === "written_off" || item.status === "voided")
+    : undefined;
   const warehouseStockRows = props.state.warehouseStocks
     .map((stock) => ({
       stock,
@@ -312,8 +334,12 @@ export function InventoryView(props: {
           <div>
             <SectionHeader icon={Search} title="库存查询" compact />
             <p className="mt-2 text-xs text-muted">
-              当前筛选 {inventoryResult.total} 件 · 仓库在库 {warehouseResultCount} 件 · 销售人员名下{" "}
-              {salesResultCount} 件 · 已用筛选 {activeFilterCount} 项
+              {exactEndedItem
+                ? `精确条码结果 1 件 · ${formatItemStatus(exactEndedItem)}`
+                : props.filters.statusScope === "active"
+                  ? `当前筛选 ${inventoryResult.total} 件 · 仓库在库 ${warehouseResultCount} 件 · 销售人员名下 ${salesResultCount} 件`
+                  : `当前筛选 ${inventoryResult.total} 件 · 状态范围：${formatStatusScope(props.filters.statusScope)}`}
+              {` · 已用筛选 ${activeFilterCount} 项`}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -328,7 +354,7 @@ export function InventoryView(props: {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.2fr)_150px_180px_180px_180px_130px] xl:items-end">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.2fr)_160px_150px_180px_180px_130px] xl:items-end">
           <div>
             <label className="label" htmlFor="inventory-keyword">
               关键字
@@ -341,6 +367,17 @@ export function InventoryView(props: {
               onChange={(event) => props.setFilters({ ...props.filters, keyword: event.target.value })}
             />
           </div>
+          <FieldSelect
+            label="条码状态"
+            value={props.filters.statusScope}
+            onChange={(value) => props.setFilters({ ...props.filters, statusScope: value as InventoryStatusScope })}
+            options={[
+              { value: "active", label: "正常流转" },
+              { value: "written_off", label: "已核销" },
+              { value: "voided", label: "已撤销追踪" },
+              { value: "all", label: "全部状态" }
+            ]}
+          />
           <FieldSelect
             label="归属类型"
             value={props.filters.ownerScope}
@@ -504,7 +541,7 @@ export function InventoryView(props: {
                         <div className="mt-1 font-mono text-xs text-slate-500">{latestMovement?.occurredAt ?? "-"}</div>
                       </td>
                       <td className="table-cell">
-                        <StatusBadge label={item.ownerType === "warehouse" ? "在库" : "销售人员名下"} />
+                        <StatusBadge label={formatItemStatus(item)} />
                       </td>
                     </tr>
                   );
@@ -557,7 +594,7 @@ export function InventoryView(props: {
       />
       <ReasonDialog
         title="货物核销"
-        message="核销后条码及全部历史仍会保留；若货物当前在仓库，仓库数量将同时减少 1 件。"
+        message="核销后条码及全部历史仍会保留，且不能再参与出库、退回或挪仓；若货物当前在仓库，仓库数量将同时减少 1 件。核销属于后续流转，相关原业务单据将无法撤销。"
         confirmLabel="确认核销"
         open={writeOffOpen}
         busy={maintenanceBusy}
@@ -629,7 +666,7 @@ function InventoryDetailModal({
             </div>
 	            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
 	              <StatusBadge label={formatItemStatus(item)} />
-              {canMaintain ? (
+              {canMaintain && (item.status === "in_stock" || item.status === "with_salesperson") ? (
                 <>
                   <button className="secondary-button h-9 px-3" onClick={onCorrect}>
                     <Pencil className="h-4 w-4" />
@@ -723,6 +760,13 @@ function formatItemStatus(item: InventoryItem) {
   if (item.status === "written_off") return "已核销";
   if (item.status === "voided") return "已撤销追踪";
   return item.ownerType === "warehouse" ? "在库" : "销售人员名下";
+}
+
+function formatStatusScope(statusScope: InventoryStatusScope) {
+  if (statusScope === "written_off") return "已核销";
+  if (statusScope === "voided") return "已撤销追踪";
+  if (statusScope === "all") return "全部状态";
+  return "正常流转";
 }
 
 function BarcodeCorrectionDialog({

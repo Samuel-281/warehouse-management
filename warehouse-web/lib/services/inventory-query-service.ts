@@ -7,6 +7,7 @@ import type {
   InventoryDetailResult,
   InventoryItem,
   InventoryListResult,
+  InventoryStatusScope,
   InventorySummary,
   MovementType,
   OwnerType,
@@ -82,6 +83,7 @@ type DbWarehouseStockMovement = {
 
 export type InventoryQueryInput = {
   keyword?: string;
+  statusScope?: InventoryStatusScope;
   ownerScope?: "all" | "warehouse" | "salesperson";
   warehouseId?: string;
   salespersonId?: string;
@@ -323,8 +325,15 @@ export async function validateBarcodes(input: BarcodeValidationInput): Promise<B
 }
 
 function buildInventoryWhere(input: InventoryQueryInput, exactItemId?: string): Prisma.InventoryItemWhereInput {
-  const where: Prisma.InventoryItemWhereInput = { status: { in: ["IN_STOCK", "WITH_SALESPERSON"] } };
+  if (exactItemId) return { id: exactItemId };
+
+  const where: Prisma.InventoryItemWhereInput = {};
   const keyword = input.keyword?.trim();
+  const statusScope = normalizeStatusScope(input.statusScope);
+
+  if (statusScope === "active") where.status = { in: ["IN_STOCK", "WITH_SALESPERSON"] };
+  if (statusScope === "written_off") where.status = "WRITTEN_OFF";
+  if (statusScope === "voided") where.status = "VOIDED";
 
   if (input.ownerScope === "warehouse") {
     where.ownerType = "WAREHOUSE";
@@ -338,9 +347,7 @@ function buildInventoryWhere(input: InventoryQueryInput, exactItemId?: string): 
     where.goodsId = input.goodsId;
   }
 
-  if (exactItemId) {
-    where.id = exactItemId;
-  } else if (keyword) {
+  if (keyword) {
     where.OR = [
       { barcode: { contains: keyword, mode: "insensitive" } },
       { goods: { name: { contains: keyword, mode: "insensitive" } } },
@@ -349,6 +356,10 @@ function buildInventoryWhere(input: InventoryQueryInput, exactItemId?: string): 
   }
 
   return where;
+}
+
+function normalizeStatusScope(value?: InventoryStatusScope): InventoryStatusScope {
+  return value === "all" || value === "written_off" || value === "voided" ? value : "active";
 }
 
 async function latestMovementForItems(itemIds: string[]) {

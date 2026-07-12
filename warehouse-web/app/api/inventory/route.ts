@@ -1,6 +1,7 @@
 import { fail, ok } from "@/lib/api-response";
 import { requireCurrentUser } from "@/lib/auth-permissions";
 import { listInventory } from "@/lib/services/inventory-query-service";
+import type { InventoryStatusScope } from "@/lib/types";
 
 export async function GET(request: Request) {
   try {
@@ -9,6 +10,7 @@ export async function GET(request: Request) {
     return ok(
       await listInventory({
         keyword: url.searchParams.get("keyword") ?? "",
+        statusScope: (url.searchParams.get("statusScope") ?? "active") as InventoryStatusScope,
         ownerScope: (url.searchParams.get("ownerScope") ?? "all") as "all" | "warehouse" | "salesperson",
         warehouseId: url.searchParams.get("warehouseId") ?? "all",
         salespersonId: url.searchParams.get("salespersonId") ?? "all",

@@ -2,6 +2,7 @@ export type GoodsCategory = "health_wine" | "baijiu";
 export type WarehouseType = "warehouse";
 export type OwnerType = "warehouse" | "salesperson";
 export type ItemStatus = "in_stock" | "with_salesperson" | "written_off" | "voided";
+export type InventoryStatusScope = "active" | "written_off" | "voided" | "all";
 export type OrderStatus = "active" | "voided";
 export type InboundSource = "factory" | "terminal_return";
 export type TrackingSource = InboundSource | "outbound_scan";

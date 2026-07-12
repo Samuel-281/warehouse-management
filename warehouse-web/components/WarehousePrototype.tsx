@@ -237,6 +237,7 @@ export default function WarehousePrototype() {
 
   const [inventoryFilters, setInventoryFilters] = useState<InventoryFilters>({
     keyword: "",
+    statusScope: "active",
     ownerScope: "all",
     warehouseId: "all",
     salespersonId: "all",
@@ -359,7 +360,14 @@ export default function WarehousePrototype() {
     setSalespersonId(masterData.salespeople[0]?.id ?? "");
     setReturnWarehouseId(firstWarehouse?.id ?? "");
     setReturnLocationId(firstLocation?.id ?? "");
-    setInventoryFilters({ keyword: "", ownerScope: "all", warehouseId: "all", salespersonId: "all", goodsId: "all" });
+    setInventoryFilters({
+      keyword: "",
+      statusScope: "active",
+      ownerScope: "all",
+      warehouseId: "all",
+      salespersonId: "all",
+      goodsId: "all"
+    });
     setSelectedBarcode((current) => {
       if (options.preserveSelection && current) {
         return current;

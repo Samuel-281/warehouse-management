@@ -125,6 +125,12 @@ test("数量库存和条码追踪核心流程保持一致", async () => {
 
   await writeOffBarcode({ barcode: "TERMINAL-CORRECTED-001", reason: "测试破损核销", operatorName });
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 90);
+  const exactWrittenOff = await listInventory({ keyword: "TERMINAL-CORRECTED-001", page: 1, pageSize: 20 });
+  assert.equal(exactWrittenOff.total, 1, "精确条码查询应包含已核销档案");
+  assert.equal(exactWrittenOff.items[0]?.status, "written_off");
+  const writtenOffInventory = await listInventory({ statusScope: "written_off", page: 1, pageSize: 20 });
+  assert.equal(writtenOffInventory.total, 1, "应支持按已核销状态查询条码");
+  assert.equal(writtenOffInventory.items[0]?.barcode, "TERMINAL-CORRECTED-001");
   await adjustStockManually({
     warehouseId: context.sourceWarehouseId,
     goodsId: context.goodsId,
