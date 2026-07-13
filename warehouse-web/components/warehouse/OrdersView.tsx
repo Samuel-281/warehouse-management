@@ -180,7 +180,7 @@ export function OrdersView({
               当前筛选 {result.total} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-[160px_150px_220px_120px_auto_auto_auto_auto] sm:items-end">
+          <div className="grid gap-2 md:grid-cols-2 md:items-end xl:grid-cols-[160px_150px_220px_120px_auto_auto_auto_auto]">
             <div>
               <FieldSelect
                 label="业务类型"

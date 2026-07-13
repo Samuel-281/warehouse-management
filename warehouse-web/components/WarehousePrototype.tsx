@@ -85,10 +85,11 @@ import {
   uniqueBarcodes
 } from "@/lib/warehouse-utils";
 
-type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "return" | "orders" | "inventory" | "system";
+type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "query" | "system";
 type DirectOutboundDestination = "transfer" | "sales";
 type InboundBranch = InboundSource | "sales_return";
-type ReturnBranch = "sales_return" | "terminal_return";
+type QueryTab = "inventory" | "orders";
+type NavigationGroup = "workspace" | "business" | "management";
 
 type MasterDataPayload = WarehouseState;
 type MasterCreateKey = "goods" | "warehouse" | "salesperson" | "store";
@@ -139,16 +140,20 @@ function validationResultsToReviewMap(results: BarcodeValidationResult[]): Barco
   return Object.fromEntries(results.map((result) => [result.barcode, validationResultToReview(result)]));
 }
 
-const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
-  { key: "dashboard", label: "首页", icon: Home },
-  { key: "masters", label: "基础资料", icon: Building2 },
-  { key: "inbound", label: "到货入库", icon: Truck },
-  { key: "outbound", label: "扫码出库", icon: ScanLine },
-  { key: "return", label: "退回入库", icon: Undo2 },
-  { key: "orders", label: "单据查询", icon: ClipboardList },
-  { key: "inventory", label: "库存查询", icon: Search },
-  { key: "system", label: "系统维护", icon: ShieldCheck }
+const navItems: Array<{ key: ViewKey; label: string; icon: typeof Home; group: NavigationGroup }> = [
+  { key: "dashboard", label: "首页", icon: Home, group: "workspace" },
+  { key: "inbound", label: "入库", icon: Truck, group: "business" },
+  { key: "outbound", label: "出库", icon: ScanLine, group: "business" },
+  { key: "query", label: "查询", icon: Search, group: "business" },
+  { key: "masters", label: "基础资料", icon: Building2, group: "management" },
+  { key: "system", label: "系统维护", icon: ShieldCheck, group: "management" }
 ];
+
+const navGroupLabels: Record<NavigationGroup, string> = {
+  workspace: "工作台",
+  business: "核心业务",
+  management: "管理配置"
+};
 
 const operator = "仓库操作员";
 const resetConfirmationText = "确定重置";
@@ -209,7 +214,8 @@ export default function WarehousePrototype() {
   const outboundSubmitRequestRef = useRef<string | null>(null);
   const salesReturnSubmitRequestRef = useRef<string | null>(null);
 
-  const [returnBranch, setReturnBranch] = useState<ReturnBranch>("sales_return");
+  const [inboundBranch, setInboundBranch] = useState<InboundBranch>("factory");
+  const [queryTab, setQueryTab] = useState<QueryTab>("inventory");
   const [inboundWarehouseId, setInboundWarehouseId] = useState("wh-main");
   const [inboundLocationId, setInboundLocationId] = useState("loc-main-a1");
   const [inboundGoodsId, setInboundGoodsId] = useState("goods-hj-001");
@@ -257,8 +263,7 @@ export default function WarehousePrototype() {
   const [orderBarcodeFilter, setOrderBarcodeFilter] = useState("");
 
   const currentRoleCodes = useMemo(() => currentUser?.roles.map((role) => role.code) ?? [], [currentUser]);
-  const effectiveInboundSource: InboundSource =
-    activeView === "return" && returnBranch === "terminal_return" ? "terminal_return" : "factory";
+  const effectiveInboundSource: InboundSource = inboundBranch === "terminal_return" ? "terminal_return" : "factory";
   const canManageMasterData = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
   const canOperateWarehouse = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN", "WAREHOUSE_ADMIN"]);
   const canMaintainSystem = hasAnyRole(currentRoleCodes, ["SUPER_ADMIN"]);
@@ -268,7 +273,7 @@ export default function WarehousePrototype() {
       navItems.filter((item) => {
         if (item.key === "masters") return canManageMasterData;
         if (item.key === "system") return canMaintainSystem;
-        if (item.key === "inbound" || item.key === "outbound" || item.key === "return") {
+        if (item.key === "inbound" || item.key === "outbound") {
           return canOperateWarehouse;
         }
         return true;
@@ -966,28 +971,34 @@ export default function WarehousePrototype() {
           </div>
         </div>
 
-        <div className="border-t border-slate-200 px-3 py-4">
-          <p className="mb-2 px-3 text-xs font-semibold text-slate-500">业务导航</p>
-          <nav className="space-y-1">
-            {allowedNavItems.map((item) => {
-              const Icon = item.icon;
-              const active = activeView === item.key;
-              return (
-                <button
-                  key={item.key}
-                  className={`flex h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition ${
-                    active
-                      ? "bg-emerald-50 text-work"
-                      : "text-slate-600 hover:bg-slate-100 hover:text-ink"
-                  }`}
-                  onClick={() => setActiveView(item.key)}
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
-                </button>
-              );
-            })}
-          </nav>
+        <div className="border-t border-slate-200 px-3 py-3">
+          {(["workspace", "business", "management"] as NavigationGroup[]).map((group) => {
+            const groupItems = allowedNavItems.filter((item) => item.group === group);
+            if (groupItems.length === 0) return null;
+            return (
+              <div className="mb-3 last:mb-0" key={group}>
+                <p className="mb-1 px-3 text-xs font-semibold text-slate-500">{navGroupLabels[group]}</p>
+                <nav className="space-y-1">
+                  {groupItems.map((item) => {
+                    const Icon = item.icon;
+                    const active = activeView === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        className={`flex h-10 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition ${
+                          active ? "bg-emerald-50 text-work" : "text-slate-600 hover:bg-slate-100 hover:text-ink"
+                        }`}
+                        onClick={() => setActiveView(item.key)}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </nav>
+              </div>
+            );
+          })}
         </div>
 
         <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200 p-4">
@@ -1090,6 +1101,8 @@ export default function WarehousePrototype() {
               summary={dashboardSummary}
               state={state}
               setActiveView={setActiveView}
+              setInboundBranch={setInboundBranch}
+              setQueryTab={setQueryTab}
               setSelectedBarcode={setSelectedBarcode}
               canOperateWarehouse={canOperateWarehouse}
             />
@@ -1105,9 +1118,8 @@ export default function WarehousePrototype() {
           {dataStatus === "ready" && activeView === "inbound" ? (
             <InboundView
               state={state}
-              inboundBranch="factory"
-              setInboundBranch={() => undefined}
-              showBranchSelector={false}
+              inboundBranch={inboundBranch}
+              setInboundBranch={setInboundBranch}
               inboundWarehouseId={inboundWarehouseId}
               setInboundWarehouseId={setInboundWarehouseId}
               inboundGoodsId={inboundGoodsId}
@@ -1184,118 +1196,47 @@ export default function WarehousePrototype() {
               submitOutbound={submitOutbound}
             />
           ) : null}
-          {dataStatus === "ready" && activeView === "return" ? (
-            returnBranch === "sales_return" ? (
-              <SalesReturnView
-                state={state}
-                returnWarehouseId={returnWarehouseId}
-                setReturnWarehouseId={setReturnWarehouseId}
-                returnBarcodeInput={returnBarcodeInput}
-                setReturnBarcodeInput={setReturnBarcodeInput}
-                returnBarcodes={returnBarcodes}
-                setReturnBarcodes={(nextBarcodes) => {
-                  setReturnBarcodes(nextBarcodes);
-                  if (nextBarcodes.length === 0) setReturnBarcodeReviews({});
-                }}
-                returnBarcodeReviews={returnBarcodeReviews}
-                addBarcode={(input) => addBarcode(input, returnBarcodes, setReturnBarcodeInput, setReturnBarcodes)}
-                submitSalesReturn={submitSalesReturn}
-                branchSelector={
-                  <SegmentedControl
-                    options={[
-                      { value: "sales_return", label: "销售退回" },
-                      { value: "terminal_return", label: "终端店铺退换货" }
-                    ]}
-                    value={returnBranch}
-                    onChange={(value) => setReturnBranch(value as ReturnBranch)}
-                  />
-                }
-              />
-            ) : (
-              <InboundView
-                state={state}
-                inboundBranch="terminal_return"
-                setInboundBranch={() => undefined}
-                showBranchSelector={false}
-                branchSelector={
-                  <SegmentedControl
-                    options={[
-                      { value: "sales_return", label: "销售退回" },
-                      { value: "terminal_return", label: "终端店铺退换货" }
-                    ]}
-                    value={returnBranch}
-                    onChange={(value) => setReturnBranch(value as ReturnBranch)}
-                  />
-                }
-                inboundWarehouseId={inboundWarehouseId}
-                setInboundWarehouseId={setInboundWarehouseId}
-                inboundGoodsId={inboundGoodsId}
-                setInboundGoodsId={setInboundGoodsId}
-                inboundQty={inboundQty}
-                setInboundQty={setInboundQty}
-                inboundBarcodeInput={inboundBarcodeInput}
-                setInboundBarcodeInput={setInboundBarcodeInput}
-                inboundBarcodes={inboundBarcodes}
-                setInboundBarcodes={(nextBarcodes) => {
-                  setInboundBarcodes(nextBarcodes);
-                  if (nextBarcodes.length === 0) setInboundBarcodeReviews({});
-                }}
-                inboundBarcodeReviews={inboundBarcodeReviews}
-                productionDate={productionDate}
-                setProductionDate={setProductionDate}
-                terminalStoreId={terminalStoreId}
-                setTerminalStoreId={setTerminalStoreId}
-                addBarcode={(input) =>
-                  addBarcode(input, inboundBarcodes, setInboundBarcodeInput, setInboundBarcodes, {
-                    onAfterAdd: (nextList) => {
-                      const currentQty = Number(inboundQty);
-                      if (!Number.isFinite(currentQty) || nextList.length > currentQty) {
-                        setInboundQty(String(nextList.length));
-                      }
-                    }
-                  })
-                }
-                submitInbound={submitInbound}
-                returnWarehouseId={returnWarehouseId}
-                setReturnWarehouseId={setReturnWarehouseId}
-                returnBarcodeInput={returnBarcodeInput}
-                setReturnBarcodeInput={setReturnBarcodeInput}
-                returnBarcodes={returnBarcodes}
-                setReturnBarcodes={setReturnBarcodes}
-                returnBarcodeReviews={returnBarcodeReviews}
-                addReturnBarcode={(input) => addBarcode(input, returnBarcodes, setReturnBarcodeInput, setReturnBarcodes)}
-                submitSalesReturn={submitSalesReturn}
-              />
-            )
-          ) : null}
-          {dataStatus === "ready" && activeView === "orders" ? (
-            <OrdersView
-              orders={orderResult.items}
-              result={orderResult}
-              loading={ordersLoading}
-              kindFilter={orderKindFilter}
-              setKindFilter={setOrderKindFilter}
-              barcodeFilter={orderBarcodeFilter}
-              setBarcodeFilter={setOrderBarcodeFilter}
-              refreshOrders={loadOrders}
-              showToast={showToast}
-              canDeleteOrders={canMaintainSystem}
-            />
-          ) : null}
-          {dataStatus === "ready" && activeView === "inventory" ? (
-            <InventoryView
-              state={state}
-              summary={dashboardSummary}
-              filters={inventoryFilters}
-              setFilters={setInventoryFilters}
-              selectedBarcode={selectedBarcode}
-              setSelectedBarcode={setSelectedBarcode}
-              showToast={showToast}
-              canDeleteInventory={canMaintainSystem}
-              onDataChanged={async () => {
-                await refreshWarehouseState({ preserveSelection: true });
-              }}
-            />
+          {dataStatus === "ready" && activeView === "query" ? (
+            <div className="space-y-4">
+              <section className="panel p-2">
+                <SegmentedControl
+                  options={[
+                    { value: "inventory", label: "库存与条码" },
+                    { value: "orders", label: "业务单据" }
+                  ]}
+                  value={queryTab}
+                  onChange={(value) => setQueryTab(value as QueryTab)}
+                />
+              </section>
+              {queryTab === "orders" ? (
+                <OrdersView
+                  orders={orderResult.items}
+                  result={orderResult}
+                  loading={ordersLoading}
+                  kindFilter={orderKindFilter}
+                  setKindFilter={setOrderKindFilter}
+                  barcodeFilter={orderBarcodeFilter}
+                  setBarcodeFilter={setOrderBarcodeFilter}
+                  refreshOrders={loadOrders}
+                  showToast={showToast}
+                  canDeleteOrders={canMaintainSystem}
+                />
+              ) : (
+                <InventoryView
+                  state={state}
+                  summary={dashboardSummary}
+                  filters={inventoryFilters}
+                  setFilters={setInventoryFilters}
+                  selectedBarcode={selectedBarcode}
+                  setSelectedBarcode={setSelectedBarcode}
+                  showToast={showToast}
+                  canDeleteInventory={canMaintainSystem}
+                  onDataChanged={async () => {
+                    await refreshWarehouseState({ preserveSelection: true });
+                  }}
+                />
+              )}
+            </div>
           ) : null}
           {dataStatus === "ready" && activeView === "system" && canMaintainSystem ? (
             <SystemMaintenanceView
@@ -1321,11 +1262,9 @@ function titleForView(view: ViewKey) {
   const titles: Record<ViewKey, string> = {
     dashboard: "业务首页",
     masters: "基础资料",
-    inbound: "到货入库",
-    outbound: "扫码出库",
-    return: "退回入库",
-    orders: "单据查询",
-    inventory: "库存查询",
+    inbound: "入库",
+    outbound: "出库",
+    query: "查询",
     system: "系统维护"
   };
   return titles[view];
@@ -1428,12 +1367,16 @@ function DashboardView({
   summary,
   state,
   setActiveView,
+  setInboundBranch,
+  setQueryTab,
   setSelectedBarcode,
   canOperateWarehouse
 }: {
   summary: InventorySummary;
   state: WarehouseState;
   setActiveView: (view: ViewKey) => void;
+  setInboundBranch: (branch: InboundBranch) => void;
+  setQueryTab: (tab: QueryTab) => void;
   setSelectedBarcode: (barcode: string) => void;
   canOperateWarehouse: boolean;
 }) {
@@ -1474,7 +1417,13 @@ function DashboardView({
                 首页显示 {stockRows.length} / {sortedStockRows.length} 条
               </span>
               {canOperateWarehouse ? (
-                <button className="primary-button" onClick={() => setActiveView("inbound")}>
+                <button
+                  className="primary-button"
+                  onClick={() => {
+                    setInboundBranch("factory");
+                    setActiveView("inbound");
+                  }}
+                >
                   <Truck className="h-4 w-4" />
                   到货入库
                 </button>
@@ -1555,14 +1504,25 @@ function DashboardView({
                   description="选择销售人员或目标仓库，扫码建立追踪"
                   onClick={() => setActiveView("outbound")}
                 />
-                <DashboardAction icon={Undo2} title="退回入库" description="销售退回、终端店铺退换货" onClick={() => setActiveView("return")} />
+                <DashboardAction
+                  icon={Undo2}
+                  title="退回入库"
+                  description="销售退回、终端店铺退换货"
+                  onClick={() => {
+                    setInboundBranch("sales_return");
+                    setActiveView("inbound");
+                  }}
+                />
               </>
             ) : null}
             <DashboardAction
               icon={Search}
               title="条码查询"
               description="按条码查看当前归属与完整流转"
-              onClick={() => setActiveView("inventory")}
+              onClick={() => {
+                setQueryTab("inventory");
+                setActiveView("query");
+              }}
             />
           </div>
         </section>
@@ -1593,7 +1553,8 @@ function DashboardView({
                         className="font-mono text-work"
                         onClick={() => {
                           setSelectedBarcode(movement.barcode);
-                          setActiveView("inventory");
+                          setQueryTab("inventory");
+                          setActiveView("query");
                         }}
                       >
                         {movement.barcode}
@@ -2814,8 +2775,6 @@ function InboundView(props: {
   state: WarehouseState;
   inboundBranch: InboundBranch;
   setInboundBranch: (value: InboundBranch) => void;
-  showBranchSelector?: boolean;
-  branchSelector?: ReactNode;
   inboundWarehouseId: string;
   setInboundWarehouseId: (value: string) => void;
   inboundGoodsId: string;
@@ -2845,6 +2804,7 @@ function InboundView(props: {
 }) {
   const branchOptions = [
     { value: "factory", label: "厂家到货" },
+    { value: "sales_return", label: "销售退回" },
     { value: "terminal_return", label: "终端店铺退换货" }
   ];
   if (props.inboundBranch === "sales_return") {
@@ -2953,14 +2913,11 @@ function InboundView(props: {
 
       <div className="grid gap-4 xl:grid-cols-[0.82fr_1.18fr]">
         <OperationPanel step="1" icon={ClipboardList} title="入库参数">
-          {props.branchSelector ? <div className="mb-4">{props.branchSelector}</div> : null}
-          {props.showBranchSelector !== false ? (
-            <SegmentedControl
-              options={branchOptions}
-              value={props.inboundBranch}
-              onChange={(value) => props.setInboundBranch(value as InboundBranch)}
-            />
-          ) : null}
+          <SegmentedControl
+            options={branchOptions}
+            value={props.inboundBranch}
+            onChange={(value) => props.setInboundBranch(value as InboundBranch)}
+          />
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <FieldSelect
@@ -4065,8 +4022,9 @@ function SegmentedControl({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const columns = options.length >= 3 ? "grid-cols-3" : "grid-cols-2";
   return (
-    <div className="grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-100 p-1">
+    <div className={`grid ${columns} rounded-lg border border-slate-200 bg-slate-100 p-1`}>
       {options.map((option) => (
         <button
           key={option.value}
