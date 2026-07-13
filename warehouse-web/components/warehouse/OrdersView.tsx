@@ -173,14 +173,14 @@ export function OrdersView({
   return (
     <div className="space-y-4">
       <section className="panel p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-col gap-4">
           <div>
             <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
             <p className="mt-2 text-xs text-muted">
               当前筛选 {result.total} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-2 md:grid-cols-2 md:items-end xl:grid-cols-[160px_150px_220px_120px_auto_auto_auto_auto]">
+          <div className="grid gap-2 md:grid-cols-2 md:items-end xl:grid-cols-4">
             <div>
               <FieldSelect
                 label="业务类型"
@@ -223,25 +223,25 @@ export function OrdersView({
               options={pageSizeOptions.map((size) => ({ value: String(size), label: `${size} 张` }))}
             />
             <button
-              className="secondary-button"
+              className="secondary-button whitespace-nowrap"
               onClick={() => void refreshOrders({ kind: kindFilter, status: statusFilter, barcode: barcodeFilter, page, pageSize })}
               disabled={loading}
             >
               <RotateCcw className="h-4 w-4" />
               {loading ? "刷新中" : "刷新单据"}
             </button>
-            <button className="primary-button" onClick={exportSelectedOrders} disabled={selectedOrders.length === 0}>
+            <button className="primary-button whitespace-nowrap" onClick={exportSelectedOrders} disabled={selectedOrders.length === 0}>
               <Download className="h-4 w-4" />
               导出已选
             </button>
             {canDeleteOrders ? (
-              <button className="secondary-button text-red-600 hover:border-red-200 hover:bg-red-50" onClick={deleteSelectedOrders} disabled={selectedOrders.length === 0}>
+              <button className="secondary-button whitespace-nowrap text-red-600 hover:border-red-200 hover:bg-red-50" onClick={deleteSelectedOrders} disabled={selectedOrders.length === 0}>
                 <Trash2 className="h-4 w-4" />
                 撤销已选
               </button>
             ) : null}
             <button
-              className="secondary-button"
+              className="secondary-button whitespace-nowrap"
               onClick={() => setSelectedOrderIds([])}
               disabled={selectedOrders.length === 0}
             >
@@ -266,7 +266,15 @@ export function OrdersView({
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px]">
+          <table className="w-full min-w-[1040px] table-fixed">
+            <colgroup>
+              <col className="w-12" />
+              <col className="w-[210px]" />
+              <col className="w-[150px]" />
+              <col className="w-[180px]" />
+              <col className="w-[320px]" />
+              <col className="w-[132px]" />
+            </colgroup>
             <thead className="table-head">
               <tr>
                 <th className="w-12 px-4 py-3">
@@ -328,12 +336,14 @@ export function OrdersView({
                     <td className="table-cell">
                       <div className="text-sm font-semibold text-ink">{order.itemCount} 件</div>
                       <div className="mt-1 text-xs text-slate-500">{order.goodsSummary || "-"}</div>
-                      <div className="mt-2 font-mono text-xs text-slate-500">{order.barcodePreview || "-"}</div>
+                      <div className="mt-2 truncate font-mono text-xs text-slate-500" title={order.barcodePreview || "-"}>
+                        {order.barcodePreview || "-"}
+                      </div>
                     </td>
                     <td className="table-cell">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <div className="font-medium text-ink">{order.operator}</div>
+                          <div className="whitespace-nowrap font-medium text-ink">{order.operator}</div>
                           <div className="mt-1 text-xs text-slate-500">已写入库存流水</div>
                         </div>
                         <ChevronRight className="h-4 w-4 text-slate-400" />
