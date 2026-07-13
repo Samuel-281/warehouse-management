@@ -180,7 +180,7 @@ export function OrdersView({
               当前筛选 {result.total} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
             </p>
           </div>
-          <div className="grid gap-2 md:grid-cols-2 md:items-end xl:grid-cols-4">
+          <div className="grid gap-2 md:grid-cols-2 md:items-end lg:grid-cols-[120px_110px_minmax(160px,1fr)_90px_auto_auto_auto_auto] lg:gap-1.5">
             <div>
               <FieldSelect
                 label="业务类型"
@@ -226,27 +226,39 @@ export function OrdersView({
               className="secondary-button whitespace-nowrap"
               onClick={() => void refreshOrders({ kind: kindFilter, status: statusFilter, barcode: barcodeFilter, page, pageSize })}
               disabled={loading}
+              title="刷新单据"
             >
               <RotateCcw className="h-4 w-4" />
-              {loading ? "刷新中" : "刷新单据"}
+              {loading ? "刷新中" : "刷新"}
             </button>
-            <button className="primary-button whitespace-nowrap" onClick={exportSelectedOrders} disabled={selectedOrders.length === 0}>
+            <button
+              className="primary-button whitespace-nowrap px-2.5"
+              onClick={exportSelectedOrders}
+              disabled={selectedOrders.length === 0}
+              title="导出已选单据"
+            >
               <Download className="h-4 w-4" />
-              导出已选
+              导出
             </button>
             {canDeleteOrders ? (
-              <button className="secondary-button whitespace-nowrap text-red-600 hover:border-red-200 hover:bg-red-50" onClick={deleteSelectedOrders} disabled={selectedOrders.length === 0}>
+              <button
+                className="secondary-button whitespace-nowrap px-2.5 text-red-600 hover:border-red-200 hover:bg-red-50"
+                onClick={deleteSelectedOrders}
+                disabled={selectedOrders.length === 0}
+                title="撤销已选单据"
+              >
                 <Trash2 className="h-4 w-4" />
-                撤销已选
+                撤销
               </button>
             ) : null}
             <button
-              className="secondary-button whitespace-nowrap"
+              className="secondary-button whitespace-nowrap px-2.5"
               onClick={() => setSelectedOrderIds([])}
               disabled={selectedOrders.length === 0}
+              title="清空已选单据"
             >
               <X className="h-4 w-4" />
-              清空选择
+              清空
             </button>
           </div>
         </div>
