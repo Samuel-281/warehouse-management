@@ -309,12 +309,18 @@ function SyncPanel({
         <SyncMetric icon={Clock3} label="最近同步截止" value={overview?.lastSuccessfulCutoff ?? "尚未成功同步"} />
         <SyncMetric icon={History} label="下次自动执行" value={overview?.nextScheduledAt ?? "每周一 00:00"} />
       </div>
+      {!overview?.configured && overview?.configurationMessage ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:col-span-3 lg:col-span-2">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{overview.configurationMessage}。在完成配置前仍可使用下方 Excel 手工导入。</span>
+        </div>
+      ) : null}
       {canSync ? (
         <button
           className="primary-button h-10 px-4"
           onClick={onSync}
           disabled={!overview?.configured || isRunning}
-          title={!overview?.configured ? "请先在服务器配置勤策登录信息" : undefined}
+          title={!overview?.configured ? "请先配置勤策 OpenAPI 的 OpenID 和 AppKey" : undefined}
         >
           {isRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
           {isRunning ? "正在同步" : "立即同步"}

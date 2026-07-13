@@ -30,6 +30,7 @@ type ParsedReceiptRow = {
   goodsUnit: string;
   receivingOrganizationName: string;
   fingerprint?: string;
+  legacyFingerprint?: string;
   issue?: string;
 };
 
@@ -207,7 +208,10 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
     if (!issue && barcode.length > 128) issue = "条码长度超过 128 个字符";
     const fingerprint = issue || !scannedAt
       ? undefined
-      : receiptFingerprint({ barcode, scannedAt, scannerName, externalGoodsName, goodsUnit, receivingOrganizationName });
+      : receiptFingerprint({ barcode, scannedAt, scannerName, receivingOrganizationName });
+    const legacyFingerprint = issue || !scannedAt
+      ? undefined
+      : legacyReceiptFingerprint({ barcode, scannedAt, scannerName, externalGoodsName, goodsUnit, receivingOrganizationName });
 
     parsedRows.push({
       rowNumber,
@@ -219,6 +223,7 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
       goodsUnit,
       receivingOrganizationName,
       fingerprint,
+      legacyFingerprint,
       issue
     });
   }
@@ -228,7 +233,11 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
   const prisma = getPrisma();
   const validRows = parsedRows.filter((row) => row.fingerprint);
   const barcodes = Array.from(new Set(validRows.map((row) => row.barcode)));
-  const fingerprints = Array.from(new Set(validRows.map((row) => row.fingerprint as string)));
+  const fingerprints = Array.from(new Set(validRows.flatMap((row) => [row.fingerprint, row.legacyFingerprint].filter(Boolean) as string[])));
+  const scannedTimes = validRows.map((row) => (row.scannedAt as Date).getTime());
+  const scannedAtRange = scannedTimes.length > 0
+    ? { gte: new Date(Math.min(...scannedTimes)), lte: new Date(Math.max(...scannedTimes)) }
+    : undefined;
   const [items, corrections, existingRecords] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: { barcode: { in: barcodes } },
@@ -239,8 +248,19 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
       include: { item: { include: { goods: true, warehouse: true, salesperson: true } } }
     }),
     prisma.terminalReceiptRecord.findMany({
-      where: { fingerprint: { in: fingerprints } },
-      select: { fingerprint: true }
+      where: {
+        OR: [
+          { fingerprint: { in: fingerprints } },
+          ...(scannedAtRange ? [{ barcode: { in: barcodes }, scannedAt: scannedAtRange }] : [])
+        ]
+      },
+      select: {
+        fingerprint: true,
+        barcode: true,
+        scannedAt: true,
+        scannerName: true,
+        receivingOrganizationName: true
+      }
     })
   ]);
 
@@ -248,14 +268,26 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
   for (const item of items) itemByBarcode.set(item.barcode, item);
   for (const correction of corrections) itemByBarcode.set(correction.oldBarcode, correction.item);
   const existingFingerprints = new Set(existingRecords.map((record) => record.fingerprint));
-  const fileFingerprints = new Set<string>();
+  const existingEvents = new Set(existingRecords.map((record) => receiptEventKey(record)));
+  const fileEvents = new Set<string>();
 
   const rows: AnalyzedRow[] = parsedRows.map((row) => {
     if (row.issue || !row.fingerprint || !row.scannedAt) return { ...row, status: "invalid" };
-    if (existingFingerprints.has(row.fingerprint) || fileFingerprints.has(row.fingerprint)) {
+    const eventKey = receiptEventKey({
+      barcode: row.barcode,
+      scannedAt: row.scannedAt,
+      scannerName: row.scannerName,
+      receivingOrganizationName: row.receivingOrganizationName
+    });
+    if (
+      existingFingerprints.has(row.fingerprint) ||
+      Boolean(row.legacyFingerprint && existingFingerprints.has(row.legacyFingerprint)) ||
+      existingEvents.has(eventKey) ||
+      fileEvents.has(eventKey)
+    ) {
       return { ...row, status: "duplicate", issue: "该签收记录已经导入或在文件中重复" };
     }
-    fileFingerprints.add(row.fingerprint);
+    fileEvents.add(eventKey);
     const item = itemByBarcode.get(row.barcode);
     if (!item) return { ...row, status: "unmatched", issue: "仓库系统中尚未找到该条码" };
     return {
@@ -335,6 +367,22 @@ function receiptFingerprint(input: {
   barcode: string;
   scannedAt: Date;
   scannerName: string;
+  receivingOrganizationName: string;
+}) {
+  return createHash("sha256")
+    .update([
+      input.barcode,
+      input.scannedAt.toISOString(),
+      input.scannerName,
+      input.receivingOrganizationName
+    ].join("\u001f"))
+    .digest("hex");
+}
+
+function legacyReceiptFingerprint(input: {
+  barcode: string;
+  scannedAt: Date;
+  scannerName: string;
   externalGoodsName: string;
   goodsUnit: string;
   receivingOrganizationName: string;
@@ -349,6 +397,20 @@ function receiptFingerprint(input: {
       input.receivingOrganizationName
     ].join("\u001f"))
     .digest("hex");
+}
+
+function receiptEventKey(input: {
+  barcode: string;
+  scannedAt: Date;
+  scannerName: string;
+  receivingOrganizationName: string;
+}) {
+  return [
+    input.barcode,
+    input.scannedAt.toISOString(),
+    input.scannerName,
+    input.receivingOrganizationName
+  ].join("\u001f");
 }
 
 function hashBuffer(buffer: Buffer) {

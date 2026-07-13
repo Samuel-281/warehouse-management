@@ -259,6 +259,7 @@ export type TerminalReceiptSyncRun = {
 
 export type TerminalReceiptSyncOverview = {
   configured: boolean;
+  configurationMessage: string;
   running: boolean;
   lastSuccessfulCutoff?: string;
   nextScheduledAt: string;

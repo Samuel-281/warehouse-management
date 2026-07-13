@@ -1,5 +1,6 @@
 import { fail, ok } from "@/lib/api-response";
 import { assertWarehouseOperationAllowed, requireCurrentUser } from "@/lib/auth-permissions";
+import { assertQinceOpenApiConfigured } from "@/lib/services/qince-terminal-receipt-client";
 import {
   createTerminalReceiptSyncRun,
   executeTerminalReceiptSync,
@@ -21,6 +22,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await assertWarehouseOperationAllowed(request);
+    assertQinceOpenApiConfigured();
     const run = await createTerminalReceiptSyncRun({
       trigger: "MANUAL",
       operatorName: user.displayName

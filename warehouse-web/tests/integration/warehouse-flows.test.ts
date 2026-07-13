@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import { after, beforeEach, test } from "node:test";
 
@@ -25,6 +25,7 @@ import {
   executeTerminalReceiptSync,
   getTerminalReceiptSyncOverview
 } from "@/lib/services/terminal-receipt-sync-service";
+import { downloadQinceTerminalReceipts } from "@/lib/services/qince-terminal-receipt-client";
 import { changeOwnPassword, createUser, resetUserPassword, updateUser } from "@/lib/services/user-service";
 import { verifyPassword } from "@/lib/password";
 import type { CurrentUser } from "@/lib/types";
@@ -210,6 +211,64 @@ test("终端签收 Excel 仅关联条码，不改变库存和当前归属", asyn
   assert.equal(await prisma.terminalReceiptRecord.count(), 2, "相同文件不能重复写入签收记录");
 });
 
+test("勤策 OpenAPI 使用签名分页查询并生成可导入的扫码明细", async () => {
+  const previousOpenId = process.env.QINCE_OPENID;
+  const previousAppKey = process.env.QINCE_APPKEY;
+  const previousBaseUrl = process.env.QINCE_OPENAPI_BASE_URL;
+  process.env.QINCE_OPENID = "1234567890123456789";
+  process.env.QINCE_APPKEY = "test-app-key-123456";
+  process.env.QINCE_OPENAPI_BASE_URL = "https://openapi.qince.com";
+
+  try {
+    const result = await downloadQinceTerminalReceipts({
+      startDate: "2026-07-07",
+      endDate: "2026-07-14",
+      fetchImpl: async (request, init) => {
+        const url = new URL(request instanceof Request ? request.url : String(request));
+        const body = String(init?.body ?? "");
+        const path = url.pathname.split("/").filter(Boolean);
+        const timestamp = path[5];
+        const digest = path[6];
+        assert.equal(path.slice(0, 4).join("/"), "api/scancode/v1/queryScancodeRecords");
+        assert.equal(path[4], process.env.QINCE_OPENID);
+        assert.equal(
+          digest,
+          createHash("md5").update(`${body}|${process.env.QINCE_APPKEY}|${timestamp}`).digest("hex")
+        );
+        assert.deepEqual(JSON.parse(body), {
+          date_start: "2026-07-07",
+          date_end: "2026-07-14",
+          page: "1",
+          rows: "1000"
+        });
+        return new Response(JSON.stringify({
+          return_code: "0",
+          return_msg: null,
+          response_data: JSON.stringify([
+            {
+              id: "scan-1",
+              scancode: "OPENAPI-001",
+              operate_time: "2026-07-13 16:58",
+              operator_name: "测试配送员",
+              customer_name: "测试门店"
+            }
+          ])
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+    });
+
+    assert.equal(result.recordCount, 1);
+    const preview = await previewTerminalReceiptImport(result.fileName, result.buffer);
+    assert.equal(preview.totalRows, 1);
+    assert.equal(preview.rows[0]?.barcode, "OPENAPI-001");
+    assert.equal(preview.rows[0]?.receivingOrganizationName, "测试门店");
+  } finally {
+    restoreEnvironment("QINCE_OPENID", previousOpenId);
+    restoreEnvironment("QINCE_APPKEY", previousAppKey);
+    restoreEnvironment("QINCE_OPENAPI_BASE_URL", previousBaseUrl);
+  }
+});
+
 test("自动签收同步推进成功截止时间并跳过重叠导出的重复记录", async () => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("sheet1");
@@ -217,7 +276,7 @@ test("自动签收同步推进成功截止时间并跳过重叠导出的重复�
   worksheet.addRow(["SYNC-001", "2026-07-13 16:58", "测试配送员", "外部商品_1*24", "件", "测试门店一"]);
   worksheet.addRow(["SYNC-002", "2026-07-13 16:59", "测试配送员", "外部商品_1*24", "件", "测试门店二"]);
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const downloader = async () => ({ buffer, fileName: "自动码明细.xlsx", taskKey: randomUUID() });
+  const downloader = async () => ({ buffer, fileName: "自动码明细.xlsx", taskKey: randomUUID(), recordCount: 2 });
 
   const firstNow = new Date("2026-07-14T04:00:00.000Z");
   const first = await createTerminalReceiptSyncRun({ trigger: "MANUAL", operatorName, now: firstNow });
@@ -576,6 +635,11 @@ async function stockQuantity(warehouseId: string, goodsId: string) {
 
 function makeBarcodes(prefix: string, count: number) {
   return Array.from({ length: count }, (_, index) => `${prefix}-${String(index + 1).padStart(4, "0")}`);
+}
+
+function restoreEnvironment(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
 }
 
 async function seedContext() {

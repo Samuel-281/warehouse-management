@@ -2,7 +2,10 @@ import { Prisma, TerminalReceiptSyncStatus, TerminalReceiptSyncTrigger } from "@
 
 import { ApiError } from "@/lib/api-response";
 import { getPrisma } from "@/lib/db";
-import { downloadQinceTerminalReceipts } from "@/lib/services/qince-terminal-receipt-client";
+import {
+  downloadQinceTerminalReceipts,
+  qinceOpenApiConfigured
+} from "@/lib/services/qince-terminal-receipt-client";
 import { logOperation } from "@/lib/services/operation-log-service";
 import { importTerminalReceipts } from "@/lib/services/terminal-receipt-service";
 import type { TerminalReceiptSyncOverview, TerminalReceiptSyncRun } from "@/lib/types";
@@ -28,7 +31,10 @@ export async function getTerminalReceiptSyncOverview(limit = 10): Promise<Termin
     })
   ]);
   return {
-    configured: qinceCredentialsConfigured(),
+    configured: qinceOpenApiConfigured(),
+    configurationMessage: qinceOpenApiConfigured()
+      ? "已连接勤策 OpenAPI"
+      : "需要配置勤策 OpenAPI 的 OpenID、AppKey，并授权扫码结果明细查询接口",
     running: runs.some((run) => run.status === "RUNNING"),
     lastSuccessfulCutoff: lastSuccess ? formatAppDateTime(lastSuccess.logicalEndAt) : undefined,
     nextScheduledAt: formatAppDateTime(nextMondayStart(new Date())),
@@ -90,6 +96,9 @@ export async function executeTerminalReceiptSync(
       startDate: formatDateOnly(run.exportStartDate),
       endDate: formatDateOnly(run.exportEndDate)
     });
+    if (exportResult.recordCount === 0) {
+      return finishEmptySyncRun(run, exportResult);
+    }
     const summary = await importTerminalReceipts({
       fileName: exportResult.fileName,
       buffer: exportResult.buffer,
@@ -217,17 +226,45 @@ function formatDateOnly(value: Date) {
   return value.toISOString().slice(0, 10);
 }
 
-function qinceCredentialsConfigured() {
-  return Boolean(
-    process.env.QINCE_TENANT_CODE?.trim() &&
-    process.env.QINCE_USER_CODE?.trim() &&
-    process.env.QINCE_PASSWORD
-  );
-}
-
 function safeErrorMessage(error: unknown) {
   const message = error instanceof Error && error.message ? error.message : "签收自动同步失败";
   return message.replace(/[\r\n\t]+/g, " ").slice(0, 500);
+}
+
+async function finishEmptySyncRun(
+  run: {
+    id: string;
+    trigger: TerminalReceiptSyncTrigger;
+    exportStartDate: Date;
+    exportEndDate: Date;
+    operatorName: string;
+  },
+  exportResult: { taskKey: string; fileName: string }
+) {
+  const completed = await getPrisma().terminalReceiptSyncRun.update({
+    where: { id: run.id },
+    data: {
+      status: "SUCCESS",
+      finishedAt: new Date(),
+      externalTaskKey: exportResult.taskKey,
+      externalFileName: exportResult.fileName,
+      totalRows: 0,
+      importedRows: 0,
+      matchedRows: 0,
+      unmatchedRows: 0,
+      duplicateRows: 0,
+      invalidRows: 0
+    }
+  });
+  await logOperation({
+    username: run.trigger === "SCHEDULED" ? "system" : run.operatorName,
+    action: "TERMINAL_RECEIPT_SYNC",
+    targetType: "TERMINAL_RECEIPT_SYNC",
+    targetId: run.id,
+    result: "SUCCESS",
+    detail: `trigger=${run.trigger};range=${formatDateOnly(run.exportStartDate)}~${formatDateOnly(run.exportEndDate)};imported=0;matched=0;unmatched=0;duplicates=0`
+  });
+  return mapSyncRun(completed);
 }
 
 function mapSyncRun(value: {
