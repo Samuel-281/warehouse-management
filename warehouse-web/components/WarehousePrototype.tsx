@@ -3863,23 +3863,30 @@ function SystemMaintenanceView({
       <section className="panel overflow-hidden">
         <SectionHeader icon={ClipboardList} title="最近操作日志" />
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px]">
+          <table className="w-full min-w-[920px]">
+            <colgroup>
+              <col className="w-[160px]" />
+              <col className="w-[150px]" />
+              <col className="w-[170px]" />
+              <col className="w-[90px]" />
+              <col />
+            </colgroup>
             <thead className="table-head">
               <tr>
-                <th className="px-4 py-3">时间</th>
-                <th className="px-4 py-3">用户</th>
-                <th className="px-4 py-3">动作</th>
-                <th className="px-4 py-3">结果</th>
+                <th className="whitespace-nowrap px-4 py-3">时间</th>
+                <th className="whitespace-nowrap px-4 py-3">用户</th>
+                <th className="whitespace-nowrap px-4 py-3">动作</th>
+                <th className="whitespace-nowrap px-4 py-3">结果</th>
                 <th className="px-4 py-3">说明</th>
               </tr>
             </thead>
             <tbody>
               {logs.map((log) => (
                 <tr key={log.id}>
-                  <td className="table-cell text-slate-600">{log.createdAt}</td>
-                  <td className="table-cell">{log.username}</td>
-                  <td className="table-cell font-semibold">{formatOperationAction(log.action)}</td>
-                  <td className="table-cell">
+                  <td className="table-cell whitespace-nowrap text-slate-600">{log.createdAt}</td>
+                  <td className="table-cell whitespace-nowrap">{log.username}</td>
+                  <td className="table-cell whitespace-nowrap font-semibold">{formatOperationAction(log.action)}</td>
+                  <td className="table-cell whitespace-nowrap">
                     <StatusBadge label={log.result === "SUCCESS" ? "成功" : "失败"} />
                   </td>
                   <td className="table-cell text-slate-600">{formatOperationDetail(log.detail)}</td>
