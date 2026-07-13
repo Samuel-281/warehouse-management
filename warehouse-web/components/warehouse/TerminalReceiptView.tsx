@@ -3,10 +3,14 @@
 import {
   AlertCircle,
   CheckCircle2,
+  Clock3,
+  CloudDownload,
   FileCheck2,
   FileSpreadsheet,
   History,
   Link2,
+  LoaderCircle,
+  Play,
   RefreshCw,
   Upload,
   XCircle
@@ -14,12 +18,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState, PaginationBar, StatusBadge } from "@/components/warehouse/CommonUi";
-import { apiErrorMessage, getJson, postFormData } from "@/lib/client-api";
+import { apiErrorMessage, getJson, postFormData, postJson } from "@/lib/client-api";
 import type {
   TerminalReceiptImportList,
   TerminalReceiptImportSummary,
   TerminalReceiptPreview,
   TerminalReceiptPreviewRow,
+  TerminalReceiptSyncOverview,
+  TerminalReceiptSyncRun,
   Toast
 } from "@/lib/types";
 
@@ -36,8 +42,9 @@ export function TerminalReceiptView({
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<TerminalReceiptPreview | null>(null);
   const [history, setHistory] = useState<TerminalReceiptImportList>({ items: [], total: 0 });
+  const [syncOverview, setSyncOverview] = useState<TerminalReceiptSyncOverview | null>(null);
   const [previewPage, setPreviewPage] = useState(1);
-  const [busy, setBusy] = useState<"preview" | "commit" | "history" | null>(null);
+  const [busy, setBusy] = useState<"preview" | "commit" | "history" | "sync" | null>(null);
 
   const loadHistory = useCallback(async () => {
     setBusy((current) => current ?? "history");
@@ -50,9 +57,24 @@ export function TerminalReceiptView({
     }
   }, [showToast]);
 
+  const loadSyncOverview = useCallback(async (silent = false) => {
+    try {
+      setSyncOverview(await getJson<TerminalReceiptSyncOverview>("/api/terminal-receipts/sync?limit=10"));
+    } catch (error) {
+      if (!silent) showToast({ tone: "error", message: apiErrorMessage(error, "读取自动同步状态失败") });
+    }
+  }, [showToast]);
+
   useEffect(() => {
     void loadHistory();
-  }, [loadHistory]);
+    void loadSyncOverview();
+  }, [loadHistory, loadSyncOverview]);
+
+  useEffect(() => {
+    if (!syncOverview?.running) return;
+    const timer = window.setInterval(() => void loadSyncOverview(true), 4_000);
+    return () => window.clearInterval(timer);
+  }, [loadSyncOverview, syncOverview?.running]);
 
   const previewRows = useMemo(() => {
     if (!preview) return [];
@@ -111,6 +133,22 @@ export function TerminalReceiptView({
     }
   }
 
+  async function startSync() {
+    setBusy("sync");
+    try {
+      const run = await postJson<TerminalReceiptSyncRun>("/api/terminal-receipts/sync", {});
+      setSyncOverview((current) => current
+        ? { ...current, running: true, runs: [run, ...current.runs.filter((item) => item.id !== run.id)] }
+        : current);
+      showToast({ tone: "success", message: `签收同步任务已开始，正在获取 ${run.exportStartDate} 至 ${run.exportEndDate} 的记录` });
+      await loadSyncOverview(true);
+    } catch (error) {
+      showToast({ tone: "error", message: apiErrorMessage(error, "启动签收同步失败") });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const canCommit = Boolean(
     canImport &&
     preview &&
@@ -134,16 +172,27 @@ export function TerminalReceiptView({
               </div>
             </div>
           </div>
-          <button className="secondary-button h-9 px-3" onClick={() => void loadHistory()} disabled={busy !== null}>
+          <button
+            className="secondary-button h-9 px-3"
+            onClick={() => void Promise.all([loadHistory(), loadSyncOverview()])}
+            disabled={busy !== null}
+          >
             <RefreshCw className={`h-4 w-4 ${busy === "history" ? "animate-spin" : ""}`} />
             刷新记录
           </button>
         </div>
 
+        <SyncPanel
+          overview={syncOverview}
+          canSync={canImport}
+          busy={busy === "sync"}
+          onSync={() => void startSync()}
+        />
+
         {canImport ? (
-          <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div className="grid gap-4 border-t border-slate-200 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
             <div>
-              <label className="label" htmlFor="terminal-receipt-file">签收明细 Excel</label>
+              <label className="label" htmlFor="terminal-receipt-file">手工导入 Excel（备用）</label>
               <label
                 className="flex min-h-20 cursor-pointer items-center gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-3 transition hover:border-emerald-400 hover:bg-emerald-50/40"
                 htmlFor="terminal-receipt-file"
@@ -231,6 +280,95 @@ export function TerminalReceiptView({
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+function SyncPanel({
+  overview,
+  canSync,
+  busy,
+  onSync
+}: {
+  overview: TerminalReceiptSyncOverview | null;
+  canSync: boolean;
+  busy: boolean;
+  onSync: () => void;
+}) {
+  const latest = overview?.runs[0];
+  const isRunning = Boolean(overview?.running || busy);
+  return (
+    <div className="grid gap-3 bg-slate-50 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+      <div className="grid gap-2 sm:grid-cols-3">
+        <SyncMetric
+          icon={CloudDownload}
+          label="自动同步"
+          value={overview?.configured ? (isRunning ? "同步中" : "已配置") : "未配置"}
+          tone={overview?.configured ? (isRunning ? "working" : "success") : "warning"}
+        />
+        <SyncMetric icon={Clock3} label="最近同步截止" value={overview?.lastSuccessfulCutoff ?? "尚未成功同步"} />
+        <SyncMetric icon={History} label="下次自动执行" value={overview?.nextScheduledAt ?? "每周一 00:00"} />
+      </div>
+      {canSync ? (
+        <button
+          className="primary-button h-10 px-4"
+          onClick={onSync}
+          disabled={!overview?.configured || isRunning}
+          title={!overview?.configured ? "请先在服务器配置勤策登录信息" : undefined}
+        >
+          {isRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+          {isRunning ? "正在同步" : "立即同步"}
+        </button>
+      ) : null}
+      {latest ? (
+        <div className="sm:col-span-3 lg:col-span-2">
+          <SyncRunLine run={latest} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SyncMetric({
+  icon: Icon,
+  label,
+  value,
+  tone = "neutral"
+}: {
+  icon: typeof Clock3;
+  label: string;
+  value: string;
+  tone?: "neutral" | "success" | "warning" | "working";
+}) {
+  const color = tone === "success"
+    ? "text-emerald-700"
+    : tone === "warning"
+      ? "text-amber-700"
+      : tone === "working"
+        ? "text-sky-700"
+        : "text-slate-600";
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${color}`} />
+      <div className="min-w-0">
+        <p className="text-xs text-muted">{label}</p>
+        <p className={`mt-0.5 truncate text-sm font-medium ${color}`}>{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function SyncRunLine({ run }: { run: TerminalReceiptSyncRun }) {
+  const tone = run.status === "success" ? "text-emerald-700" : run.status === "failure" ? "text-red-700" : "text-sky-700";
+  const label = run.status === "success" ? "同步成功" : run.status === "failure" ? "同步失败" : "正在同步";
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-200 pt-2 text-xs">
+      <span className={`font-semibold ${tone}`}>{label}</span>
+      <span className="text-muted">{run.trigger === "manual" ? "手动" : "自动"} · {run.exportStartDate} 至 {run.exportEndDate}</span>
+      {run.status === "success" ? (
+        <span className="text-slate-600">新增 {run.importedRows} · 重复 {run.duplicateRows} · 匹配 {run.matchedRows} · 未匹配 {run.unmatchedRows}</span>
+      ) : null}
+      {run.errorMessage ? <span className="text-red-700">{run.errorMessage}</span> : null}
     </div>
   );
 }

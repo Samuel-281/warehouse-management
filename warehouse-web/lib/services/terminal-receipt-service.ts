@@ -61,6 +61,7 @@ export async function importTerminalReceipts(input: {
   fileName: string;
   buffer: Buffer;
   operatorName: string;
+  allowNoNewRows?: boolean;
 }): Promise<TerminalReceiptImportSummary> {
   const prisma = getPrisma();
   const fileHash = hashBuffer(input.buffer);
@@ -71,7 +72,7 @@ export async function importTerminalReceipts(input: {
   if (analysis.preview.invalidRows > 0) {
     throw new ApiError(`文件中有 ${analysis.preview.invalidRows} 行格式错误，请修正后重新导入`, 400);
   }
-  if (analysis.preview.importableRows === 0) {
+  if (analysis.preview.importableRows === 0 && !input.allowNoNewRows) {
     throw new ApiError("文件中没有可导入的新签收记录", 400);
   }
 
@@ -96,21 +97,23 @@ export async function importTerminalReceipts(input: {
         }
       });
 
-      const created = await tx.terminalReceiptRecord.createMany({
-        data: importableRows.map((row) => ({
-          importId: importBatch.id,
-          inventoryItemId: row.inventoryItemId,
-          barcode: row.barcode,
-          scannedAt: row.scannedAt as Date,
-          scannerName: row.scannerName,
-          externalGoodsName: row.externalGoodsName,
-          goodsUnit: row.goodsUnit,
-          receivingOrganizationName: row.receivingOrganizationName,
-          fingerprint: row.fingerprint as string,
-          matchStatus: row.status === "matched" ? "MATCHED" : "UNMATCHED"
-        })),
-        skipDuplicates: true
-      });
+      const created = importableRows.length > 0
+        ? await tx.terminalReceiptRecord.createMany({
+            data: importableRows.map((row) => ({
+              importId: importBatch.id,
+              inventoryItemId: row.inventoryItemId,
+              barcode: row.barcode,
+              scannedAt: row.scannedAt as Date,
+              scannerName: row.scannerName,
+              externalGoodsName: row.externalGoodsName,
+              goodsUnit: row.goodsUnit,
+              receivingOrganizationName: row.receivingOrganizationName,
+              fingerprint: row.fingerprint as string,
+              matchStatus: row.status === "matched" ? "MATCHED" : "UNMATCHED"
+            })),
+            skipDuplicates: true
+          })
+        : { count: 0 };
 
       if (created.count !== importableRows.length) {
         await tx.terminalReceiptImport.update({

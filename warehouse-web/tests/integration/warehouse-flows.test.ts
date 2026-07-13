@@ -20,6 +20,11 @@ import {
   importTerminalReceipts,
   previewTerminalReceiptImport
 } from "@/lib/services/terminal-receipt-service";
+import {
+  createTerminalReceiptSyncRun,
+  executeTerminalReceiptSync,
+  getTerminalReceiptSyncOverview
+} from "@/lib/services/terminal-receipt-sync-service";
 import { changeOwnPassword, createUser, resetUserPassword, updateUser } from "@/lib/services/user-service";
 import { verifyPassword } from "@/lib/password";
 import type { CurrentUser } from "@/lib/types";
@@ -53,9 +58,14 @@ after(async () => {
 
 test("操作日志动作和结构化说明使用中文显示", () => {
   assert.equal(formatOperationAction("INBOUND_CREATE"), "创建入库单");
+  assert.equal(formatOperationAction("TERMINAL_RECEIPT_SYNC"), "同步终端签收记录");
   assert.equal(
     formatOperationDetail("quantity=20;barcodes=0;replay=false"),
     "数量：20；条码数量：0；重复请求：否"
+  );
+  assert.equal(
+    formatOperationDetail("trigger=SCHEDULED;range=2026-07-06~2026-07-12;duplicates=2"),
+    "触发方式：每周自动同步；同步日期：2026-07-06~2026-07-12；重复记录：2"
   );
   assert.equal(formatOperationDetail("Clear operational data from web maintenance page"), "通过系统维护页面清空业务数据");
 });
@@ -198,6 +208,64 @@ test("终端签收 Excel 仅关联条码，不改变库存和当前归属", asyn
   const replay = await importTerminalReceipts({ fileName: "签收明细.xlsx", buffer, operatorName });
   assert.equal(replay.replayed, true);
   assert.equal(await prisma.terminalReceiptRecord.count(), 2, "相同文件不能重复写入签收记录");
+});
+
+test("自动签收同步推进成功截止时间并跳过重叠导出的重复记录", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("sheet1");
+  worksheet.addRow(["码", "扫码时间", "扫码人", "商品名称", "扫码商品单位", "收货单位名称"]);
+  worksheet.addRow(["SYNC-001", "2026-07-13 16:58", "测试配送员", "外部商品_1*24", "件", "测试门店一"]);
+  worksheet.addRow(["SYNC-002", "2026-07-13 16:59", "测试配送员", "外部商品_1*24", "件", "测试门店二"]);
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const downloader = async () => ({ buffer, fileName: "自动码明细.xlsx", taskKey: randomUUID() });
+
+  const firstNow = new Date("2026-07-14T04:00:00.000Z");
+  const first = await createTerminalReceiptSyncRun({ trigger: "MANUAL", operatorName, now: firstNow });
+  assert.equal(first.exportStartDate, "2026-07-07");
+  assert.equal(first.exportEndDate, "2026-07-14");
+  const firstResult = await executeTerminalReceiptSync(first.id, { download: downloader });
+  assert.equal(firstResult.status, "success");
+  assert.equal(firstResult.importedRows, 2);
+  assert.equal(await prisma.terminalReceiptRecord.count(), 2);
+
+  const secondNow = new Date("2026-07-14T05:00:00.000Z");
+  const second = await createTerminalReceiptSyncRun({ trigger: "MANUAL", operatorName, now: secondNow });
+  assert.equal(second.exportStartDate, "2026-07-14", "手动同步应从最近成功截止时间继续");
+  const secondResult = await executeTerminalReceiptSync(second.id, { download: downloader });
+  assert.equal(secondResult.status, "success");
+  assert.equal(secondResult.importedRows, 0);
+  assert.equal(secondResult.duplicateRows, 2);
+  assert.equal(await prisma.terminalReceiptRecord.count(), 2, "重叠导出的记录不能重复写入");
+
+  const beforeFailure = await getTerminalReceiptSyncOverview();
+  const failure = await createTerminalReceiptSyncRun({
+    trigger: "MANUAL",
+    operatorName,
+    now: new Date("2026-07-14T06:00:00.000Z")
+  });
+  const failedResult = await executeTerminalReceiptSync(failure.id, {
+    download: async () => { throw new Error("模拟第三方导出失败"); }
+  });
+  assert.equal(failedResult.status, "failure");
+  const afterFailure = await getTerminalReceiptSyncOverview();
+  assert.equal(afterFailure.lastSuccessfulCutoff, beforeFailure.lastSuccessfulCutoff, "失败任务不得推进同步截止时间");
+});
+
+test("同一时间只允许一个签收同步任务运行", async () => {
+  const now = new Date();
+  await createTerminalReceiptSyncRun({
+    trigger: "MANUAL",
+    operatorName,
+    now
+  });
+  await assert.rejects(
+    createTerminalReceiptSyncRun({
+      trigger: "MANUAL",
+      operatorName,
+      now: new Date(now.getTime() + 60_000)
+    }),
+    /已有签收同步任务正在运行/
+  );
 });
 
 test("撤销出库恢复数量和归属，存在后续流转时整单拒绝", async () => {

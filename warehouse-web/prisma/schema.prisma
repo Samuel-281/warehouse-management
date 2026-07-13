@@ -61,6 +61,17 @@ enum ReceiptMatchStatus {
   UNMATCHED
 }
 
+enum TerminalReceiptSyncTrigger {
+  MANUAL
+  SCHEDULED
+}
+
+enum TerminalReceiptSyncStatus {
+  RUNNING
+  SUCCESS
+  FAILURE
+}
+
 model User {
   id           String          @id @default(uuid()) @db.Uuid
   username     String          @unique
@@ -311,10 +322,42 @@ model TerminalReceiptImport {
   operatorName   String
   createdAt      DateTime @default(now())
 
-  records TerminalReceiptRecord[]
+  records  TerminalReceiptRecord[]
+  syncRuns TerminalReceiptSyncRun[]
 
   @@index([createdAt])
   @@map("terminal_receipt_imports")
+}
+
+model TerminalReceiptSyncRun {
+  id                 String                    @id @default(uuid()) @db.Uuid
+  trigger            TerminalReceiptSyncTrigger
+  status             TerminalReceiptSyncStatus @default(RUNNING)
+  logicalStartAt     DateTime
+  logicalEndAt       DateTime
+  exportStartDate    DateTime                  @db.Date
+  exportEndDate      DateTime                  @db.Date
+  externalTaskKey    String?
+  externalFileName   String?
+  importId           String?                   @db.Uuid
+  totalRows          Int                       @default(0)
+  importedRows       Int                       @default(0)
+  matchedRows        Int                       @default(0)
+  unmatchedRows      Int                       @default(0)
+  duplicateRows      Int                       @default(0)
+  invalidRows        Int                       @default(0)
+  operatorName       String
+  errorMessage       String?
+  startedAt          DateTime                  @default(now())
+  finishedAt         DateTime?
+  createdAt          DateTime                  @default(now())
+
+  importBatch TerminalReceiptImport? @relation(fields: [importId], references: [id], onDelete: SetNull)
+
+  @@index([status, startedAt(sort: Desc)])
+  @@index([logicalEndAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("terminal_receipt_sync_runs")
 }
 
 model TerminalReceiptRecord {

@@ -27,6 +27,7 @@ const actionLabels: Record<string, string> = {
   INVENTORY_ITEM_DELETE: "删除错误条码档案",
   WAREHOUSE_STOCK_ADJUST: "人工修正库存",
   TERMINAL_RECEIPT_IMPORT: "导入终端签收记录",
+  TERMINAL_RECEIPT_SYNC: "同步终端签收记录",
   SYSTEM_CONSISTENCY_AUDIT: "检查数据一致性",
   SYSTEM_RESET_DEMO_DATABASE: "清空业务数据"
 };
@@ -52,6 +53,8 @@ const detailKeyLabels: Record<string, string> = {
   matched: "匹配条码",
   unmatched: "未匹配条码",
   duplicates: "重复记录",
+  trigger: "触发方式",
+  range: "同步日期",
   error: "错误"
 };
 
@@ -83,6 +86,10 @@ export function formatOperationDetail(detail?: string) {
 function formatDetailValue(key: string, value: string) {
   if (key === "healthy") return value === "true" ? "正常" : "发现异常";
   if (key === "replay") return value === "true" ? "是" : "否";
+  if (key === "trigger") {
+    if (value === "MANUAL") return "手动同步";
+    if (value === "SCHEDULED") return "每周自动同步";
+  }
   if (key === "status") {
     if (value === "ENABLED" || value === "enabled") return "启用";
     if (value === "DISABLED" || value === "disabled") return "停用";

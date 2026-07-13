@@ -6,6 +6,7 @@ export type OperationResult = "SUCCESS" | "FAILURE";
 
 export type OperationLogInput = {
   user?: CurrentUser | null;
+  username?: string;
   request?: Request;
   action: string;
   targetType: string;
@@ -20,7 +21,7 @@ export async function logOperation(input: OperationLogInput) {
     await prisma.operationLog.create({
       data: {
         userId: input.user?.id,
-        username: input.user?.username ?? "anonymous",
+        username: input.username ?? input.user?.username ?? "anonymous",
         action: input.action,
         targetType: input.targetType,
         targetId: input.targetId,

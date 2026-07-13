@@ -233,6 +233,39 @@ export type TerminalReceiptImportList = {
   total: number;
 };
 
+export type TerminalReceiptSyncTrigger = "manual" | "scheduled";
+export type TerminalReceiptSyncStatus = "running" | "success" | "failure";
+
+export type TerminalReceiptSyncRun = {
+  id: string;
+  trigger: TerminalReceiptSyncTrigger;
+  status: TerminalReceiptSyncStatus;
+  logicalStartAt: string;
+  logicalEndAt: string;
+  exportStartDate: string;
+  exportEndDate: string;
+  externalFileName?: string;
+  totalRows: number;
+  importedRows: number;
+  matchedRows: number;
+  unmatchedRows: number;
+  duplicateRows: number;
+  invalidRows: number;
+  operatorName: string;
+  errorMessage?: string;
+  startedAt: string;
+  finishedAt?: string;
+};
+
+export type TerminalReceiptSyncOverview = {
+  configured: boolean;
+  running: boolean;
+  lastSuccessfulCutoff?: string;
+  nextScheduledAt: string;
+  scheduleDescription: string;
+  runs: TerminalReceiptSyncRun[];
+};
+
 export type BarcodeCorrection = {
   id: string;
   oldBarcode: string;
