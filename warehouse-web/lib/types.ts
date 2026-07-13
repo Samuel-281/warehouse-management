@@ -169,6 +169,68 @@ export type InventoryDetailResult = {
   item: InventoryItem;
   movements: StockMovement[];
   corrections: BarcodeCorrection[];
+  terminalReceipts: TerminalReceiptRecord[];
+};
+
+export type TerminalReceiptMatchStatus = "matched" | "unmatched";
+export type TerminalReceiptPreviewStatus = TerminalReceiptMatchStatus | "duplicate" | "invalid";
+
+export type TerminalReceiptRecord = {
+  id: string;
+  barcode: string;
+  scannedAt: string;
+  scannerName: string;
+  externalGoodsName: string;
+  goodsUnit: string;
+  receivingOrganizationName: string;
+  matchStatus: TerminalReceiptMatchStatus;
+  importedAt: string;
+};
+
+export type TerminalReceiptPreviewRow = {
+  rowNumber: number;
+  barcode: string;
+  scannedAt: string;
+  scannerName: string;
+  externalGoodsName: string;
+  goodsUnit: string;
+  receivingOrganizationName: string;
+  status: TerminalReceiptPreviewStatus;
+  matchedGoodsName?: string;
+  matchedOwner?: string;
+  issue?: string;
+};
+
+export type TerminalReceiptPreview = {
+  fileName: string;
+  fileHash: string;
+  totalRows: number;
+  importableRows: number;
+  matchedRows: number;
+  unmatchedRows: number;
+  duplicateRows: number;
+  invalidRows: number;
+  rows: TerminalReceiptPreviewRow[];
+  previewTruncated: boolean;
+};
+
+export type TerminalReceiptImportSummary = {
+  id: string;
+  fileName: string;
+  totalRows: number;
+  importedRows: number;
+  matchedRows: number;
+  unmatchedRows: number;
+  duplicateRows: number;
+  invalidRows: number;
+  operatorName: string;
+  createdAt: string;
+  replayed?: boolean;
+};
+
+export type TerminalReceiptImportList = {
+  items: TerminalReceiptImportSummary[];
+  total: number;
 };
 
 export type BarcodeCorrection = {

@@ -13,6 +13,7 @@ import type {
   InventorySummary,
   InventoryStatusScope,
   StockMovement,
+  TerminalReceiptRecord,
   Toast,
   WarehouseState
 } from "@/lib/types";
@@ -169,20 +170,32 @@ export function InventoryView(props: {
     };
   }, [detailBarcode]);
 
-  function exportMovements(barcode: string, movements: StockMovement[]) {
-    if (!barcode || movements.length === 0) return;
+  function exportMovements(barcode: string, movements: StockMovement[], terminalReceipts: TerminalReceiptRecord[]) {
+    if (!barcode || (movements.length === 0 && terminalReceipts.length === 0)) return;
 
     const header = ["时间", "业务类型", "条码", "货物", "来源", "去向", "操作人", "说明"];
-    const rows = movements.map((movement) => [
-      movement.occurredAt,
-      formatMovementType(movement.type),
-      movement.barcode,
-      goodsLabel(movement.goodsId, props.state.goods),
-      movement.fromLabel,
-      movement.toLabel,
-      movement.operator,
-      movement.note
-    ]);
+    const rows = [
+      ...movements.map((movement) => [
+        movement.occurredAt,
+        formatMovementType(movement.type),
+        movement.barcode,
+        goodsLabel(movement.goodsId, props.state.goods),
+        movement.fromLabel,
+        movement.toLabel,
+        movement.operator,
+        movement.note
+      ]),
+      ...terminalReceipts.map((receipt) => [
+        receipt.scannedAt,
+        "终端签收（外部系统）",
+        receipt.barcode,
+        receipt.externalGoodsName,
+        "签收系统",
+        receipt.receivingOrganizationName,
+        receipt.scannerName,
+        "仅关联签收信息，不改变仓库库存和条码当前归属"
+      ])
+    ].sort((a, b) => b[0].localeCompare(a[0]));
     downloadCsv(`${barcode}-流水.csv`, [header, ...rows]);
   }
 
@@ -669,12 +682,17 @@ export function InventoryView(props: {
         item={detailResult?.item}
         movements={detailResult?.movements ?? []}
         corrections={detailResult?.corrections ?? []}
+        terminalReceipts={detailResult?.terminalReceipts ?? []}
         state={props.state}
         onClose={() => {
           setDetailBarcode(null);
           setDetailResult(null);
         }}
-        onExport={() => exportMovements(detailBarcode ?? "", detailResult?.movements ?? [])}
+        onExport={() => exportMovements(
+          detailBarcode ?? "",
+          detailResult?.movements ?? [],
+          detailResult?.terminalReceipts ?? []
+        )}
         canMaintain={props.canDeleteInventory}
         onCorrect={() => setCorrectionOpen(true)}
         onWriteOff={() => setWriteOffOpen(true)}
@@ -718,6 +736,7 @@ function InventoryDetailModal({
   item,
   movements,
   corrections,
+  terminalReceipts,
   state,
   onClose,
   onExport,
@@ -729,6 +748,7 @@ function InventoryDetailModal({
   item?: InventoryItem;
   movements: StockMovement[];
   corrections: InventoryDetailResult["corrections"];
+  terminalReceipts: InventoryDetailResult["terminalReceipts"];
   state: WarehouseState;
   onClose: () => void;
   onExport: () => void;
@@ -742,6 +762,11 @@ function InventoryDetailModal({
   if (!item) {
     return null;
   }
+
+  const historyEntries = [
+    ...movements.map((movement) => ({ kind: "movement" as const, occurredAt: movement.occurredAt, movement })),
+    ...terminalReceipts.map((receipt) => ({ kind: "receipt" as const, occurredAt: receipt.scannedAt, receipt }))
+  ].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
 
   return (
     <div
@@ -806,38 +831,60 @@ function InventoryDetailModal({
             </div>
           ) : null}
 
+          {terminalReceipts.length > 0 ? (
+            <div className="mt-3 shrink-0 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-950">
+              <span className="font-semibold">已关联终端签收：</span>{" "}
+              最近由 {terminalReceipts[0].scannerName} 于 {terminalReceipts[0].scannedAt} 扫码签收至
+              「{terminalReceipts[0].receivingOrganizationName}」。该记录不会改变当前库存和归属。
+            </div>
+          ) : null}
+
           <div className="mt-4 flex min-h-0 flex-1 flex-col border-t border-slate-200 pt-4">
             <div className="flex shrink-0 items-center justify-between gap-3">
               <div>
-                <p className="text-sm font-semibold text-ink">库存流转</p>
-                <p className="mt-1 text-xs text-muted">{movements.length} 条记录</p>
+                <p className="text-sm font-semibold text-ink">条码履历</p>
+                <p className="mt-1 text-xs text-muted">库存流转 {movements.length} 条 · 终端签收 {terminalReceipts.length} 条</p>
               </div>
-              <button className="secondary-button h-9 px-3" onClick={onExport} disabled={movements.length === 0}>
+              <button className="secondary-button h-9 px-3" onClick={onExport} disabled={historyEntries.length === 0}>
                 <Download className="h-4 w-4" />
                 导出
               </button>
             </div>
 
             <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
-              {movements.map((movement, index) => (
-                <div key={movement.id} className="relative pl-5">
-                  <span className="absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full bg-work" />
-                  {index < movements.length - 1 ? (
+              {historyEntries.map((entry, index) => (
+                <div key={`${entry.kind}-${entry.kind === "movement" ? entry.movement.id : entry.receipt.id}`} className="relative pl-5">
+                  <span className={`absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full ${entry.kind === "receipt" ? "bg-sky-500" : "bg-work"}`} />
+                  {index < historyEntries.length - 1 ? (
                     <span className="absolute bottom-[-18px] left-[4px] top-5 w-px bg-slate-200" />
                   ) : null}
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-ink">{formatMovementType(movement.type)}</p>
-                      <span className="font-mono text-xs text-slate-500">{movement.occurredAt}</span>
+                  {entry.kind === "movement" ? (
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-ink">{formatMovementType(entry.movement.type)}</p>
+                        <span className="font-mono text-xs text-slate-500">{entry.movement.occurredAt}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-700">
+                        {entry.movement.fromLabel} → {entry.movement.toLabel}
+                      </p>
+                      <p className="mt-2 text-xs text-slate-500">{entry.movement.note}</p>
                     </div>
-                    <p className="mt-2 text-sm text-slate-700">
-                      {movement.fromLabel} → {movement.toLabel}
-                    </p>
-                    <p className="mt-2 text-xs text-slate-500">{movement.note}</p>
-                  </div>
+                  ) : (
+                    <div className="rounded-md border border-sky-200 bg-sky-50 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-sky-950">终端签收（外部系统）</p>
+                        <span className="font-mono text-xs text-sky-700">{entry.receipt.scannedAt}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-sky-950">签收至：{entry.receipt.receivingOrganizationName}</p>
+                      <p className="mt-2 text-xs text-sky-800">
+                        扫码人：{entry.receipt.scannerName} · 外部商品：{entry.receipt.externalGoodsName} · 单位：{entry.receipt.goodsUnit}
+                      </p>
+                      <p className="mt-1 text-xs text-sky-700">仅关联签收信息，不改变系统当前库存和归属</p>
+                    </div>
+                  )}
                 </div>
               ))}
-              {movements.length === 0 ? (
+              {historyEntries.length === 0 ? (
                 <EmptyState
                   icon={ClipboardList}
                   title="暂无流转记录"

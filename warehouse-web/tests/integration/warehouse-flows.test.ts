@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import { after, beforeEach, test } from "node:test";
 
+import ExcelJS from "exceljs";
+
 import { getPrisma } from "@/lib/db";
 import { formatOperationAction, formatOperationDetail } from "@/lib/operation-log-labels";
 import { correctBarcode, writeOffBarcode } from "@/lib/services/barcode-management-service";
@@ -14,6 +16,10 @@ import { voidOrders } from "@/lib/services/order-reversal-service";
 import { submitOutbound } from "@/lib/services/outbound-service";
 import { submitSalesReturn } from "@/lib/services/sales-return-service";
 import { adjustStockManually } from "@/lib/services/stock-adjustment-service";
+import {
+  importTerminalReceipts,
+  previewTerminalReceiptImport
+} from "@/lib/services/terminal-receipt-service";
 import { changeOwnPassword, createUser, resetUserPassword, updateUser } from "@/lib/services/user-service";
 import { verifyPassword } from "@/lib/password";
 import type { CurrentUser } from "@/lib/types";
@@ -35,7 +41,7 @@ let context: Context;
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE "users", "roles", "goods", "warehouses", "salespeople", "terminal_stores"
+    TRUNCATE TABLE "terminal_receipt_imports", "users", "roles", "goods", "warehouses", "salespeople", "terminal_stores"
     RESTART IDENTITY CASCADE
   `);
   context = await seedContext();
@@ -149,6 +155,49 @@ test("数量库存和条码追踪核心流程保持一致", async () => {
     operatorName
   });
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 95);
+});
+
+test("终端签收 Excel 仅关联条码，不改变库存和当前归属", async () => {
+  await factoryInbound(100);
+  const barcode = "601637081135";
+  await submitOutbound({
+    type: "direct",
+    sourceWarehouseId: context.sourceWarehouseId,
+    salespersonId: context.salespersonId,
+    goodsId: context.goodsId,
+    barcodes: [barcode],
+    operatorName
+  });
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 99);
+
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("sheet1");
+  worksheet.addRow(["码", "扫码时间", "扫码人", "商品名称", "扫码商品单位", "收货单位名称"]);
+  worksheet.addRow([barcode, "2026-07-13 16:58", "测试配送员", "外部系统商品名称_1*24", "件", "测试收货门店"]);
+  worksheet.addRow(["601637081136", "2026-07-13 16:59", "测试配送员", "外部系统商品名称_1*24", "件", "另一测试门店"]);
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+  const preview = await previewTerminalReceiptImport("签收明细.xlsx", buffer);
+  assert.equal(preview.totalRows, 2);
+  assert.equal(preview.matchedRows, 1);
+  assert.equal(preview.unmatchedRows, 1);
+  assert.equal(preview.invalidRows, 0);
+
+  const imported = await importTerminalReceipts({ fileName: "签收明细.xlsx", buffer, operatorName });
+  assert.equal(imported.importedRows, 2);
+  assert.equal(await prisma.terminalReceiptRecord.count(), 2);
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 99);
+
+  const item = await prisma.inventoryItem.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(item.ownerType, "SALESPERSON");
+  assert.equal(item.salespersonId, context.salespersonId);
+  const detail = await getInventoryDetail(barcode);
+  assert.equal(detail.terminalReceipts.length, 1);
+  assert.equal(detail.terminalReceipts[0]?.receivingOrganizationName, "测试收货门店");
+
+  const replay = await importTerminalReceipts({ fileName: "签收明细.xlsx", buffer, operatorName });
+  assert.equal(replay.replayed, true);
+  assert.equal(await prisma.terminalReceiptRecord.count(), 2, "相同文件不能重复写入签收记录");
 });
 
 test("撤销出库恢复数量和归属，存在后续流转时整单拒绝", async () => {

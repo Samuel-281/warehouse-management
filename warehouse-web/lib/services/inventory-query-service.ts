@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { getPrisma } from "@/lib/db";
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
+import { getTerminalReceiptsForItem } from "@/lib/services/terminal-receipt-service";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type {
   InventoryDetailResult,
@@ -166,10 +167,15 @@ export async function getInventoryDetail(barcode: string): Promise<InventoryDeta
       orderBy: { occurredAt: "desc" }
     })
   ]);
+  const terminalReceipts = await getTerminalReceiptsForItem(item.id, [
+    item.barcode,
+    ...corrections.map((entry) => entry.oldBarcode)
+  ]);
 
   return {
     item: mapInventoryItem(item),
     movements: movements.map(mapStockMovement),
+    terminalReceipts,
     corrections: corrections.map((entry) => ({
       id: entry.id,
       oldBarcode: entry.oldBarcode,
@@ -190,15 +196,16 @@ export async function deleteInventoryItemByBarcode(barcode: string) {
     const item = await tx.inventoryItem.findUnique({ where: { barcode: normalizedBarcode } });
     if (!item) throw new Error(`条码 ${normalizedBarcode} 不存在`);
 
-    const [movementCount, correctionCount, inboundCount, outboundCount, salesReturnCount] = await Promise.all([
+    const [movementCount, correctionCount, inboundCount, outboundCount, salesReturnCount, receiptCount] = await Promise.all([
       tx.stockMovement.count({ where: { itemId: item.id } }),
       tx.barcodeCorrection.count({ where: { itemId: item.id } }),
       tx.inboundOrderItem.count({ where: { inventoryItemId: item.id } }),
       tx.outboundOrderItem.count({ where: { inventoryItemId: item.id } }),
-      tx.salesReturnOrderItem.count({ where: { inventoryItemId: item.id } })
+      tx.salesReturnOrderItem.count({ where: { inventoryItemId: item.id } }),
+      tx.terminalReceiptRecord.count({ where: { inventoryItemId: item.id } })
     ]);
-    if (movementCount + correctionCount + inboundCount + outboundCount + salesReturnCount > 0) {
-      throw new Error("该条码已有单据、流转或更正历史，不能彻底删除；请使用单据撤销或货物核销");
+    if (movementCount + correctionCount + inboundCount + outboundCount + salesReturnCount + receiptCount > 0) {
+      throw new Error("该条码已有单据、流转、更正或终端签收历史，不能彻底删除；请使用单据撤销或货物核销");
     }
 
     await tx.inventoryItem.delete({ where: { id: item.id } });

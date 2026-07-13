@@ -56,6 +56,11 @@ enum MovementType {
   MANUAL_ADJUSTMENT
 }
 
+enum ReceiptMatchStatus {
+  MATCHED
+  UNMATCHED
+}
+
 model User {
   id           String          @id @default(uuid()) @db.Uuid
   username     String          @unique
@@ -281,6 +286,7 @@ model InventoryItem {
   outboundOrderItems    OutboundOrderItem[]
   salesReturnOrderItems SalesReturnOrderItem[]
   barcodeCorrections    BarcodeCorrection[]
+  terminalReceiptRecords TerminalReceiptRecord[]
 
   @@index([goodsId])
   @@index([warehouseId])
@@ -290,6 +296,49 @@ model InventoryItem {
   @@index([ownerType, salespersonId, lastMovedAt])
   @@index([goodsId, lastMovedAt])
   @@map("inventory_items")
+}
+
+model TerminalReceiptImport {
+  id             String   @id @default(uuid()) @db.Uuid
+  fileName       String
+  fileHash       String   @unique
+  totalRows      Int
+  importedRows   Int
+  matchedRows    Int
+  unmatchedRows  Int
+  duplicateRows  Int
+  invalidRows    Int
+  operatorName   String
+  createdAt      DateTime @default(now())
+
+  records TerminalReceiptRecord[]
+
+  @@index([createdAt])
+  @@map("terminal_receipt_imports")
+}
+
+model TerminalReceiptRecord {
+  id                        String             @id @default(uuid()) @db.Uuid
+  importId                  String             @db.Uuid
+  inventoryItemId           String?            @db.Uuid
+  barcode                   String
+  scannedAt                 DateTime
+  scannerName               String
+  externalGoodsName         String
+  goodsUnit                 String
+  receivingOrganizationName String
+  fingerprint               String             @unique
+  matchStatus               ReceiptMatchStatus
+  createdAt                 DateTime           @default(now())
+
+  import        TerminalReceiptImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem?        @relation(fields: [inventoryItemId], references: [id])
+
+  @@index([barcode, scannedAt(sort: Desc)])
+  @@index([inventoryItemId, scannedAt(sort: Desc)])
+  @@index([receivingOrganizationName])
+  @@index([importId])
+  @@map("terminal_receipt_records")
 }
 
 model WarehouseStock {

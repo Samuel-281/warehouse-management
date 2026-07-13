@@ -26,6 +26,7 @@ const actionLabels: Record<string, string> = {
   INVENTORY_ITEM_WRITE_OFF: "核销货物",
   INVENTORY_ITEM_DELETE: "删除错误条码档案",
   WAREHOUSE_STOCK_ADJUST: "人工修正库存",
+  TERMINAL_RECEIPT_IMPORT: "导入终端签收记录",
   SYSTEM_CONSISTENCY_AUDIT: "检查数据一致性",
   SYSTEM_RESET_DEMO_DATABASE: "清空业务数据"
 };
@@ -45,7 +46,13 @@ const detailKeyLabels: Record<string, string> = {
   healthy: "检查结果",
   errors: "错误数",
   info: "历史提示",
-  count: "数量"
+  count: "数量",
+  file: "文件",
+  imported: "导入记录",
+  matched: "匹配条码",
+  unmatched: "未匹配条码",
+  duplicates: "重复记录",
+  error: "错误"
 };
 
 const roleLabels: Record<string, string> = {

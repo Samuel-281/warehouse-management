@@ -53,6 +53,7 @@ import {
 } from "@/components/warehouse/CommonUi";
 import { OrdersView } from "@/components/warehouse/OrdersView";
 import { InventoryView, type InventoryFilters } from "@/components/warehouse/InventoryView";
+import { TerminalReceiptView } from "@/components/warehouse/TerminalReceiptView";
 import { BarcodeCollector, type BarcodeReview } from "@/components/warehouse/BarcodeCollector";
 import { formatOperationAction, formatOperationDetail } from "@/lib/operation-log-labels";
 import { hasAnyRole } from "@/lib/role-utils";
@@ -88,7 +89,7 @@ import {
 type ViewKey = "dashboard" | "masters" | "inbound" | "outbound" | "query" | "system";
 type DirectOutboundDestination = "transfer" | "sales";
 type InboundBranch = InboundSource | "sales_return";
-type QueryTab = "inventory" | "orders";
+type QueryTab = "inventory" | "orders" | "terminal_receipts";
 type NavigationGroup = "workspace" | "business" | "management";
 
 type MasterDataPayload = WarehouseState;
@@ -1202,7 +1203,8 @@ export default function WarehousePrototype() {
                 <SegmentedControl
                   options={[
                     { value: "inventory", label: "库存与条码" },
-                    { value: "orders", label: "业务单据" }
+                    { value: "orders", label: "业务单据" },
+                    { value: "terminal_receipts", label: "终端签收" }
                   ]}
                   value={queryTab}
                   onChange={(value) => setQueryTab(value as QueryTab)}
@@ -1221,6 +1223,8 @@ export default function WarehousePrototype() {
                   showToast={showToast}
                   canDeleteOrders={canMaintainSystem}
                 />
+              ) : queryTab === "terminal_receipts" ? (
+                <TerminalReceiptView canImport={canOperateWarehouse} showToast={showToast} />
               ) : (
                 <InventoryView
                   state={state}

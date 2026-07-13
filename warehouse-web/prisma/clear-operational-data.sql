@@ -3,6 +3,8 @@
 
 TRUNCATE TABLE
   business_requests,
+  terminal_receipt_records,
+  terminal_receipt_imports,
   sales_return_order_items,
   sales_return_orders,
   outbound_order_items,

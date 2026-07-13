@@ -52,3 +52,17 @@ export function patchJson<T>(path: string, body: unknown, signal?: AbortSignal) 
 export function deleteJson<T>(path: string, body?: unknown, signal?: AbortSignal) {
   return requestJson<T>(path, { method: "DELETE", body, signal });
 }
+
+export async function postFormData<T>(path: string, formData: FormData, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    body: formData,
+    signal
+  });
+  const payload = (await response.json()) as ApiResponse<T>;
+  if (!response.ok || !("data" in payload)) {
+    throw new ClientApiError("error" in payload ? payload.error : "请求失败", response.status);
+  }
+  return payload.data;
+}
