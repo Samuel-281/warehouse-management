@@ -25,6 +25,10 @@ import {
   executeTerminalReceiptSync,
   getTerminalReceiptSyncOverview
 } from "@/lib/services/terminal-receipt-sync-service";
+import {
+  claimBrowserConnectorTask,
+  completeBrowserConnectorTask
+} from "@/lib/services/terminal-receipt-browser-connector-service";
 import { downloadQinceTerminalReceipts } from "@/lib/services/qince-terminal-receipt-client";
 import { changeOwnPassword, createUser, resetUserPassword, updateUser } from "@/lib/services/user-service";
 import { verifyPassword } from "@/lib/password";
@@ -112,31 +116,27 @@ test("数量库存和条码追踪核心流程保持一致", async () => {
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 89);
   assert.equal(await stockQuantity(context.targetWarehouseId, context.goodsId), 3);
 
-  await submitInbound({
-    source: "terminal_return",
-    warehouseId: context.sourceWarehouseId,
-    locationId: context.sourceLocationId,
-    goodsId: context.goodsId,
-    terminalStoreId: context.storeId,
-    productionDate: "2026-01-10",
-    quantity: 2,
-    barcodes: ["TERMINAL-NEW-001", salesBarcodes[2]],
+  const mixedReturn = await submitSalesReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    returnLocationId: context.sourceLocationId,
+    items: [
+      { barcode: "TERMINAL-NEW-001", goodsId: context.goodsId },
+      { barcode: salesBarcodes[2] }
+    ],
     operatorName
   });
+  assert.equal(mixedReturn.pendingCount, 1);
+  assert.equal(mixedReturn.signedCount, 0);
+  assert.equal(mixedReturn.newTrackingCount, 1);
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 91);
   await assert.rejects(
-    submitInbound({
-      source: "terminal_return",
-      warehouseId: context.sourceWarehouseId,
-      locationId: context.sourceLocationId,
-      goodsId: context.goodsId,
-      terminalStoreId: context.storeId,
-      productionDate: "2026-01-10",
-      quantity: 1,
-      barcodes: ["TERMINAL-NEW-001"],
+    submitSalesReturn({
+      returnWarehouseId: context.sourceWarehouseId,
+      returnLocationId: context.sourceLocationId,
+      items: [{ barcode: "TERMINAL-NEW-001", goodsId: context.goodsId }],
       operatorName
     }),
-    /不能作为终端店铺退换货重复入库/
+    /已在仓库或处于不可退回状态/
   );
 
   const corrected = await correctBarcode({
@@ -168,7 +168,7 @@ test("数量库存和条码追踪核心流程保持一致", async () => {
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 95);
 });
 
-test("终端签收 Excel 仅关联条码，不改变库存和当前归属", async () => {
+test("勤策签收更新终端归属，店铺间流转不改变仓库库存", async () => {
   await factoryInbound(100);
   const barcode = "601637081135";
   await submitOutbound({
@@ -181,17 +181,17 @@ test("终端签收 Excel 仅关联条码，不改变库存和当前归属", asyn
   });
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 99);
 
-  const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet("sheet1");
-  worksheet.addRow(["码", "扫码时间", "扫码人", "商品名称", "扫码商品单位", "收货单位名称"]);
-  worksheet.addRow([barcode, "2026-07-13 16:58", "测试配送员", "外部系统商品名称_1*24", "件", "测试收货门店"]);
-  worksheet.addRow(["601637081136", "2026-07-13 16:59", "测试配送员", "外部系统商品名称_1*24", "件", "另一测试门店"]);
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const firstReceiptAt = new Date();
+  const buffer = await makeTerminalReceiptWorkbook([
+    { barcode, scannedAt: firstReceiptAt, storeName: "测试收货门店 A" },
+    { barcode: "601637081136", scannedAt: firstReceiptAt, storeName: "未匹配门店" }
+  ]);
 
   const preview = await previewTerminalReceiptImport("签收明细.xlsx", buffer);
   assert.equal(preview.totalRows, 2);
   assert.equal(preview.matchedRows, 1);
   assert.equal(preview.unmatchedRows, 1);
+  assert.equal(preview.conflictRows, 0);
   assert.equal(preview.invalidRows, 0);
 
   const imported = await importTerminalReceipts({ fileName: "签收明细.xlsx", buffer, operatorName });
@@ -200,15 +200,121 @@ test("终端签收 Excel 仅关联条码，不改变库存和当前归属", asyn
   assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 99);
 
   const item = await prisma.inventoryItem.findUniqueOrThrow({ where: { barcode } });
-  assert.equal(item.ownerType, "SALESPERSON");
-  assert.equal(item.salespersonId, context.salespersonId);
+  assert.equal(item.ownerType, "TERMINAL_STORE");
+  assert.equal(item.status, "SIGNED");
+  assert.equal(item.salespersonId, null);
+  assert.equal(item.terminalStoreName, "测试收货门店 A");
   const detail = await getInventoryDetail(barcode);
   assert.equal(detail.terminalReceipts.length, 1);
-  assert.equal(detail.terminalReceipts[0]?.receivingOrganizationName, "测试收货门店");
+  assert.equal(detail.terminalReceipts[0]?.receivingOrganizationName, "测试收货门店 A");
+  assert.equal(detail.terminalReceipts[0]?.matchStatus, "matched");
 
   const replay = await importTerminalReceipts({ fileName: "签收明细.xlsx", buffer, operatorName });
   assert.equal(replay.replayed, true);
   assert.equal(await prisma.terminalReceiptRecord.count(), 2, "相同文件不能重复写入签收记录");
+
+  const secondReceiptAt = new Date(firstReceiptAt.getTime() + 60_000);
+  const storeBBuffer = await makeTerminalReceiptWorkbook([
+    { barcode, scannedAt: secondReceiptAt, storeName: "测试收货门店 B" }
+  ]);
+  await importTerminalReceipts({ fileName: "签收明细-B.xlsx", buffer: storeBBuffer, operatorName });
+  const movedToStoreB = await prisma.inventoryItem.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(movedToStoreB.ownerType, "TERMINAL_STORE");
+  assert.equal(movedToStoreB.terminalStoreName, "测试收货门店 B");
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 99);
+  const movedDetail = await getInventoryDetail(barcode);
+  assert.deepEqual(
+    movedDetail.terminalReceipts.map((receipt) => receipt.receivingOrganizationName),
+    ["测试收货门店 B", "测试收货门店 A"]
+  );
+});
+
+test("统一退回接收已签收货物，迟到的旧签收只补履历", async () => {
+  await factoryInbound(2);
+  const pendingBarcode = "RETURN-PENDING-001";
+  const signedBarcode = "RETURN-SIGNED-001";
+  await submitOutbound({
+    type: "direct",
+    sourceWarehouseId: context.sourceWarehouseId,
+    salespersonId: context.salespersonId,
+    goodsId: context.goodsId,
+    barcodes: [pendingBarcode, signedBarcode],
+    operatorName
+  });
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 0);
+
+  const outboundMovement = await prisma.stockMovement.findFirstOrThrow({
+    where: { barcode: signedBarcode, type: "SALES_OUTBOUND" },
+    orderBy: { occurredAt: "desc" }
+  });
+  const signedAt = new Date(Math.max(Date.now(), outboundMovement.occurredAt.getTime() + 1));
+  const signedBuffer = await makeTerminalReceiptWorkbook([
+    { barcode: signedBarcode, scannedAt: signedAt, storeName: "签收店铺 A" }
+  ]);
+  await importTerminalReceipts({ fileName: "已签收退回.xlsx", buffer: signedBuffer, operatorName });
+
+  const result = await submitSalesReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    returnLocationId: context.sourceLocationId,
+    items: [
+      { barcode: pendingBarcode },
+      { barcode: signedBarcode },
+      { barcode: "RETURN-UNKNOWN-001", goodsId: context.goodsId }
+    ],
+    operatorName
+  });
+  assert.equal(result.pendingCount, 1);
+  assert.equal(result.signedCount, 1);
+  assert.equal(result.newTrackingCount, 1);
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 3);
+  assert.equal(
+    await prisma.inventoryItem.count({
+      where: {
+        barcode: { in: [pendingBarcode, signedBarcode, "RETURN-UNKNOWN-001"] },
+        ownerType: "WAREHOUSE",
+        status: "IN_STOCK"
+      }
+    }),
+    3
+  );
+
+  const returnMovement = await prisma.stockMovement.findFirstOrThrow({
+    where: { barcode: signedBarcode, orderId: result.orderId },
+    orderBy: { occurredAt: "desc" }
+  });
+  const lateImportedAt = new Date(
+    Math.min(returnMovement.occurredAt.getTime() - 1, signedAt.getTime() + 1)
+  );
+  const lateBuffer = await makeTerminalReceiptWorkbook([
+    { barcode: signedBarcode, scannedAt: lateImportedAt, storeName: "迟到签收店铺" }
+  ]);
+  await importTerminalReceipts({ fileName: "迟到签收.xlsx", buffer: lateBuffer, operatorName });
+
+  const conflictBuffer = await makeTerminalReceiptWorkbook([
+    {
+      barcode: signedBarcode,
+      scannedAt: new Date(returnMovement.occurredAt.getTime() + 1),
+      storeName: "流转冲突店铺"
+    }
+  ]);
+  const conflictPreview = await previewTerminalReceiptImport("冲突签收.xlsx", conflictBuffer);
+  assert.equal(conflictPreview.conflictRows, 1);
+  assert.equal(conflictPreview.importableRows, 1);
+  const conflictImport = await importTerminalReceipts({
+    fileName: "冲突签收.xlsx",
+    buffer: conflictBuffer,
+    operatorName
+  });
+  assert.equal(conflictImport.conflictRows, 1);
+
+  const afterLateImport = await prisma.inventoryItem.findUniqueOrThrow({ where: { barcode: signedBarcode } });
+  assert.equal(afterLateImport.ownerType, "WAREHOUSE");
+  assert.equal(afterLateImport.status, "IN_STOCK");
+  assert.equal(afterLateImport.terminalStoreName, null);
+  assert.equal(await stockQuantity(context.sourceWarehouseId, context.goodsId), 3);
+  const lateDetail = await getInventoryDetail(signedBarcode);
+  assert.equal(lateDetail.terminalReceipts.length, 3);
+  assert.equal(lateDetail.terminalReceipts.filter((receipt) => receipt.matchStatus === "conflict").length, 1);
 });
 
 test("勤策 OpenAPI 使用签名分页查询并生成可导入的扫码明细", async () => {
@@ -308,6 +414,49 @@ test("自动签收同步推进成功截止时间并跳过重叠导出的重复�
   assert.equal(failedResult.status, "failure");
   const afterFailure = await getTerminalReceiptSyncOverview();
   assert.equal(afterFailure.lastSuccessfulCutoff, beforeFailure.lastSuccessfulCutoff, "失败任务不得推进同步截止时间");
+});
+
+test("浏览器连接器按固定日期领取任务并回传勤策扫码记录", async () => {
+  const previousMode = process.env.QINCE_SYNC_MODE;
+  const previousToken = process.env.QINCE_BROWSER_CONNECTOR_TOKEN;
+  process.env.QINCE_SYNC_MODE = "browser_connector";
+  process.env.QINCE_BROWSER_CONNECTOR_TOKEN = "integration-browser-connector-token";
+
+  try {
+    const run = await createTerminalReceiptSyncRun({
+      trigger: "SCHEDULED",
+      operatorName: "系统自动同步",
+      now: new Date("2026-07-13T16:00:00.000Z")
+    });
+    assert.equal(run.exportStartDate, "2026-07-06");
+    assert.equal(run.exportEndDate, "2026-07-12");
+
+    const task = await claimBrowserConnectorTask(new Date("2026-07-15T01:00:00.000Z"));
+    assert.ok(task);
+    assert.equal(task.startDate, "2026-07-06", "电脑晚两天上线也必须保留原自然周起始日期");
+    assert.equal(task.endDate, "2026-07-12", "电脑晚两天上线也必须保留原自然周结束日期");
+
+    const result = await completeBrowserConnectorTask({
+      runId: task.id,
+      claimToken: task.claimToken,
+      records: [{
+        id: "browser-scan-1",
+        goodsCode: "BROWSER-001",
+        operateTime: "2026-07-08 17:32",
+        operator: "测试配送员",
+        productName: "外部商品_1*24",
+        goodsCodeUnit: "件",
+        receiveName: "测试签收门店"
+      }]
+    });
+    assert.equal(result.status, "success");
+    assert.equal(result.importedRows, 1);
+    assert.equal(await prisma.terminalReceiptRecord.count({ where: { barcode: "BROWSER-001" } }), 1);
+    assert.equal(await claimBrowserConnectorTask(), null);
+  } finally {
+    restoreEnvironment("QINCE_SYNC_MODE", previousMode);
+    restoreEnvironment("QINCE_BROWSER_CONNECTOR_TOKEN", previousToken);
+  }
 });
 
 test("同一时间只允许一个签收同步任务运行", async () => {
@@ -635,6 +784,25 @@ async function stockQuantity(warehouseId: string, goodsId: string) {
 
 function makeBarcodes(prefix: string, count: number) {
   return Array.from({ length: count }, (_, index) => `${prefix}-${String(index + 1).padStart(4, "0")}`);
+}
+
+async function makeTerminalReceiptWorkbook(
+  rows: Array<{ barcode: string; scannedAt: Date; storeName: string; scannerName?: string }>
+) {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("sheet1");
+  worksheet.addRow(["码", "扫码时间", "扫码人", "商品名称", "扫码商品单位", "收货单位名称"]);
+  for (const row of rows) {
+    worksheet.addRow([
+      row.barcode,
+      row.scannedAt,
+      row.scannerName ?? "测试配送员",
+      "外部系统商品名称_1*24",
+      "件",
+      row.storeName
+    ]);
+  }
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 function restoreEnvironment(name: string, value: string | undefined) {

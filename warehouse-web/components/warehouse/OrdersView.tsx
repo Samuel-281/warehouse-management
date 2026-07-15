@@ -177,7 +177,7 @@ export function OrdersView({
           <div>
             <SectionHeader icon={ClipboardList} title="业务单据历史" compact />
             <p className="mt-2 text-xs text-muted">
-              当前筛选 {result.total} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 销售退回 {returnCount} 张
+              当前筛选 {result.total} 张 · 入库 {inboundCount} 张 · 出库 {outboundCount} 张 · 历史退回 {returnCount} 张
             </p>
           </div>
           <div className="grid gap-2 md:grid-cols-2 md:items-end lg:grid-cols-[120px_110px_minmax(160px,1fr)_90px_auto_auto_auto_auto] lg:gap-1.5">
@@ -190,7 +190,7 @@ export function OrdersView({
                   { value: "all", label: "全部单据" },
                   { value: "inbound", label: "入库单" },
                   { value: "outbound", label: "出库单" },
-                  { value: "sales_return", label: "销售退回单" }
+                  { value: "sales_return", label: "历史退回单" }
                 ]}
               />
             </div>
@@ -511,7 +511,7 @@ function formatOrderKind(kind: OrderKind) {
   const labels: Record<OrderKind, string> = {
     inbound: "入库单",
     outbound: "出库单",
-    sales_return: "销售退回单"
+    sales_return: "历史退回单"
   };
   return labels[kind];
 }

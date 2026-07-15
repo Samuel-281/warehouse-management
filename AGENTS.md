@@ -34,12 +34,14 @@ The desktop web 1.0 model is now a double-ledger model:
 2. Barcode tracking is traceability-based: only goods that have passed through scanning workflows need an `inventory_items` barcode record.
 3. Factory arrival inbound does not scan barcodes. It records warehouse, goods, and quantity, then increases the warehouse stock quantity ledger.
 4. Scanned outbound is the unified outbound entry. The operator selects source warehouse, goods, destination type, and barcodes. Destination type can be salesperson or warehouse.
-5. When scanned outbound goes to a salesperson, source warehouse stock decreases and the scanned barcodes become traceable under that salesperson.
+5. When scanned outbound goes to a salesperson, source warehouse stock decreases and the scanned barcodes enter the `待签收` state. The salesperson remains in the outbound history and pending ownership metadata.
 6. When scanned outbound goes to another warehouse, source warehouse stock decreases, target warehouse stock increases, and the scanned barcodes become traceable under the target warehouse.
-7. Sales return is an inbound branch. The operator selects return warehouse and scans barcodes. The system detects the original salesperson from barcode ownership; the operator does not manually select a salesperson.
-8. Terminal store return/exchange is also an inbound branch. It records return warehouse, terminal store, goods, quantity, production date, and barcodes.
-9. Terminal return/exchange creates a barcode record when the scanned barcode does not exist, auto-returns salesperson-owned barcodes to the warehouse, and rejects barcodes already in a warehouse.
-10. Do not display or design around "tracked in-warehouse quantity" versus "untracked quantity"; the user only wants to see warehouse stock quantity and separately query traceable barcodes.
+7. All returned goods use one `退回入库` branch. Pending salesperson goods, Qince-signed terminal-store goods, and previously unknown external returns may be mixed in one submission.
+8. Return inbound records only the return warehouse and barcodes. It does not ask for a salesperson, terminal store, production date, or shelf-life data. Unknown barcodes require a goods selection so the tracking profile can be created.
+9. Qince receipt data is the authority for the receiving terminal-store name. A valid receipt changes current barcode ownership from pending salesperson custody to the external terminal store without changing warehouse quantity. The outbound salesperson remains visible in history.
+10. Later Qince receipt events can move current external ownership from store A to store B without a warehouse return. Reconciliation uses Qince scan event time, and a late-imported old receipt must never overwrite a later warehouse return or other stock movement.
+11. User-facing sales lifecycle statuses are `待签收`, `已签收`, and `签收异常`; warehouse, written-off, and voided states remain separate inventory states.
+12. Do not display or design around "tracked in-warehouse quantity" versus "untracked quantity"; the user only wants to see warehouse stock quantity and separately query traceable barcodes.
 
 Older documentation may still mention the previous prototype model where every inventory unit depended on a barcode record. Treat this Web 1.0 business model as the source of truth unless the user explicitly changes it.
 
@@ -81,17 +83,18 @@ The MVP scope includes:
 5. Outbound management.
 6. Stock query.
 7. Item barcode movement query.
-8. Sales return from salesperson custody back to warehouse.
-9. Mobile/PDA scanning for inbound, outbound, sales return, and stock query as the next major follow-up.
-10. Operation logs.
+8. Unified return inbound for pending, signed, and unknown external-return barcodes.
+9. Qince terminal receipt import/sync and terminal-store ownership reconciliation.
+10. Mobile/PDA scanning for inbound, outbound, unified return, and stock query as the next major follow-up.
+11. Operation logs.
 
 The first version should prioritize these workflows:
 
 1. `厂家到货入库`
-2. `终端店铺退换货入库`
+2. `统一退回入库`
 3. `挪仓`
 4. `销售出库`
-5. `销售退回`
+5. `勤策终端签收同步`
 6. `库存查询`
 7. `库存流转查询`
 
@@ -111,10 +114,10 @@ Warehouse quantity and barcode traceability are separate ledgers. Do not derive 
 
 ## Inbound Rules
 
-There are two inbound sources:
+There are two user-facing inbound branches:
 
 1. `厂家到货`
-2. `终端店铺退换货`
+2. `退回入库`
 
 For `厂家到货`:
 
@@ -123,15 +126,14 @@ For `厂家到货`:
 3. Shelf life does not need to be calculated by default.
 4. Factory arrival records goods and quantity only; it does not scan or create individual barcode records.
 
-For `终端店铺退换货`:
+For `退回入库`:
 
-1. This is an inbound business type.
-2. It is different from `销售退回`.
-3. Production date must be recorded.
-4. Goods belong to one of two major categories: `保健酒` or `白酒`.
-5. `保健酒` default shelf-life end date is three years after the production date.
-6. `白酒` has no default shelf-life end date.
-7. Terminal store information may be recorded as the return/exchange source.
+1. There is only one return window; do not split salesperson return and terminal-store return into separate branches.
+2. Pending salesperson barcodes, signed terminal-store barcodes, and unknown external returns may be submitted together.
+3. Production date and shelf life are not recorded.
+4. The operator does not select a salesperson or terminal store.
+5. Unknown barcodes require a goods selection and create a new traceability profile.
+6. Barcodes already in warehouse inventory are rejected as duplicate inbound.
 
 ## Outbound Rules
 
@@ -154,31 +156,28 @@ For `销售出库`:
 2. Goods are assigned to a salesperson.
 3. Goods are not assigned to a specific terminal store.
 4. The source warehouse quantity must be sufficient. New scanned barcodes become tracked at submission; existing barcodes must be valid for the selected source warehouse.
-5. After submission, item ownership changes from warehouse inventory to salesperson custody.
+5. After submission, the item enters `待签收`; the selected salesperson remains its pending custodian and part of the permanent outbound history.
 
-## Sales Return Rules
+## Receipt And Return Rules
 
-`销售退回` is only for unsold goods returning from salesperson custody back to a warehouse.
+Qince receipt data and warehouse returns form one continuous barcode history.
 
-Keep this boundary strict:
-
-1. `销售退回` is different from `终端店铺退换货`.
-2. `销售退回` does not record a terminal store.
-3. `销售退回` does not record production date.
-4. `销售退回` does not recalculate shelf life.
-5. The barcode simply flows back from salesperson custody to the selected warehouse.
-
-When building or editing docs, avoid merging these two return concepts.
+1. A valid Qince receipt changes the current owner to the reported terminal-store name and status to `已签收`; it does not change warehouse quantity.
+2. The store name comes from Qince and is not maintained as local terminal-store master data.
+3. Multiple valid receipts after one sales outbound may move external ownership from store A to store B without warehouse stock movement.
+4. Unified return moves pending, signed, or unknown external-return goods into the selected warehouse and increases warehouse quantity once per barcode.
+5. Unified return does not record terminal store, salesperson, production date, or shelf life.
+6. Receipt reconciliation is ordered by the external scan time. Older data imported after a later return remains history only and cannot replace the current warehouse owner.
 
 ## Stock Query Expectations
 
 Stock query should support, at minimum:
 
 1. Query by warehouse.
-2. Query by salesperson.
+2. Query pending barcodes by salesperson and signed barcodes by terminal-store name.
 3. Query by goods information.
 4. Query by single item barcode.
-5. Show current item location or ownership.
+5. Show current warehouse, pending salesperson, or signed terminal-store ownership.
 6. Show item barcode status.
 7. Show production date and shelf-life data where applicable.
 8. Show full stock movement history.
@@ -262,7 +261,7 @@ When updating requirements or manuals:
 1. Keep project documents under `docs/`.
 2. Preserve the distinction between requirements, user manual, and generated deliverables.
 3. Use Chinese for business-facing documentation unless the user asks otherwise.
-4. Keep terms consistent: `仓库`, `单件条形码编号`, `厂家到货`, `终端店铺退换货`, `挪仓`, `销售出库`, `销售退回`.
+4. Keep terms consistent: `仓库`, `单件条形码编号`, `厂家到货`, `扫码出库`, `待签收`, `已签收`, `签收异常`, `统一退回入库`, `勤策终端签收`.
 5. If a new business rule changes an existing rule, update both the requirements document and user manual when appropriate.
 
 ## Development Guidance For Future Agents

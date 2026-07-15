@@ -1,7 +1,7 @@
 export type GoodsCategory = "health_wine" | "baijiu";
 export type WarehouseType = "warehouse";
-export type OwnerType = "warehouse" | "salesperson";
-export type ItemStatus = "in_stock" | "with_salesperson" | "written_off" | "voided";
+export type OwnerType = "warehouse" | "salesperson" | "terminal_store";
+export type ItemStatus = "in_stock" | "with_salesperson" | "signed" | "receipt_exception" | "written_off" | "voided";
 export type InventoryStatusScope = "active" | "written_off" | "voided" | "all";
 export type OrderStatus = "active" | "voided";
 export type InboundSource = "factory" | "terminal_return";
@@ -92,6 +92,8 @@ export type InventoryItem = {
   warehouseId?: string;
   locationId?: string;
   salespersonId?: string;
+  terminalStoreName?: string;
+  signedAt?: string;
   status: ItemStatus;
   productionDate?: string;
   shelfLifeDate?: string;
@@ -140,6 +142,8 @@ export type InventorySummary = {
   totalItems: number;
   inStock: number;
   withSales: number;
+  signed: number;
+  receiptExceptions: number;
   writtenOff: number;
   totalWarehouseQuantity: number;
   warehouseStocks: WarehouseStock[];
@@ -161,6 +165,7 @@ export type InventoryListResult = {
   total: number;
   warehouseResultCount: number;
   salesResultCount: number;
+  terminalResultCount: number;
   page: number;
   pageSize: number;
 };
@@ -172,7 +177,7 @@ export type InventoryDetailResult = {
   terminalReceipts: TerminalReceiptRecord[];
 };
 
-export type TerminalReceiptMatchStatus = "matched" | "unmatched";
+export type TerminalReceiptMatchStatus = "matched" | "unmatched" | "conflict";
 export type TerminalReceiptPreviewStatus = TerminalReceiptMatchStatus | "duplicate" | "invalid";
 
 export type TerminalReceiptRecord = {
@@ -208,6 +213,7 @@ export type TerminalReceiptPreview = {
   importableRows: number;
   matchedRows: number;
   unmatchedRows: number;
+  conflictRows: number;
   duplicateRows: number;
   invalidRows: number;
   rows: TerminalReceiptPreviewRow[];
@@ -221,6 +227,7 @@ export type TerminalReceiptImportSummary = {
   importedRows: number;
   matchedRows: number;
   unmatchedRows: number;
+  conflictRows: number;
   duplicateRows: number;
   invalidRows: number;
   operatorName: string;
@@ -249,6 +256,7 @@ export type TerminalReceiptSyncRun = {
   importedRows: number;
   matchedRows: number;
   unmatchedRows: number;
+  conflictRows: number;
   duplicateRows: number;
   invalidRows: number;
   operatorName: string;

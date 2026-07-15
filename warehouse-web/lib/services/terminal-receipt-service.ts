@@ -13,6 +13,7 @@ import type {
   TerminalReceiptRecord
 } from "@/lib/types";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
+import { reconcileTerminalReceiptOwnership } from "@/lib/services/terminal-receipt-ownership-service";
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 const MAX_DATA_ROWS = 10_000;
@@ -37,9 +38,11 @@ type ParsedReceiptRow = {
 type MatchedItem = {
   id: string;
   goods: { name: string };
-  ownerType: "WAREHOUSE" | "SALESPERSON";
+  ownerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE";
   warehouse: { name: string } | null;
   salesperson: { name: string } | null;
+  terminalStoreName: string | null;
+  stockMovements: Array<{ type: string; occurredAt: Date }>;
 };
 
 type AnalyzedRow = ParsedReceiptRow & {
@@ -77,7 +80,9 @@ export async function importTerminalReceipts(input: {
     throw new ApiError("文件中没有可导入的新签收记录", 400);
   }
 
-  const importableRows = analysis.rows.filter((row) => row.status === "matched" || row.status === "unmatched");
+  const importableRows = analysis.rows.filter(
+    (row) => row.status === "matched" || row.status === "unmatched" || row.status === "conflict"
+  );
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -92,6 +97,7 @@ export async function importTerminalReceipts(input: {
           importedRows: importableRows.length,
           matchedRows: analysis.preview.matchedRows,
           unmatchedRows: analysis.preview.unmatchedRows,
+          conflictRows: analysis.preview.conflictRows,
           duplicateRows: analysis.preview.duplicateRows,
           invalidRows: analysis.preview.invalidRows,
           operatorName: input.operatorName
@@ -110,7 +116,7 @@ export async function importTerminalReceipts(input: {
               goodsUnit: row.goodsUnit,
               receivingOrganizationName: row.receivingOrganizationName,
               fingerprint: row.fingerprint as string,
-              matchStatus: row.status === "matched" ? "MATCHED" : "UNMATCHED"
+              matchStatus: row.status === "matched" ? "MATCHED" : row.status === "conflict" ? "CONFLICT" : "UNMATCHED"
             })),
             skipDuplicates: true
           })
@@ -125,6 +131,11 @@ export async function importTerminalReceipts(input: {
           }
         });
       }
+
+      await reconcileTerminalReceiptOwnership(
+        tx,
+        importableRows.flatMap((row) => row.inventoryItemId ? [row.inventoryItemId] : [])
+      );
 
       const result = await tx.terminalReceiptImport.findUniqueOrThrow({ where: { id: importBatch.id } });
       return mapImportSummary(result);
@@ -169,7 +180,7 @@ export async function getTerminalReceiptsForItem(itemId: string, barcodes: strin
     externalGoodsName: record.externalGoodsName,
     goodsUnit: record.goodsUnit,
     receivingOrganizationName: record.receivingOrganizationName,
-    matchStatus: record.matchStatus === "MATCHED" ? "matched" : "unmatched",
+    matchStatus: record.matchStatus === "MATCHED" ? "matched" : record.matchStatus === "CONFLICT" ? "conflict" : "unmatched",
     importedAt: formatAppDateTime(record.createdAt)
   }));
 }
@@ -241,11 +252,25 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
   const [items, corrections, existingRecords] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: { barcode: { in: barcodes } },
-      include: { goods: true, warehouse: true, salesperson: true }
+      include: {
+        goods: true,
+        warehouse: true,
+        salesperson: true,
+        stockMovements: { orderBy: [{ occurredAt: "asc" }, { id: "asc" }] }
+      }
     }),
     prisma.barcodeCorrection.findMany({
       where: { oldBarcode: { in: barcodes } },
-      include: { item: { include: { goods: true, warehouse: true, salesperson: true } } }
+      include: {
+        item: {
+          include: {
+            goods: true,
+            warehouse: true,
+            salesperson: true,
+            stockMovements: { orderBy: [{ occurredAt: "asc" }, { id: "asc" }] }
+          }
+        }
+      }
     }),
     prisma.terminalReceiptRecord.findMany({
       where: {
@@ -290,17 +315,24 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
     fileEvents.add(eventKey);
     const item = itemByBarcode.get(row.barcode);
     if (!item) return { ...row, status: "unmatched", issue: "仓库系统中尚未找到该条码" };
+    const scannedAt = row.scannedAt;
+    const precedingMovement = [...item.stockMovements]
+      .reverse()
+      .find((movement) => movement.occurredAt.getTime() <= scannedAt.getTime());
+    const status = precedingMovement?.type === "SALES_OUTBOUND" ? "matched" : "conflict";
     return {
       ...row,
-      status: "matched",
+      status,
       inventoryItemId: item.id,
       matchedGoodsName: item.goods.name,
-      matchedOwner: formatMatchedOwner(item)
+      matchedOwner: formatMatchedOwner(item),
+      issue: status === "conflict" ? "签收时间与仓库业务流转冲突，仅保存记录，不改变当前归属" : undefined
     };
   });
 
   const matchedRows = rows.filter((row) => row.status === "matched").length;
   const unmatchedRows = rows.filter((row) => row.status === "unmatched").length;
+  const conflictRows = rows.filter((row) => row.status === "conflict").length;
   const duplicateRows = rows.filter((row) => row.status === "duplicate").length;
   const invalidRows = rows.filter((row) => row.status === "invalid").length;
   const previewRows = rows.slice(0, MAX_PREVIEW_ROWS).map(mapPreviewRow);
@@ -311,9 +343,10 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
       fileName,
       fileHash,
       totalRows: rows.length,
-      importableRows: matchedRows + unmatchedRows,
+      importableRows: matchedRows + unmatchedRows + conflictRows,
       matchedRows,
       unmatchedRows,
+      conflictRows,
       duplicateRows,
       invalidRows,
       rows: previewRows,
@@ -425,6 +458,7 @@ function validateFile(fileName: string, buffer: Buffer) {
 
 function formatMatchedOwner(item: MatchedItem) {
   if (item.ownerType === "SALESPERSON") return `销售人员：${item.salesperson?.name ?? "未知"}`;
+  if (item.ownerType === "TERMINAL_STORE") return `终端店铺：${item.terminalStoreName ?? "未知"}`;
   return `仓库：${item.warehouse?.name ?? "未知"}`;
 }
 
@@ -451,6 +485,7 @@ function mapImportSummary(value: {
   importedRows: number;
   matchedRows: number;
   unmatchedRows: number;
+  conflictRows: number;
   duplicateRows: number;
   invalidRows: number;
   operatorName: string;
@@ -463,6 +498,7 @@ function mapImportSummary(value: {
     importedRows: value.importedRows,
     matchedRows: value.matchedRows,
     unmatchedRows: value.unmatchedRows,
+    conflictRows: value.conflictRows,
     duplicateRows: value.duplicateRows,
     invalidRows: value.invalidRows,
     operatorName: value.operatorName,

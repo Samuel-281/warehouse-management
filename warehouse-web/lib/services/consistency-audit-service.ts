@@ -119,6 +119,7 @@ issues AS (
   FROM inventory_items item
   WHERE (item.status = 'IN_STOCK' AND item."ownerType" <> 'WAREHOUSE')
      OR (item.status = 'WITH_SALESPERSON' AND item."ownerType" <> 'SALESPERSON')
+     OR (item.status = 'SIGNED' AND item."ownerType" <> 'TERMINAL_STORE')
 
   UNION ALL
 
@@ -144,7 +145,8 @@ issues AS (
     '查看条码更正历史和最后流转，确认是否存在未完整提交的业务。'
   FROM inventory_items item
   JOIN latest_barcode_movements latest ON latest."itemId" = item.id
-  WHERE item."lastMovedAt" <> latest."occurredAt" OR item.barcode <> latest.barcode
+  WHERE (item."ownerType" <> 'TERMINAL_STORE' AND item."lastMovedAt" <> latest."occurredAt")
+     OR item.barcode <> latest.barcode
 
   UNION ALL
 
@@ -157,9 +159,28 @@ issues AS (
     '核对最后业务单据；存在错误单据时优先撤销，不要直接删除历史。'
   FROM inventory_items item
   JOIN latest_barcode_movements latest ON latest."itemId" = item.id
-  WHERE (latest.type = 'SALES_OUTBOUND' AND (item."ownerType" <> 'SALESPERSON' OR item.status <> 'WITH_SALESPERSON'))
+  WHERE (latest.type = 'SALES_OUTBOUND' AND NOT (
+          (item."ownerType" = 'SALESPERSON' AND item.status = 'WITH_SALESPERSON')
+       OR (item."ownerType" = 'TERMINAL_STORE' AND item.status = 'SIGNED')
+        ))
      OR (latest.type IN ('TERMINAL_RETURN_INBOUND', 'TRANSFER', 'SALES_RETURN') AND (item."ownerType" <> 'WAREHOUSE' OR item.status <> 'IN_STOCK'))
      OR (latest.type = 'WRITE_OFF' AND item.status <> 'WRITTEN_OFF')
+
+  UNION ALL
+
+  SELECT
+    'TERMINAL_OWNER_WITHOUT_RECEIPT',
+    'error',
+    'inventory_item',
+    item.id::text,
+    CONCAT('条码 ', item.barcode, ' 显示已签收，但缺少匹配的勤策签收记录'),
+    '重新同步对应日期的勤策签收记录；如仍无法匹配，请检查条码是否在外部系统中录入错误。'
+  FROM inventory_items item
+  WHERE item."ownerType" = 'TERMINAL_STORE'
+    AND NOT EXISTS (
+      SELECT 1 FROM terminal_receipt_records receipt
+      WHERE receipt."inventoryItemId" = item.id AND receipt."matchStatus" = 'MATCHED'
+    )
 
   UNION ALL
 

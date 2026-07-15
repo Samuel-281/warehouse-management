@@ -83,6 +83,9 @@ export function ownerLabel(
     const salesperson = salespeople.find((entry) => entry.id === item.salespersonId);
     return `销售人员：${salesperson?.name ?? "未知"}`;
   }
+  if (item.ownerType === "terminal_store") {
+    return `终端店铺：${item.terminalStoreName ?? "未知"}`;
+  }
 
   return warehouseLabel(item.warehouseId, warehouses, item.locationId, locations);
 }

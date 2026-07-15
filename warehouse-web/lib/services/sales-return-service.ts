@@ -1,66 +1,28 @@
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { getPrisma } from "@/lib/db";
 import { runIdempotentTransaction } from "@/lib/services/idempotency-service";
+import { linkAndReconcileTerminalReceipts } from "@/lib/services/terminal-receipt-ownership-service";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
-import { formatAppDateTime } from "@/lib/warehouse-utils";
-import type { InventoryItem, MovementType, StockMovement } from "@/lib/types";
 
-type DbInboundSource = "FACTORY" | "TERMINAL_RETURN" | "OUTBOUND_SCAN";
-type DbMovementType =
-  | "FACTORY_INBOUND"
-  | "TERMINAL_RETURN_INBOUND"
-  | "TRANSFER"
-  | "SALES_OUTBOUND"
-  | "SALES_RETURN"
-  | "ORDER_REVERSAL"
-  | "BARCODE_CORRECTION"
-  | "WRITE_OFF"
-  | "MANUAL_ADJUSTMENT";
-
-type DbInventoryItem = {
-  id: string;
+export type UnifiedReturnLine = {
   barcode: string;
-  goodsId: string;
-  ownerType: "WAREHOUSE" | "SALESPERSON";
-  warehouseId: string | null;
-  locationId: string | null;
-  salespersonId: string | null;
-  status: "IN_STOCK" | "WITH_SALESPERSON" | "WRITTEN_OFF" | "VOIDED";
-  productionDate: Date | null;
-  shelfLifeDate: Date | null;
-  inboundSource: DbInboundSource;
-  lastMovedAt: Date;
-};
-
-type DbStockMovement = {
-  id: string;
-  itemId: string;
-  barcode: string;
-  goodsId: string;
-  type: DbMovementType;
-  fromLabel: string;
-  toLabel: string;
-  operatorName: string;
-  occurredAt: Date;
-  note: string;
+  goodsId?: string;
 };
 
 export type SubmitSalesReturnInput = {
   returnWarehouseId: string;
   returnLocationId: string;
-  barcodes: string[];
+  barcodes?: string[];
+  items?: UnifiedReturnLine[];
   operatorName: string;
   operatorUserId?: string;
   clientRequestId?: string;
 };
 
 export async function submitSalesReturn(input: SubmitSalesReturnInput) {
-  const barcodes = Array.from(new Set(input.barcodes.map((barcode) => barcode.trim()).filter(Boolean)));
-  assertBarcodeBatchLimit(barcodes);
-
-  if (barcodes.length === 0) {
-    throw new Error("请先扫描或录入销售人员名下条码");
-  }
+  const lines = normalizeLines(input);
+  assertBarcodeBatchLimit(lines.map((line) => line.barcode));
+  if (lines.length === 0) throw new Error("请先扫描或录入退回条码");
 
   const prisma = getPrisma();
   return runIdempotentTransaction(
@@ -72,215 +34,234 @@ export async function submitSalesReturn(input: SubmitSalesReturnInput) {
       payload: {
         returnWarehouseId: input.returnWarehouseId,
         returnLocationId: input.returnLocationId,
-        barcodes
+        items: lines
       }
     },
     async (tx) => {
-    const [returnWarehouse, returnLocation] = await Promise.all([
-      tx.warehouse.findUnique({ where: { id: input.returnWarehouseId } }),
-      tx.storageLocation.findUnique({ where: { id: input.returnLocationId } })
-    ]);
-
-    if (!returnWarehouse) throw new Error("请选择有效的回流仓库");
-    if (!returnLocation || returnLocation.warehouseId !== returnWarehouse.id) throw new Error("请选择有效的回流库位");
-
-    const items = await tx.inventoryItem.findMany({
-      where: { barcode: { in: barcodes } },
-      orderBy: { barcode: "asc" }
-    });
-    const itemByBarcode = new Map(items.map((item) => [item.barcode, item]));
-    const missing = barcodes.find((barcode) => !itemByBarcode.has(barcode));
-    if (missing) throw new Error(`条码 ${missing} 不存在`);
-
-    const invalid = items.find(
-      (item) => item.status !== "WITH_SALESPERSON" || item.ownerType !== "SALESPERSON" || !item.salespersonId
-    );
-    if (invalid) throw new Error(`条码 ${invalid.barcode} 当前不在销售人员名下`);
-
-    const time = new Date();
-    const order = await tx.salesReturnOrder.create({
-      data: {
-        orderNo: makeOrderNo("XT"),
-        returnWarehouseId: returnWarehouse.id,
-        returnLocationId: returnLocation.id,
-        operatorName: input.operatorName,
-        createdAt: time,
-        reversalSupported: true
+      const [returnWarehouse, returnLocation] = await Promise.all([
+        tx.warehouse.findUnique({ where: { id: input.returnWarehouseId } }),
+        tx.storageLocation.findUnique({ where: { id: input.returnLocationId } })
+      ]);
+      if (!returnWarehouse) throw new Error("请选择有效的退回仓库");
+      if (!returnLocation || returnLocation.warehouseId !== returnWarehouse.id) {
+        throw new Error("请选择有效的退回库位");
       }
-    });
 
-    const toLabel = `${returnWarehouse.name} / ${returnLocation.name}`;
-    const goodsQuantities = new Map<string, number>();
-    for (const item of items) {
-      goodsQuantities.set(item.goodsId, (goodsQuantities.get(item.goodsId) ?? 0) + 1);
-    }
-
-    for (const [goodsId, quantity] of goodsQuantities.entries()) {
-      await adjustWarehouseStock(tx, {
-        warehouseId: returnWarehouse.id,
-        goodsId,
-        quantityChange: quantity,
-        type: "SALES_RETURN",
-        orderKind: "sales_return",
-        orderId: order.id,
-        orderNo: order.orderNo,
-        counterparty: "销售人员名下",
-        operatorName: input.operatorName,
-        occurredAt: time,
-        note: "销售退回入库"
+      const barcodes = lines.map((line) => line.barcode);
+      const existingItems = await tx.inventoryItem.findMany({
+        where: { barcode: { in: barcodes } },
+        orderBy: { barcode: "asc" }
       });
-    }
+      const existingByBarcode = new Map(existingItems.map((item) => [item.barcode, item]));
+      const invalid = existingItems.find((item) => !isReturnable(item));
+      if (invalid) {
+        throw new Error(`条码 ${invalid.barcode} 已在仓库或处于不可退回状态`);
+      }
 
-    const salespersonIds = [...new Set(items.map((item) => item.salespersonId).filter((id): id is string => Boolean(id)))];
-    const salespersonNames = new Map(
-      (
-        await tx.salesperson.findMany({
+      const missingLines = lines.filter((line) => !existingByBarcode.has(line.barcode));
+      const missingGoodsId = missingLines.find((line) => !line.goodsId);
+      if (missingGoodsId) throw new Error(`条码 ${missingGoodsId.barcode} 尚未建档，请先选择对应货物`);
+      const goodsIds = Array.from(new Set(missingLines.map((line) => line.goodsId as string)));
+      const goods = goodsIds.length > 0
+        ? await tx.goods.findMany({ where: { id: { in: goodsIds }, status: "ENABLED" } })
+        : [];
+      const goodsIdSet = new Set(goods.map((item) => item.id));
+      const invalidGoods = missingLines.find((line) => !goodsIdSet.has(line.goodsId as string));
+      if (invalidGoods) throw new Error(`条码 ${invalidGoods.barcode} 选择的货物无效或已停用`);
+
+      const time = new Date();
+      const order = await tx.inboundOrder.create({
+        data: {
+          orderNo: makeOrderNo("TH"),
+          source: "TERMINAL_RETURN",
+          warehouseId: returnWarehouse.id,
+          locationId: returnLocation.id,
+          operatorName: input.operatorName,
+          createdAt: time,
+          reversalSupported: true
+        }
+      });
+
+      if (missingLines.length > 0) {
+        await tx.inventoryItem.createMany({
+          data: missingLines.map((line) => ({
+            barcode: line.barcode,
+            goodsId: line.goodsId as string,
+            ownerType: "WAREHOUSE",
+            warehouseId: returnWarehouse.id,
+            locationId: returnLocation.id,
+            salespersonId: null,
+            terminalStoreName: null,
+            signedAt: null,
+            status: "IN_STOCK",
+            inboundSource: "TERMINAL_RETURN",
+            lastMovedAt: time
+          }))
+        });
+      }
+
+      if (existingItems.length > 0) {
+        const updated = await tx.inventoryItem.updateMany({
+          where: {
+            id: { in: existingItems.map((item) => item.id) },
+            OR: [
+              { ownerType: "SALESPERSON", status: "WITH_SALESPERSON" },
+              { ownerType: "TERMINAL_STORE", status: "SIGNED" }
+            ]
+          },
+          data: {
+            ownerType: "WAREHOUSE",
+            warehouseId: returnWarehouse.id,
+            locationId: returnLocation.id,
+            salespersonId: null,
+            terminalStoreName: null,
+            signedAt: null,
+            status: "IN_STOCK",
+            inboundSource: "TERMINAL_RETURN",
+            lastMovedAt: time
+          }
+        });
+        if (updated.count !== existingItems.length) {
+          throw new Error("部分条码已被其他设备处理，请刷新条码校验后重试");
+        }
+      }
+
+      const persistedItems = await tx.inventoryItem.findMany({
+        where: { barcode: { in: barcodes } },
+        orderBy: { barcode: "asc" }
+      });
+      if (persistedItems.length !== lines.length) throw new Error("退回条码写入不完整，请重试");
+
+      const salespersonIds = Array.from(new Set(
+        existingItems.flatMap((item) => item.salespersonId ? [item.salespersonId] : [])
+      ));
+      const salespersonNames = new Map(
+        (await tx.salesperson.findMany({
           where: { id: { in: salespersonIds } },
           select: { id: true, name: true }
-        })
-      ).map((person) => [person.id, person.name])
-    );
-
-    const updated = await tx.inventoryItem.updateMany({
-      where: {
-        id: { in: items.map((item) => item.id) },
-        ownerType: "SALESPERSON",
-        status: "WITH_SALESPERSON"
-      },
-      data: {
-        ownerType: "WAREHOUSE",
-        warehouseId: returnWarehouse.id,
-        locationId: returnLocation.id,
-        salespersonId: null,
-        status: "IN_STOCK",
-        lastMovedAt: time
+        })).map((person) => [person.id, person.name])
+      );
+      const toLabel = `${returnWarehouse.name} / ${returnLocation.name}`;
+      const goodsQuantities = new Map<string, { quantity: number; pending: number; signed: number; unknown: number }>();
+      for (const item of persistedItems) {
+        const previous = existingByBarcode.get(item.barcode);
+        const count = goodsQuantities.get(item.goodsId) ?? { quantity: 0, pending: 0, signed: 0, unknown: 0 };
+        count.quantity += 1;
+        if (!previous) count.unknown += 1;
+        else if (previous.ownerType === "TERMINAL_STORE") count.signed += 1;
+        else count.pending += 1;
+        goodsQuantities.set(item.goodsId, count);
       }
-    });
-    if (updated.count !== items.length) throw new Error("部分条码已被其他设备处理，请刷新条码校验后重试");
 
-    const persistedItems = await tx.inventoryItem.findMany({
-      where: { id: { in: items.map((item) => item.id) } },
-      orderBy: { barcode: "asc" }
-    });
-    const createdMovements = await tx.stockMovement.createManyAndReturn({
-      data: persistedItems.map((item) => {
-        const previous = itemByBarcode.get(item.barcode)!;
-        return {
-          itemId: item.id,
-          barcode: item.barcode,
-          goodsId: item.goodsId,
-          type: "SALES_RETURN" as const,
-          fromLabel: `销售人员：${salespersonNames.get(previous.salespersonId!) ?? "未知"}`,
-          toLabel,
+      for (const [goodsId, count] of goodsQuantities.entries()) {
+        await adjustWarehouseStock(tx, {
+          warehouseId: returnWarehouse.id,
+          goodsId,
+          quantityChange: count.quantity,
+          type: count.signed > 0 || count.unknown > 0 ? "TERMINAL_RETURN_INBOUND" : "SALES_RETURN",
+          orderKind: "inbound",
+          orderId: order.id,
+          orderNo: order.orderNo,
+          counterparty: returnCounterparty(count),
           operatorName: input.operatorName,
           occurredAt: time,
-          note: "销售退回，仅将条码回流仓库",
-          orderKind: "sales_return",
-          orderId: order.id,
-          orderNo: order.orderNo
-        };
-      })
-    });
-    await tx.salesReturnOrderItem.createMany({
-      data: persistedItems.map((item) => {
-        const previous = itemByBarcode.get(item.barcode)!;
-        return {
-          orderId: order.id,
-          inventoryItemId: item.id,
-          barcode: item.barcode,
-          goodsId: item.goodsId,
-          fromSalespersonId: previous.salespersonId!,
-          beforeOwnerType: "SALESPERSON" as const,
-          beforeWarehouseId: null,
-          beforeLocationId: null,
-          beforeSalespersonId: previous.salespersonId
-        };
-      })
-    });
+          note: "统一退回入库"
+        });
+      }
 
-    return {
-      orderId: order.id,
-      items: persistedItems.map(mapInventoryItem),
-      movements: createdMovements.map(mapStockMovement)
-    };
+      await tx.stockMovement.createMany({
+        data: persistedItems.map((item) => {
+          const previous = existingByBarcode.get(item.barcode);
+          return {
+            itemId: item.id,
+            barcode: item.barcode,
+            goodsId: item.goodsId,
+            type: previous?.ownerType === "SALESPERSON" ? "SALES_RETURN" as const : "TERMINAL_RETURN_INBOUND" as const,
+            fromLabel: returnSourceLabel(previous, salespersonNames),
+            toLabel,
+            operatorName: input.operatorName,
+            occurredAt: time,
+            note: "统一退回入库，不要求生产日期",
+            orderKind: "inbound",
+            orderId: order.id,
+            orderNo: order.orderNo
+          };
+        })
+      });
+
+      await tx.inboundOrderItem.createMany({
+        data: persistedItems.map((item) => {
+          const previous = existingByBarcode.get(item.barcode);
+          return {
+            orderId: order.id,
+            inventoryItemId: item.id,
+            barcode: item.barcode,
+            goodsId: item.goodsId,
+            quantity: 1,
+            beforeOwnerType: previous?.ownerType,
+            beforeWarehouseId: previous?.warehouseId,
+            beforeLocationId: previous?.locationId,
+            beforeSalespersonId: previous?.salespersonId,
+            beforeTerminalStoreName: previous?.terminalStoreName,
+            beforeSignedAt: previous?.signedAt,
+            createdTrackingItem: !previous
+          };
+        })
+      });
+
+      await linkAndReconcileTerminalReceipts(
+        tx,
+        persistedItems.map((item) => ({ id: item.id, barcode: item.barcode }))
+      );
+
+      return {
+        orderId: order.id,
+        quantity: persistedItems.length,
+        pendingCount: existingItems.filter((item) => item.ownerType === "SALESPERSON").length,
+        signedCount: existingItems.filter((item) => item.ownerType === "TERMINAL_STORE").length,
+        newTrackingCount: missingLines.length,
+        items: persistedItems.map((item) => ({ id: item.id, barcode: item.barcode, goodsId: item.goodsId }))
+      };
     }
   );
+}
+
+function normalizeLines(input: SubmitSalesReturnInput) {
+  const source: UnifiedReturnLine[] = input.items ?? (input.barcodes ?? []).map((barcode) => ({ barcode }));
+  const byBarcode = new Map<string, UnifiedReturnLine>();
+  for (const line of source) {
+    const barcode = line.barcode?.trim();
+    if (!barcode) continue;
+    if (!byBarcode.has(barcode)) byBarcode.set(barcode, { barcode, goodsId: line.goodsId || undefined });
+  }
+  return Array.from(byBarcode.values());
+}
+
+function isReturnable(item: { ownerType: string; status: string }) {
+  return (
+    (item.ownerType === "SALESPERSON" && item.status === "WITH_SALESPERSON") ||
+    (item.ownerType === "TERMINAL_STORE" && item.status === "SIGNED")
+  );
+}
+
+function returnSourceLabel(
+  previous: { ownerType: string; salespersonId: string | null; terminalStoreName: string | null } | undefined,
+  salespersonNames: Map<string, string>
+) {
+  if (!previous) return "外部退回（系统首次建档）";
+  if (previous.ownerType === "TERMINAL_STORE") return `终端店铺：${previous.terminalStoreName ?? "未知店铺"}`;
+  return `待签收货物 / 销售人员：${salespersonNames.get(previous.salespersonId ?? "") ?? "未知"}`;
+}
+
+function returnCounterparty(count: { pending: number; signed: number; unknown: number }) {
+  const parts = [];
+  if (count.pending) parts.push(`待签收 ${count.pending} 件`);
+  if (count.signed) parts.push(`已签收 ${count.signed} 件`);
+  if (count.unknown) parts.push(`首次建档 ${count.unknown} 件`);
+  return parts.join("、") || "退回货物";
 }
 
 function makeOrderNo(prefix: string) {
   const random = Math.random().toString(16).slice(2, 8).toUpperCase();
   return `${prefix}${Date.now()}${random}`;
-}
-
-function mapInboundSource(source: DbInboundSource) {
-  if (source === "FACTORY") return "factory";
-  if (source === "TERMINAL_RETURN") return "terminal_return";
-  return "outbound_scan";
-}
-
-function mapOwnerType(type: DbInventoryItem["ownerType"]) {
-  return type === "WAREHOUSE" ? "warehouse" : "salesperson";
-}
-
-function mapItemStatus(status: DbInventoryItem["status"]) {
-  if (status === "IN_STOCK") return "in_stock";
-  if (status === "WITH_SALESPERSON") return "with_salesperson";
-  if (status === "WRITTEN_OFF") return "written_off";
-  return "voided";
-}
-
-function mapMovementType(type: DbMovementType): MovementType {
-  const movementTypes: Record<DbMovementType, MovementType> = {
-    FACTORY_INBOUND: "factory_inbound",
-    TERMINAL_RETURN_INBOUND: "terminal_return_inbound",
-    TRANSFER: "transfer",
-    SALES_OUTBOUND: "sales_outbound",
-    SALES_RETURN: "sales_return",
-    ORDER_REVERSAL: "order_reversal",
-    BARCODE_CORRECTION: "barcode_correction",
-    WRITE_OFF: "write_off",
-    MANUAL_ADJUSTMENT: "manual_adjustment"
-  };
-
-  return movementTypes[type];
-}
-
-function formatDate(date: Date | null) {
-  return date ? date.toISOString().slice(0, 10) : undefined;
-}
-
-function formatDateTime(date: Date) {
-  return formatAppDateTime(date);
-}
-
-function mapInventoryItem(item: DbInventoryItem): InventoryItem {
-  return {
-    id: item.id,
-    barcode: item.barcode,
-    goodsId: item.goodsId,
-    ownerType: mapOwnerType(item.ownerType),
-    warehouseId: item.warehouseId ?? undefined,
-    locationId: item.locationId ?? undefined,
-    salespersonId: item.salespersonId ?? undefined,
-    status: mapItemStatus(item.status),
-    productionDate: formatDate(item.productionDate),
-    shelfLifeDate: formatDate(item.shelfLifeDate),
-    inboundSource: mapInboundSource(item.inboundSource),
-    lastMovedAt: formatDateTime(item.lastMovedAt)
-  };
-}
-
-function mapStockMovement(movement: DbStockMovement): StockMovement {
-  return {
-    id: movement.id,
-    itemId: movement.itemId,
-    barcode: movement.barcode,
-    goodsId: movement.goodsId,
-    type: mapMovementType(movement.type),
-    fromLabel: movement.fromLabel,
-    toLabel: movement.toLabel,
-    operator: movement.operatorName,
-    occurredAt: formatDateTime(movement.occurredAt),
-    note: movement.note
-  };
 }

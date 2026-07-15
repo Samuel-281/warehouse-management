@@ -14,11 +14,11 @@ export async function POST(request: Request) {
     await logOperation({
       user,
       request,
-      action: "SALES_RETURN_CREATE",
-      targetType: "SALES_RETURN_ORDER",
+      action: "RETURN_INBOUND_CREATE",
+      targetType: "INBOUND_ORDER",
       targetId: data.orderId,
       result: "SUCCESS",
-      detail: `barcodes=${data.items.length};replay=${idempotentReplay}`
+      detail: `barcodes=${data.items.length};pending=${data.pendingCount};signed=${data.signedCount};new=${data.newTrackingCount};replay=${idempotentReplay}`
     });
     return ok(data, {
       status: idempotentReplay ? 200 : 201,
@@ -28,8 +28,8 @@ export async function POST(request: Request) {
     await logOperation({
       user,
       request,
-      action: "SALES_RETURN_CREATE",
-      targetType: "SALES_RETURN_ORDER",
+      action: "RETURN_INBOUND_CREATE",
+      targetType: "INBOUND_ORDER",
       result: "FAILURE",
       detail: error instanceof Error ? error.message : undefined
     });

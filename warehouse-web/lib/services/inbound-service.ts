@@ -2,6 +2,7 @@ import { getPrisma } from "@/lib/db";
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { runIdempotentTransaction } from "@/lib/services/idempotency-service";
 import { adjustWarehouseStock } from "@/lib/services/warehouse-stock-service";
+import { submitSalesReturn } from "@/lib/services/sales-return-service";
 import { addYears, formatAppDateTime } from "@/lib/warehouse-utils";
 import type { InboundSource, InventoryItem, MovementType, StockMovement, TrackingSource } from "@/lib/types";
 
@@ -12,11 +13,13 @@ type DbInventoryItem = {
   id: string;
   barcode: string;
   goodsId: string;
-  ownerType: "WAREHOUSE" | "SALESPERSON";
+  ownerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE";
   warehouseId: string | null;
   locationId: string | null;
   salespersonId: string | null;
-  status: "IN_STOCK" | "WITH_SALESPERSON" | "WRITTEN_OFF" | "VOIDED";
+  terminalStoreName: string | null;
+  signedAt: Date | null;
+  status: "IN_STOCK" | "WITH_SALESPERSON" | "SIGNED" | "RECEIPT_EXCEPTION" | "WRITTEN_OFF" | "VOIDED";
   productionDate: Date | null;
   shelfLifeDate: Date | null;
   inboundSource: DbInboundSource;
@@ -64,14 +67,19 @@ export async function submitInbound(input: SubmitInboundInput) {
   assertBarcodeBatchLimit(barcodes);
   const quantity = normalizeQuantity(input.quantity ?? (input.source === "terminal_return" ? barcodes.length : 0));
 
+  if (input.source === "terminal_return") {
+    return submitSalesReturn({
+      returnWarehouseId: input.warehouseId,
+      returnLocationId: input.locationId,
+      items: barcodes.map((barcode) => ({ barcode, goodsId: input.goodsId })),
+      operatorName: input.operatorName,
+      operatorUserId: input.operatorUserId,
+      clientRequestId: input.clientRequestId
+    });
+  }
+
   if (input.source === "factory" && quantity <= 0) {
     throw new Error("厂家到货入库数量必须为正整数");
-  }
-  if (input.source === "terminal_return" && barcodes.length === 0) {
-    throw new Error("请先扫描或录入退换货条码");
-  }
-  if (input.source === "terminal_return" && !input.productionDate) {
-    throw new Error("终端店铺退换货入库必须登记生产日期");
   }
 
   const prisma = getPrisma();

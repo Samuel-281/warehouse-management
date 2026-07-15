@@ -121,7 +121,7 @@ export function TerminalReceiptView({
         tone: "success",
         message: result.replayed
           ? `该文件已导入过，本次没有重复写入数据`
-          : `签收记录已导入 ${result.importedRows} 条，匹配条码 ${result.matchedRows} 条`
+          : `签收记录已导入 ${result.importedRows} 条，匹配 ${result.matchedRows} 条，异常 ${result.conflictRows} 条`
       });
       selectFile();
       if (inputRef.current) inputRef.current.value = "";
@@ -168,7 +168,7 @@ export function TerminalReceiptView({
               </span>
               <div>
                 <h2 className="text-sm font-semibold text-ink">终端签收关联</h2>
-                <p className="mt-0.5 text-xs text-muted">按唯一箱码关联收货单位，不改变库存数量和条码当前归属</p>
+                <p className="mt-0.5 text-xs text-muted">按唯一箱码更新终端店铺归属；仓库数量账不会因此增减</p>
               </div>
             </div>
           </div>
@@ -266,7 +266,7 @@ export function TerminalReceiptView({
                     </td>
                     <td className="table-cell text-slate-600">
                       <p>匹配 {item.matchedRows} 条</p>
-                      <p className="mt-1 text-xs text-amber-700">未匹配 {item.unmatchedRows} 条</p>
+                      <p className="mt-1 text-xs text-amber-700">未匹配 {item.unmatchedRows} 条 · 异常 {item.conflictRows} 条</p>
                     </td>
                     <td className="table-cell text-slate-600">{item.operatorName}</td>
                   </tr>
@@ -372,7 +372,7 @@ function SyncRunLine({ run }: { run: TerminalReceiptSyncRun }) {
       <span className={`font-semibold ${tone}`}>{label}</span>
       <span className="text-muted">{run.trigger === "manual" ? "手动" : "自动"} · {run.exportStartDate} 至 {run.exportEndDate}</span>
       {run.status === "success" ? (
-        <span className="text-slate-600">新增 {run.importedRows} · 重复 {run.duplicateRows} · 匹配 {run.matchedRows} · 未匹配 {run.unmatchedRows}</span>
+        <span className="text-slate-600">新增 {run.importedRows} · 重复 {run.duplicateRows} · 匹配 {run.matchedRows} · 未匹配 {run.unmatchedRows} · 异常 {run.conflictRows}</span>
       ) : null}
       {run.errorMessage ? <span className="text-red-700">{run.errorMessage}</span> : null}
     </div>
@@ -393,10 +393,11 @@ function ReceiptPreview({
   const previewTotal = preview.rows.length;
   return (
     <div className="border-t border-slate-200">
-      <div className="grid grid-cols-2 gap-px bg-slate-200 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-px bg-slate-200 md:grid-cols-6">
         <PreviewMetric label="文件记录" value={preview.totalRows} tone="neutral" />
         <PreviewMetric label="匹配条码" value={preview.matchedRows} tone="success" />
         <PreviewMetric label="尚未匹配" value={preview.unmatchedRows} tone="warning" />
+        <PreviewMetric label="签收异常" value={preview.conflictRows} tone="error" />
         <PreviewMetric label="重复跳过" value={preview.duplicateRows} tone="neutral" />
         <PreviewMetric label="格式错误" value={preview.invalidRows} tone="error" />
       </div>
@@ -404,7 +405,7 @@ function ReceiptPreview({
       <div className="flex items-start gap-2 border-y border-slate-200 bg-sky-50 px-4 py-2.5 text-xs text-sky-900">
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <p>
-          未匹配记录仍可导入，条码以后进入仓库系统时可以继续关联。格式错误行必须先修正；重复记录不会再次写入。
+          未匹配记录仍可导入，条码以后进入仓库系统时可以继续关联。签收异常会保留供核对，但不会改变当前归属或库存。格式错误行必须先修正；重复记录不会再次写入。
           {preview.previewTruncated ? ` 当前仅展示前 ${preview.rows.length} 行预览。` : ""}
         </p>
       </div>
@@ -467,6 +468,7 @@ function PreviewMetric({ label, value, tone }: { label: string; value: number; t
 function ReceiptStatus({ status }: { status: TerminalReceiptPreviewRow["status"] }) {
   if (status === "matched") return <StatusBadge label="匹配成功" />;
   if (status === "unmatched") return <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700"><AlertCircle className="h-3.5 w-3.5" />尚未匹配</span>;
+  if (status === "conflict") return <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-700"><XCircle className="h-3.5 w-3.5" />签收异常</span>;
   if (status === "duplicate") return <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500"><CheckCircle2 className="h-3.5 w-3.5" />重复跳过</span>;
   return <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-700"><XCircle className="h-3.5 w-3.5" />格式错误</span>;
 }

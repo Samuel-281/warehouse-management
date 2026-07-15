@@ -162,6 +162,8 @@ const emptyInventorySummary: InventorySummary = {
   totalItems: 0,
   inStock: 0,
   withSales: 0,
+  signed: 0,
+  receiptExceptions: 0,
   writtenOff: 0,
   totalWarehouseQuantity: 0,
   warehouseStocks: [],
@@ -243,6 +245,7 @@ export default function WarehousePrototype() {
   const [returnBarcodeInput, setReturnBarcodeInput] = useState("");
   const [returnBarcodes, setReturnBarcodes] = useState<string[]>([]);
   const [returnBarcodeReviews, setReturnBarcodeReviews] = useState<BarcodeReviewMap>({});
+  const [returnUnknownGoodsId, setReturnUnknownGoodsId] = useState("goods-hj-001");
 
   const [inventoryFilters, setInventoryFilters] = useState<InventoryFilters>({
     keyword: "",
@@ -681,7 +684,7 @@ export default function WarehousePrototype() {
     const timer = window.setTimeout(() => {
       void refreshBarcodeReviews(
         {
-          mode: "sales_return",
+          mode: "terminal_return_inbound",
           barcodes
         },
         setReturnBarcodeReviews
@@ -889,31 +892,37 @@ export default function WarehousePrototype() {
   async function submitSalesReturn() {
     const barcodes = uniqueBarcodes(returnBarcodes);
     if (barcodes.length === 0) {
-      showResultDialog({ tone: "error", title: "销售退回未提交", message: "请先扫描或录入销售人员名下条码" });
+      showResultDialog({ tone: "error", title: "退回未提交", message: "请先扫描或录入退回条码" });
+      return;
+    }
+    if (!state.goods.some((goods) => goods.id === returnUnknownGoodsId && goods.status === "enabled")) {
+      showResultDialog({ tone: "error", title: "退回未提交", message: "请选择未建档条码对应的货物" });
       return;
     }
 
     try {
       await validateBarcodeList(
         {
-          mode: "sales_return",
+          mode: "terminal_return_inbound",
           barcodes
         },
-        "请先扫描或录入销售人员名下条码",
+        "请先扫描或录入退回条码",
         setReturnBarcodeReviews
       );
-      const result = await postJson<{ items: InventoryItem[]; movements: StockMovement[] }>("/api/sales-return", {
+      const result = await postJson<{
+        items: Array<{ id: string; barcode: string; goodsId: string }>;
+        quantity: number;
+        pendingCount: number;
+        signedCount: number;
+        newTrackingCount: number;
+      }>("/api/sales-return", {
         clientRequestId: submissionRequestId(salesReturnSubmitRequestRef),
         returnWarehouseId,
         returnLocationId,
-        barcodes,
+        items: barcodes.map((barcode) => ({ barcode, goodsId: returnUnknownGoodsId })),
         operatorName: currentUser?.displayName ?? operator
       });
 
-      setState((previous) => ({
-        ...previous,
-        movements: [...result.movements, ...previous.movements].slice(0, 8)
-      }));
       await loadDashboardSummary();
       setReturnBarcodes([]);
       setReturnBarcodeReviews({});
@@ -921,18 +930,18 @@ export default function WarehousePrototype() {
       salesReturnSubmitRequestRef.current = null;
       showResultDialog({
         tone: "success",
-        title: "销售退回成功",
-        message: `已退回 ${result.items.length} 件货物，未修改生产日期或保质期`
+        title: "退回入库成功",
+        message: `共 ${result.quantity} 件：待签收 ${result.pendingCount} 件、已签收 ${result.signedCount} 件、首次建档 ${result.newTrackingCount} 件`
       });
     } catch (error) {
       const uncertain = submissionOutcomeIsUncertain(error);
       if (!uncertain) salesReturnSubmitRequestRef.current = null;
       showResultDialog({
         tone: "error",
-        title: uncertain ? "销售退回结果待确认" : "销售退回失败",
+        title: uncertain ? "退回结果待确认" : "退回失败",
         message: uncertain
-          ? `${handleRequestError(error, "暂时无法确认销售退回结果")}。请保持当前表单并再次点击提交，系统不会重复记账。`
-          : handleRequestError(error, "销售退回提交失败")
+          ? `${handleRequestError(error, "暂时无法确认退回结果")}。请保持当前表单并再次点击提交，系统不会重复记账。`
+          : handleRequestError(error, "退回提交失败")
       });
     }
   }
@@ -1161,6 +1170,8 @@ export default function WarehousePrototype() {
                 if (nextBarcodes.length === 0) setReturnBarcodeReviews({});
               }}
               returnBarcodeReviews={returnBarcodeReviews}
+              returnUnknownGoodsId={returnUnknownGoodsId}
+              setReturnUnknownGoodsId={setReturnUnknownGoodsId}
               addReturnBarcode={(input) =>
                 addBarcode(input, returnBarcodes, setReturnBarcodeInput, setReturnBarcodes)
               }
@@ -1408,8 +1419,8 @@ function DashboardView({
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="仓库当前库存" value={summary.totalWarehouseQuantity} detail="各仓库商品数量合计" icon={Boxes} />
         <MetricCard label="可追踪条码" value={summary.totalItems} detail="系统中已建档条码" icon={Barcode} />
-        <MetricCard label="销售人员名下" value={summary.withSales} detail="已销售出库待回流条码" icon={Users} />
-        <MetricCard label="货物资料" value={state.goods.length} detail={`${state.warehouses.length} 个仓库可用`} icon={Building2} />
+        <MetricCard label="待签收" value={summary.withSales} detail="已出库、尚未取得勤策签收" icon={Users} />
+        <MetricCard label="已签收" value={summary.signed} detail="当前归属终端店铺" icon={Building2} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
@@ -1476,14 +1487,18 @@ function DashboardView({
               <p className="mt-1 text-2xl font-semibold text-ink">{summary.totalItems.toLocaleString("zh-CN")} 条</p>
             </div>
             <div className="rounded-md border border-slate-200 p-3">
-              <p className="text-xs text-muted">销售人员名下</p>
+              <p className="text-xs text-muted">待签收</p>
               <p className="mt-1 text-2xl font-semibold text-ink">{summary.withSales.toLocaleString("zh-CN")} 条</p>
+            </div>
+            <div className="rounded-md border border-slate-200 p-3">
+              <p className="text-xs text-muted">已签收至终端店铺</p>
+              <p className="mt-1 text-2xl font-semibold text-ink">{summary.signed.toLocaleString("zh-CN")} 条</p>
             </div>
           </div>
           {salespersonRows.length > 0 ? (
             <div className="mt-4 rounded-md border border-slate-200">
               <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
-                <span className="text-sm font-semibold text-slate-700">销售人员持有</span>
+                <span className="text-sm font-semibold text-slate-700">按出库销售人员统计待签收</span>
                 <span className="text-xs text-muted">最多显示 6 条高度，可滚动</span>
               </div>
               <div className="max-h-[324px] divide-y divide-slate-200 overflow-y-auto">
@@ -1511,7 +1526,7 @@ function DashboardView({
                 <DashboardAction
                   icon={Undo2}
                   title="退回入库"
-                  description="销售退回、终端店铺退换货"
+                  description="待签收、已签收和未建档货物统一回仓"
                   onClick={() => {
                     setInboundBranch("sales_return");
                     setActiveView("inbound");
@@ -2207,16 +2222,6 @@ function MastersView({
               <Users className="h-4 w-4" />
               新增销售人员
             </button>
-            <button
-              className="secondary-button"
-              onClick={() => {
-                setMasterDialogError("");
-                setCreatingMaster("store");
-              }}
-            >
-              <Building2 className="h-4 w-4" />
-              新增终端店铺
-            </button>
           </div>
         </div>
       </section>
@@ -2545,29 +2550,6 @@ function MastersView({
             />
           ])}
         />
-        <MasterTable
-          title="终端店铺"
-          icon={Building2}
-          headers={["店铺", "联系人", "电话", "地址", "状态", "操作"]}
-          rows={state.terminalStores.map((item) => [
-            item.name,
-            item.contact,
-            item.phone,
-            item.address,
-            <StatusBadge key={`${item.id}-status`} label={item.status === "enabled" ? "启用" : "停用"} />,
-            <MasterActions
-              key={`${item.id}-actions`}
-              status={item.status}
-              onEdit={() => setEditingStore(item)}
-              onToggle={() => toggleMasterStatus("terminalStores", "/api/terminal-stores", item)}
-              onDelete={
-                canDeleteMasterData
-                  ? () => deleteMasterRecord("terminalStores", "/api/terminal-stores", item.id, item.name)
-                  : undefined
-              }
-            />
-          ])}
-        />
       </div>
     </div>
   );
@@ -2803,13 +2785,14 @@ function InboundView(props: {
   returnBarcodes: string[];
   setReturnBarcodes: (value: string[]) => void;
   returnBarcodeReviews: BarcodeReviewMap;
+  returnUnknownGoodsId: string;
+  setReturnUnknownGoodsId: (value: string) => void;
   addReturnBarcode: (input: string) => void;
   submitSalesReturn: () => void;
 }) {
   const branchOptions = [
     { value: "factory", label: "厂家到货" },
-    { value: "sales_return", label: "销售退回" },
-    { value: "terminal_return", label: "终端店铺退换货" }
+    { value: "sales_return", label: "退回入库" }
   ];
   if (props.inboundBranch === "sales_return") {
     return (
@@ -2822,6 +2805,8 @@ function InboundView(props: {
         returnBarcodes={props.returnBarcodes}
         setReturnBarcodes={props.setReturnBarcodes}
         returnBarcodeReviews={props.returnBarcodeReviews}
+        returnUnknownGoodsId={props.returnUnknownGoodsId}
+        setReturnUnknownGoodsId={props.setReturnUnknownGoodsId}
         addBarcode={props.addReturnBarcode}
         submitSalesReturn={props.submitSalesReturn}
         branchSelector={
@@ -3242,12 +3227,15 @@ function SalesReturnView(props: {
   returnBarcodes: string[];
   setReturnBarcodes: (value: string[]) => void;
   returnBarcodeReviews: BarcodeReviewMap;
+  returnUnknownGoodsId: string;
+  setReturnUnknownGoodsId: (value: string) => void;
   addBarcode: (input: string) => void;
   submitSalesReturn: () => void;
   branchSelector?: ReactNode;
 }) {
   const enabledWarehouses = props.state.warehouses.filter((warehouse) => warehouse.status === "enabled");
   const returnWarehouse = enabledWarehouses.find((warehouse) => warehouse.id === props.returnWarehouseId);
+  const enabledGoods = props.state.goods.filter((goods) => goods.status === "enabled");
   const validReturnCount = props.returnBarcodes.length;
   const reviewReturnBarcode = (barcode: string): BarcodeReview => {
     const review = props.returnBarcodeReviews[barcode];
@@ -3256,7 +3244,7 @@ function SalesReturnView(props: {
     return {
       tone: "neutral",
       label: "校验中",
-      detail: "正在确认条码是否在销售人员名下"
+      detail: "正在确认条码是待签收、已签收还是尚未建档"
     };
   };
   const invalidBarcodeCount = countInvalidReviews(props.returnBarcodes, reviewReturnBarcode);
@@ -3281,11 +3269,11 @@ function SalesReturnView(props: {
     <div className="space-y-4">
       <OperationPageHeader
         icon={Undo2}
-        eyebrow={props.branchSelector ? "入库管理" : "销售退回"}
-        title={props.branchSelector ? "销售退回入库" : "未售完货物回流仓库"}
+        eyebrow="入库管理"
+        title="统一退回入库"
         summary={[
           { label: "回流仓库", value: returnWarehouse?.name ?? "未选择" },
-          { label: "销售人员名下", value: "按库存查询查看" },
+          { label: "可退回来源", value: "待签收 / 已签收 / 未建档" },
           { label: "待退回条码", value: `${props.returnBarcodes.length} 件` }
         ]}
       />
@@ -3301,10 +3289,16 @@ function SalesReturnView(props: {
               options={enabledWarehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
             />
             <ReadOnlyField label="条码校验" value={`${validReturnCount} / ${props.returnBarcodes.length} 可退回`} />
+            <FieldSelect
+              label="未建档条码默认货物"
+              value={props.returnUnknownGoodsId}
+              onChange={props.setReturnUnknownGoodsId}
+              options={enabledGoods.map((goods) => ({ value: goods.id, label: `${goods.name} / ${goods.spec}` }))}
+            />
           </div>
 
           <RoutePreview
-            from="销售人员名下"
+            from="待签收 / 已签收 / 外部退货"
             fromMeta="当前归属"
             to={returnWarehouse?.name ?? "未选择"}
             toMeta="回流仓库"
@@ -3312,21 +3306,21 @@ function SalesReturnView(props: {
 
           <BusinessRuleStrip
             tone="neutral"
-            title="销售退回规则"
-            detail="销售退回作为入库分支展示，但业务规则独立：仅把销售人员名下未售完条码回流到仓库，不记录终端店铺、生产日期，也不重新计算保质期。"
+            title="统一退回规则"
+            detail="待签收货物、勤策已签收货物和未建档外部退货可在同一窗口处理；不填写终端店铺或生产日期。未建档条码使用上方默认货物。"
           />
         </OperationPanel>
 
         <OperationPanel step="2" icon={ScanLine} title="条码录入与提交">
           <BarcodeCollector
             title="退回条码"
-            description="条码归属将从销售人员名下回到仓库"
+            description="系统自动识别条码当前归属并统一回仓"
             input={props.returnBarcodeInput}
             setInput={props.setReturnBarcodeInput}
             barcodes={props.returnBarcodes}
             setBarcodes={props.setReturnBarcodes}
             onAdd={props.addBarcode}
-            placeholder="扫描或输入销售人员名下条码，如 XS202605290001"
+            placeholder="扫描或输入退回条码"
             reviewBarcode={reviewReturnBarcode}
           />
           <OperationSubmitBar

@@ -24,11 +24,14 @@ enum OrderStatus {
 enum OwnerType {
   WAREHOUSE
   SALESPERSON
+  TERMINAL_STORE
 }
 
 enum ItemStatus {
   IN_STOCK
   WITH_SALESPERSON
+  SIGNED
+  RECEIPT_EXCEPTION
   WRITTEN_OFF
   VOIDED
 }
@@ -59,6 +62,7 @@ enum MovementType {
 enum ReceiptMatchStatus {
   MATCHED
   UNMATCHED
+  CONFLICT
 }
 
 enum TerminalReceiptSyncTrigger {
@@ -280,6 +284,8 @@ model InventoryItem {
   warehouseId    String?       @db.Uuid
   locationId     String?       @db.Uuid
   salespersonId  String?       @db.Uuid
+  terminalStoreName String?
+  signedAt       DateTime?
   status         ItemStatus
   productionDate DateTime?     @db.Date
   shelfLifeDate  DateTime?     @db.Date
@@ -305,6 +311,8 @@ model InventoryItem {
   @@index([lastMovedAt])
   @@index([ownerType, warehouseId, lastMovedAt])
   @@index([ownerType, salespersonId, lastMovedAt])
+  @@index([ownerType, terminalStoreName, lastMovedAt])
+  @@index([status, lastMovedAt])
   @@index([goodsId, lastMovedAt])
   @@map("inventory_items")
 }
@@ -317,6 +325,7 @@ model TerminalReceiptImport {
   importedRows   Int
   matchedRows    Int
   unmatchedRows  Int
+  conflictRows   Int      @default(0)
   duplicateRows  Int
   invalidRows    Int
   operatorName   String
@@ -344,6 +353,7 @@ model TerminalReceiptSyncRun {
   importedRows       Int                       @default(0)
   matchedRows        Int                       @default(0)
   unmatchedRows      Int                       @default(0)
+  conflictRows       Int                       @default(0)
   duplicateRows      Int                       @default(0)
   invalidRows        Int                       @default(0)
   operatorName       String
@@ -502,6 +512,8 @@ model InboundOrderItem {
   beforeWarehouseId String? @db.Uuid
   beforeLocationId String? @db.Uuid
   beforeSalespersonId String? @db.Uuid
+  beforeTerminalStoreName String?
+  beforeSignedAt DateTime?
   createdTrackingItem Boolean @default(false)
 
   order         InboundOrder @relation(fields: [orderId], references: [id])
@@ -559,6 +571,8 @@ model OutboundOrderItem {
   beforeWarehouseId String? @db.Uuid
   beforeLocationId String? @db.Uuid
   beforeSalespersonId String? @db.Uuid
+  beforeTerminalStoreName String?
+  beforeSignedAt DateTime?
   createdTrackingItem Boolean @default(false)
 
   order         OutboundOrder @relation(fields: [orderId], references: [id])
@@ -609,6 +623,8 @@ model SalesReturnOrderItem {
   beforeWarehouseId String? @db.Uuid
   beforeLocationId String? @db.Uuid
   beforeSalespersonId String? @db.Uuid
+  beforeTerminalStoreName String?
+  beforeSignedAt DateTime?
 
   order           SalesReturnOrder @relation(fields: [orderId], references: [id])
   inventoryItem   InventoryItem    @relation(fields: [inventoryItemId], references: [id])

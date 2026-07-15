@@ -166,9 +166,9 @@ async function loadListSummaries(references: OrderReference[]): Promise<OrderSum
         id: order.id,
         orderNo: order.orderNo,
         kind: "inbound",
-        businessType: order.source === "FACTORY" ? "厂家到货入库" : "终端店铺退换货入库",
+        businessType: order.source === "FACTORY" ? "厂家到货入库" : "退回入库",
         primaryTarget: `${order.warehouse.name} / ${order.location.name}`,
-        counterparty: order.source === "TERMINAL_RETURN" ? order.terminalStore?.name ?? "终端店铺" : "厂家到货",
+        counterparty: order.source === "TERMINAL_RETURN" ? order.terminalStore?.name ?? "自动识别退回来源" : "厂家到货",
         operator: order.operatorName,
         createdAt: formatDateTime(order.createdAt),
         itemCount: aggregate.itemCount,
@@ -205,7 +205,7 @@ async function loadListSummaries(references: OrderReference[]): Promise<OrderSum
         id: order.id,
         orderNo: order.orderNo,
         kind: "sales_return",
-        businessType: "销售退回",
+        businessType: "退回入库（历史）",
         primaryTarget: `${order.returnWarehouse.name} / ${order.returnLocation.name}`,
         counterparty: aggregate.counterparty ? `原销售人员：${aggregate.counterparty}` : "原销售人员：未知",
         operator: order.operatorName,
@@ -359,9 +359,9 @@ async function loadSummaries(references: OrderReference[]): Promise<OrderSummary
         id: order.id,
         orderNo: order.orderNo,
         kind: "inbound",
-        businessType: order.source === "FACTORY" ? "厂家到货入库" : "终端店铺退换货入库",
+        businessType: order.source === "FACTORY" ? "厂家到货入库" : "退回入库",
         primaryTarget: `${order.warehouse.name} / ${order.location.name}`,
-        counterparty: order.source === "TERMINAL_RETURN" ? order.terminalStore?.name ?? "终端店铺" : "厂家到货",
+        counterparty: order.source === "TERMINAL_RETURN" ? order.terminalStore?.name ?? "自动识别退回来源" : "厂家到货",
         operator: order.operatorName,
         createdAt: formatDateTime(order.createdAt),
         itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
@@ -398,7 +398,7 @@ async function loadSummaries(references: OrderReference[]): Promise<OrderSummary
         id: order.id,
         orderNo: order.orderNo,
         kind: "sales_return",
-        businessType: "销售退回",
+        businessType: "退回入库（历史）",
         primaryTarget: `${order.returnWarehouse.name} / ${order.returnLocation.name}`,
         counterparty: summarizeSalespeople(order.items.map((item) => item.fromSalesperson.name)),
         operator: order.operatorName,
@@ -549,7 +549,7 @@ function summarizeBarcodes(barcodes: string[]) {
 function formatOrderKind(kind: OrderKind) {
   if (kind === "inbound") return "入库单";
   if (kind === "outbound") return "出库单";
-  return "销售退回单";
+  return "历史退回单";
 }
 
 function formatDateTime(date: Date) {

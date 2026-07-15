@@ -4,10 +4,15 @@ import { ApiError } from "@/lib/api-response";
 import { getPrisma } from "@/lib/db";
 import {
   downloadQinceTerminalReceipts,
-  qinceOpenApiConfigured
 } from "@/lib/services/qince-terminal-receipt-client";
 import { logOperation } from "@/lib/services/operation-log-service";
 import { importTerminalReceipts } from "@/lib/services/terminal-receipt-service";
+import {
+  BROWSER_CONNECTOR_PENDING,
+  BROWSER_CONNECTOR_PROCESSING_PREFIX,
+  assertTerminalReceiptSyncConfigured,
+  getTerminalReceiptSyncMode
+} from "@/lib/services/terminal-receipt-sync-config";
 import type { TerminalReceiptSyncOverview, TerminalReceiptSyncRun } from "@/lib/types";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 
@@ -30,11 +35,14 @@ export async function getTerminalReceiptSyncOverview(limit = 10): Promise<Termin
       select: { logicalEndAt: true }
     })
   ]);
+  const mode = getTerminalReceiptSyncMode();
   return {
-    configured: qinceOpenApiConfigured(),
-    configurationMessage: qinceOpenApiConfigured()
-      ? "已连接勤策 OpenAPI"
-      : "需要配置勤策 OpenAPI 的 OpenID、AppKey，并授权扫码结果明细查询接口",
+    configured: mode !== "unconfigured",
+    configurationMessage: mode === "browser_connector"
+      ? "浏览器连接器已启用；Chrome 登录勤策后会自动领取待同步任务"
+      : mode === "openapi"
+        ? "已连接勤策 OpenAPI"
+        : "需要配置勤策浏览器连接器；Excel 手工导入仍可正常使用",
     running: runs.some((run) => run.status === "RUNNING"),
     lastSuccessfulCutoff: lastSuccess ? formatAppDateTime(lastSuccess.logicalEndAt) : undefined,
     nextScheduledAt: formatAppDateTime(nextMondayStart(new Date())),
@@ -51,7 +59,11 @@ export async function createTerminalReceiptSyncRun(input: {
   const prisma = getPrisma();
   const now = input.now ?? new Date();
   await prisma.terminalReceiptSyncRun.updateMany({
-    where: { status: "RUNNING", startedAt: { lt: new Date(now.getTime() - STALE_RUN_MS) } },
+    where: {
+      status: "RUNNING",
+      startedAt: { lt: new Date(now.getTime() - STALE_RUN_MS) },
+      NOT: { externalTaskKey: BROWSER_CONNECTOR_PENDING }
+    },
     data: {
       status: "FAILURE",
       finishedAt: now,
@@ -60,6 +72,7 @@ export async function createTerminalReceiptSyncRun(input: {
   });
 
   const window = await buildSyncWindow(input.trigger, now);
+  const syncMode = getTerminalReceiptSyncMode();
   try {
     const run = await prisma.terminalReceiptSyncRun.create({
       data: {
@@ -69,7 +82,8 @@ export async function createTerminalReceiptSyncRun(input: {
         logicalEndAt: window.logicalEndAt,
         exportStartDate: dateOnlyAsUtc(window.exportStartDate),
         exportEndDate: dateOnlyAsUtc(window.exportEndDate),
-        operatorName: input.operatorName
+        operatorName: input.operatorName,
+        externalTaskKey: syncMode === "browser_connector" ? BROWSER_CONNECTOR_PENDING : undefined
       }
     });
     return mapSyncRun(run);
@@ -119,6 +133,7 @@ export async function executeTerminalReceiptSync(
         importedRows: replayed ? 0 : summary.importedRows,
         matchedRows: replayed ? 0 : summary.matchedRows,
         unmatchedRows: replayed ? 0 : summary.unmatchedRows,
+        conflictRows: replayed ? 0 : summary.conflictRows,
         duplicateRows: replayed ? summary.totalRows : summary.duplicateRows,
         invalidRows: summary.invalidRows
       }
@@ -129,7 +144,7 @@ export async function executeTerminalReceiptSync(
       targetType: "TERMINAL_RECEIPT_SYNC",
       targetId: run.id,
       result: "SUCCESS",
-      detail: `trigger=${run.trigger};range=${formatDateOnly(run.exportStartDate)}~${formatDateOnly(run.exportEndDate)};imported=${replayed ? 0 : summary.importedRows};matched=${replayed ? 0 : summary.matchedRows};unmatched=${replayed ? 0 : summary.unmatchedRows};duplicates=${replayed ? summary.totalRows : summary.duplicateRows}`
+      detail: `trigger=${run.trigger};range=${formatDateOnly(run.exportStartDate)}~${formatDateOnly(run.exportEndDate)};imported=${replayed ? 0 : summary.importedRows};matched=${replayed ? 0 : summary.matchedRows};unmatched=${replayed ? 0 : summary.unmatchedRows};conflicts=${replayed ? 0 : summary.conflictRows};duplicates=${replayed ? summary.totalRows : summary.duplicateRows}`
     });
     return mapSyncRun(completed);
   } catch (error) {
@@ -151,12 +166,39 @@ export async function executeTerminalReceiptSync(
 }
 
 export async function runScheduledTerminalReceiptSync(now = new Date()) {
+  const mode = assertTerminalReceiptSyncConfigured();
   const run = await createTerminalReceiptSyncRun({
     trigger: "SCHEDULED",
     operatorName: "系统自动同步",
     now
   });
-  return executeTerminalReceiptSync(run.id);
+  return mode === "browser_connector" ? run : executeTerminalReceiptSync(run.id);
+}
+
+export async function failTerminalReceiptSync(runId: string, error: unknown) {
+  const prisma = getPrisma();
+  const run = await prisma.terminalReceiptSyncRun.findUnique({ where: { id: runId } });
+  if (!run) throw new ApiError("签收同步任务不存在", 404);
+  if (run.status !== "RUNNING") return mapSyncRun(run);
+  const message = safeErrorMessage(error);
+  const failed = await prisma.terminalReceiptSyncRun.update({
+    where: { id: run.id },
+    data: { status: "FAILURE", finishedAt: new Date(), errorMessage: message }
+  });
+  await logOperation({
+    username: run.trigger === "SCHEDULED" ? "system" : run.operatorName,
+    action: "TERMINAL_RECEIPT_SYNC",
+    targetType: "TERMINAL_RECEIPT_SYNC",
+    targetId: run.id,
+    result: "FAILURE",
+    detail: `trigger=${run.trigger};range=${formatDateOnly(run.exportStartDate)}~${formatDateOnly(run.exportEndDate)};error=${message}`
+  });
+  return mapSyncRun(failed);
+}
+
+export function isBrowserConnectorRun(value: { externalTaskKey: string | null }) {
+  return value.externalTaskKey === BROWSER_CONNECTOR_PENDING ||
+    value.externalTaskKey?.startsWith(BROWSER_CONNECTOR_PROCESSING_PREFIX) === true;
 }
 
 async function buildSyncWindow(trigger: SyncTrigger, now: Date) {
@@ -252,6 +294,7 @@ async function finishEmptySyncRun(
       importedRows: 0,
       matchedRows: 0,
       unmatchedRows: 0,
+      conflictRows: 0,
       duplicateRows: 0,
       invalidRows: 0
     }
@@ -280,6 +323,7 @@ function mapSyncRun(value: {
   importedRows: number;
   matchedRows: number;
   unmatchedRows: number;
+  conflictRows: number;
   duplicateRows: number;
   invalidRows: number;
   operatorName: string;
@@ -300,6 +344,7 @@ function mapSyncRun(value: {
     importedRows: value.importedRows,
     matchedRows: value.matchedRows,
     unmatchedRows: value.unmatchedRows,
+    conflictRows: value.conflictRows,
     duplicateRows: value.duplicateRows,
     invalidRows: value.invalidRows,
     operatorName: value.operatorName,

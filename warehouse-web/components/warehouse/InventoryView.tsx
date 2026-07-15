@@ -19,7 +19,7 @@ import type {
 } from "@/lib/types";
 import { formatCategory, formatMovementType, goodsLabel, ownerLabel } from "@/lib/warehouse-utils";
 
-export type InventoryOwnerScope = "all" | "warehouse" | "salesperson";
+export type InventoryOwnerScope = "all" | "warehouse" | "salesperson" | "terminal_store";
 export type InventoryFilters = {
   keyword: string;
   statusScope: InventoryStatusScope;
@@ -81,6 +81,7 @@ export function InventoryView(props: {
     total: 0,
     warehouseResultCount: 0,
     salesResultCount: 0,
+    terminalResultCount: 0,
     page: 1,
     pageSize: 20
   });
@@ -193,7 +194,7 @@ export function InventoryView(props: {
         "签收系统",
         receipt.receivingOrganizationName,
         receipt.scannerName,
-        "仅关联签收信息，不改变仓库库存和条码当前归属"
+        receipt.matchStatus === "conflict" ? "签收时间与仓库业务流转冲突，未改变当前归属" : "签收信息已参与条码外部归属判断，不改变仓库数量账"
       ])
     ].sort((a, b) => b[0].localeCompare(a[0]));
     downloadCsv(`${barcode}-流水.csv`, [header, ...rows]);
@@ -307,6 +308,7 @@ export function InventoryView(props: {
 
   const warehouseResultCount = inventoryResult.warehouseResultCount;
   const salesResultCount = inventoryResult.salesResultCount;
+  const terminalResultCount = inventoryResult.terminalResultCount;
   const activeFilterCount = [
     props.filters.keyword.trim(),
     props.filters.statusScope !== "active" ? props.filters.statusScope : "",
@@ -550,7 +552,8 @@ export function InventoryView(props: {
                 options={[
                   { value: "all", label: "全部归属" },
                   { value: "warehouse", label: "仓库" },
-                  { value: "salesperson", label: "销售人员" }
+                  { value: "salesperson", label: "待签收" },
+                  { value: "terminal_store", label: "终端店铺" }
                 ]}
               />
               {props.filters.ownerScope === "warehouse" ? (
@@ -562,13 +565,16 @@ export function InventoryView(props: {
                 />
               ) : props.filters.ownerScope === "salesperson" ? (
                 <FieldSelect
-                  label="具体销售人员"
+                  label="出库销售人员"
                   value={props.filters.salespersonId}
                   onChange={(value) => props.setFilters({ ...props.filters, salespersonId: value })}
                   options={[{ value: "all", label: "全部销售人员" }, ...props.state.salespeople.map((person) => ({ value: person.id, label: person.name }))]}
                 />
               ) : (
-                <ReadOnlyField label="具体范围" value="全部仓库与销售人员" />
+                <ReadOnlyField
+                  label="具体范围"
+                  value={props.filters.ownerScope === "terminal_store" ? "以勤策收货单位为准" : "全部仓库、待签收与已签收条码"}
+                />
               )}
               <FieldSelect
                 label="货物"
@@ -597,7 +603,7 @@ export function InventoryView(props: {
                 <p className="text-sm font-semibold text-ink">条码列表 <span className="ml-2 font-normal text-muted">共 {inventoryResult.total} 件</span></p>
                 <p className="mt-1 text-xs text-muted">
                   {props.filters.statusScope === "active"
-                    ? `仓库归属 ${warehouseResultCount} 件 · 销售人员归属 ${salesResultCount} 件 · 已用筛选 ${activeFilterCount} 项`
+                    ? `在库 ${warehouseResultCount} 件 · 待签收 ${salesResultCount} 件 · 已签收 ${terminalResultCount} 件 · 已用筛选 ${activeFilterCount} 项`
                     : `状态范围：${formatStatusScope(props.filters.statusScope)} · 已用筛选 ${activeFilterCount} 项`}
                 </p>
               </div>
@@ -651,8 +657,8 @@ export function InventoryView(props: {
                           <div className="mt-1 text-xs text-slate-500">{item.shelfLifeDate ?? "无保质期"}</div>
                         </td>
                         <td className="table-cell text-slate-600">
-                          <div>{latestMovement ? formatMovementType(latestMovement.type) : "-"}</div>
-                          <div className="mt-1 font-mono text-xs text-slate-500">{latestMovement?.occurredAt ?? "-"}</div>
+                          <div>{item.ownerType === "terminal_store" ? "终端签收" : latestMovement ? formatMovementType(latestMovement.type) : "-"}</div>
+                          <div className="mt-1 font-mono text-xs text-slate-500">{item.ownerType === "terminal_store" ? item.signedAt ?? "-" : latestMovement?.occurredAt ?? "-"}</div>
                         </td>
                         <td className="table-cell"><StatusBadge label={formatItemStatus(item)} /></td>
                         <td className="table-cell px-3 text-slate-400"><ChevronRight className="h-4 w-4" /></td>
@@ -787,7 +793,7 @@ function InventoryDetailModal({
             </div>
 	            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
 	              <StatusBadge label={formatItemStatus(item)} />
-              {canMaintain && (item.status === "in_stock" || item.status === "with_salesperson") ? (
+              {canMaintain && ["in_stock", "with_salesperson", "signed", "receipt_exception"].includes(item.status) ? (
                 <>
                   <button className="secondary-button h-9 px-3" onClick={onCorrect}>
                     <Pencil className="h-4 w-4" />
@@ -835,7 +841,7 @@ function InventoryDetailModal({
             <div className="mt-3 shrink-0 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-950">
               <span className="font-semibold">已关联终端签收：</span>{" "}
               最近由 {terminalReceipts[0].scannerName} 于 {terminalReceipts[0].scannedAt} 扫码签收至
-              「{terminalReceipts[0].receivingOrganizationName}」。该记录不会改变当前库存和归属。
+              「{terminalReceipts[0].receivingOrganizationName}」。有效签收会更新条码外部归属，但不会改变仓库数量账。
             </div>
           ) : null}
 
@@ -872,14 +878,21 @@ function InventoryDetailModal({
                   ) : (
                     <div className="rounded-md border border-sky-200 bg-sky-50 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-sky-950">终端签收（外部系统）</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-sky-950">终端签收（外部系统）</p>
+                          <StatusBadge label={entry.receipt.matchStatus === "conflict" ? "签收异常" : entry.receipt.matchStatus === "matched" ? "已关联" : "未匹配"} />
+                        </div>
                         <span className="font-mono text-xs text-sky-700">{entry.receipt.scannedAt}</span>
                       </div>
                       <p className="mt-2 text-sm text-sky-950">签收至：{entry.receipt.receivingOrganizationName}</p>
                       <p className="mt-2 text-xs text-sky-800">
                         扫码人：{entry.receipt.scannerName} · 外部商品：{entry.receipt.externalGoodsName} · 单位：{entry.receipt.goodsUnit}
                       </p>
-                      <p className="mt-1 text-xs text-sky-700">仅关联签收信息，不改变系统当前库存和归属</p>
+                      <p className="mt-1 text-xs text-sky-700">
+                        {entry.receipt.matchStatus === "conflict"
+                          ? "签收时间与仓库业务流转冲突，保留记录但不覆盖当前归属"
+                          : "有效签收参与当前终端店铺归属判断，不改变仓库数量账"}
+                      </p>
                     </div>
                   )}
                 </div>
@@ -902,7 +915,10 @@ function InventoryDetailModal({
 function formatItemStatus(item: InventoryItem) {
   if (item.status === "written_off") return "已核销";
   if (item.status === "voided") return "已撤销追踪";
-  return item.ownerType === "warehouse" ? "在库" : "销售人员名下";
+  if (item.status === "receipt_exception") return "签收异常";
+  if (item.ownerType === "terminal_store" || item.status === "signed") return "已签收";
+  if (item.ownerType === "salesperson") return "待签收";
+  return "在库";
 }
 
 function formatStatusScope(statusScope: InventoryStatusScope) {

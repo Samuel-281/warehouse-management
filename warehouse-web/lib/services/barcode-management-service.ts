@@ -26,7 +26,7 @@ export async function correctBarcode(input: CorrectBarcodeInput) {
   return prisma.$transaction(async (tx) => {
     const item = await tx.inventoryItem.findUnique({ where: { barcode } });
     if (!item) throw new Error(`条码 ${barcode} 不存在`);
-    if (item.status !== "IN_STOCK" && item.status !== "WITH_SALESPERSON") {
+    if (!["IN_STOCK", "WITH_SALESPERSON", "SIGNED", "RECEIPT_EXCEPTION"].includes(item.status)) {
       throw new Error("已核销或已撤销的条码不能更正");
     }
 
@@ -80,7 +80,7 @@ export async function writeOffBarcode(input: WriteOffBarcodeInput) {
   return prisma.$transaction(async (tx) => {
     const item = await tx.inventoryItem.findUnique({ where: { barcode } });
     if (!item) throw new Error(`条码 ${barcode} 不存在`);
-    if (item.status !== "IN_STOCK" && item.status !== "WITH_SALESPERSON") {
+    if (!["IN_STOCK", "WITH_SALESPERSON", "SIGNED", "RECEIPT_EXCEPTION"].includes(item.status)) {
       throw new Error("该条码已经核销或撤销，不能重复处理");
     }
 
@@ -138,12 +138,19 @@ function normalizeReason(value: string) {
 
 async function ownerLabel(
   tx: Prisma.TransactionClient,
-  item: { ownerType: "WAREHOUSE" | "SALESPERSON"; warehouseId: string | null; locationId: string | null; salespersonId: string | null }
+  item: {
+    ownerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE";
+    warehouseId: string | null;
+    locationId: string | null;
+    salespersonId: string | null;
+    terminalStoreName: string | null;
+  }
 ) {
   if (item.ownerType === "SALESPERSON" && item.salespersonId) {
     const salesperson = await tx.salesperson.findUnique({ where: { id: item.salespersonId }, select: { name: true } });
     return `销售人员：${salesperson?.name ?? "未知"}`;
   }
+  if (item.ownerType === "TERMINAL_STORE") return `终端店铺：${item.terminalStoreName ?? "未知"}`;
   if (item.warehouseId) {
     const [warehouse, location] = await Promise.all([
       tx.warehouse.findUnique({ where: { id: item.warehouseId }, select: { name: true } }),

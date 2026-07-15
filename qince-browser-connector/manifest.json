@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "仓库系统勤策签收连接器",
+  "version": "0.1.0",
+  "description": "复用已登录的勤策网页会话，将指定日期范围的扫码签收记录同步到仓库系统。",
+  "permissions": ["alarms", "storage"],
+  "host_permissions": [
+    "https://cloud.region2.qince.com/*",
+    "http://localhost:3002/*",
+    "http://127.0.0.1:3002/*",
+    "http://43.108.14.102/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "勤策签收连接器",
+    "default_popup": "popup.html"
+  }
+}

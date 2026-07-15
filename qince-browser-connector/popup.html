@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>勤策签收连接器</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>勤策签收连接器</h1>
+        <p>复用当前 Chrome 的勤策登录状态</p>
+      </header>
+      <label>
+        仓库系统地址
+        <input id="serverUrl" type="url" spellcheck="false" placeholder="http://43.108.14.102">
+      </label>
+      <label>
+        连接器密钥
+        <input id="connectorToken" type="password" autocomplete="off" placeholder="与服务器配置保持一致">
+      </label>
+      <div class="actions">
+        <button id="save" class="secondary">保存配置</button>
+        <button id="test" class="secondary">测试勤策</button>
+        <button id="sync" class="primary">检查并同步</button>
+      </div>
+      <section id="status" data-state="idle">尚未运行</section>
+      <p class="hint">连接器每分钟检查一次待同步任务。电脑关机时任务会保留，下一次打开 Chrome 后补跑。</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

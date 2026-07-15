@@ -17,7 +17,7 @@ type QinceOpenApiCredentials = {
   baseUrl: URL;
 };
 
-type QinceScanRecord = {
+export type QinceScanRecord = {
   id: string;
   barcode: string;
   scannedAt: string;
@@ -32,6 +32,16 @@ export type QinceTerminalReceiptExport = {
   fileName: string;
   taskKey: string;
   recordCount: number;
+};
+
+export type QinceBrowserScanRecord = {
+  id?: unknown;
+  goodsCode?: unknown;
+  operateTime?: unknown;
+  operator?: unknown;
+  productName?: unknown;
+  goodsCodeUnit?: unknown;
+  receiveName?: unknown;
 };
 
 export function qinceOpenApiConfigured() {
@@ -76,6 +86,26 @@ export async function downloadQinceTerminalReceipts(input: {
     .update(`${input.startDate}|${input.endDate}|${records.map((row) => row.id || receiptKey(row)).join("|")}`)
     .digest("hex");
 
+  return { buffer, fileName, taskKey, recordCount: records.length };
+}
+
+export async function buildQinceBrowserTerminalReceiptExport(input: {
+  startDate: string;
+  endDate: string;
+  records: QinceBrowserScanRecord[];
+}): Promise<QinceTerminalReceiptExport> {
+  validateDate(input.startDate);
+  validateDate(input.endDate);
+  if (input.records.length > MAX_RECORDS) {
+    throw new ApiError(`本次勤策扫码记录超过 ${MAX_RECORDS.toLocaleString("zh-CN")} 条，请缩短同步日期范围`, 413);
+  }
+
+  const records = input.records.map((row, index) => normalizeScanRecord(row, 1, index));
+  const fileName = `勤策浏览器同步_${input.startDate}_${input.endDate}.xlsx`;
+  const buffer = await buildWorkbook(records);
+  const taskKey = createHash("sha256")
+    .update(`${input.startDate}|${input.endDate}|${records.map((row) => row.id || receiptKey(row)).join("|")}`)
+    .digest("hex");
   return { buffer, fileName, taskKey, recordCount: records.length };
 }
 
@@ -224,7 +254,7 @@ function normalizeScanRecord(value: unknown, page: number, index: number): Qince
     scannedAt,
     scannerName,
     externalGoodsName: firstString(row, ["product_name", "productName", "goods_name", "goodsName", "pd_name"]) || "勤策扫码签收记录",
-    goodsUnit: firstString(row, ["goods_unit", "goodsUnit", "unit_name", "unitName", "code_unit"]) || "件",
+    goodsUnit: firstString(row, ["goods_unit", "goodsUnit", "goodsCodeUnit", "unit_name", "unitName", "code_unit"]) || "件",
     receivingOrganizationName
   };
 }

@@ -34,11 +34,13 @@ type DbInventoryItem = {
   id: string;
   barcode: string;
   goodsId: string;
-  ownerType: "WAREHOUSE" | "SALESPERSON";
+  ownerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE";
   warehouseId: string | null;
   locationId: string | null;
   salespersonId: string | null;
-  status: "IN_STOCK" | "WITH_SALESPERSON" | "WRITTEN_OFF" | "VOIDED";
+  terminalStoreName: string | null;
+  signedAt: Date | null;
+  status: "IN_STOCK" | "WITH_SALESPERSON" | "SIGNED" | "RECEIPT_EXCEPTION" | "WRITTEN_OFF" | "VOIDED";
   productionDate: Date | null;
   shelfLifeDate: Date | null;
   inboundSource: DbInboundSource;
@@ -85,7 +87,7 @@ type DbWarehouseStockMovement = {
 export type InventoryQueryInput = {
   keyword?: string;
   statusScope?: InventoryStatusScope;
-  ownerScope?: "all" | "warehouse" | "salesperson";
+  ownerScope?: "all" | "warehouse" | "salesperson" | "terminal_store";
   warehouseId?: string;
   salespersonId?: string;
   goodsId?: string;
@@ -117,10 +119,11 @@ export async function listInventory(input: InventoryQueryInput): Promise<Invento
   const exactItemId = await resolveExactBarcode(input.keyword);
   const where = buildInventoryWhere(input, exactItemId);
 
-  const [total, warehouseResultCount, salesResultCount, items] = await Promise.all([
+  const [total, warehouseResultCount, salesResultCount, terminalResultCount, items] = await Promise.all([
     prisma.inventoryItem.count({ where }),
     prisma.inventoryItem.count({ where: { ...where, ownerType: "WAREHOUSE" } }),
     prisma.inventoryItem.count({ where: { ...where, ownerType: "SALESPERSON" } }),
+    prisma.inventoryItem.count({ where: { ...where, ownerType: "TERMINAL_STORE" } }),
     prisma.inventoryItem.findMany({
       where,
       orderBy: [{ lastMovedAt: "desc" }, { barcode: "asc" }],
@@ -137,6 +140,7 @@ export async function listInventory(input: InventoryQueryInput): Promise<Invento
     total,
     warehouseResultCount,
     salesResultCount,
+    terminalResultCount,
     page,
     pageSize
   };
@@ -220,6 +224,8 @@ export async function getInventorySummary(): Promise<InventorySummary> {
     totalItems,
     inStock,
     withSales,
+    signed,
+    receiptExceptions,
     writtenOff,
     warehouseStocks,
     warehouseStockAggregate,
@@ -229,9 +235,11 @@ export async function getInventorySummary(): Promise<InventorySummary> {
     recentStockMovements
   ] =
     await Promise.all([
-      prisma.inventoryItem.count({ where: { status: { in: ["IN_STOCK", "WITH_SALESPERSON"] } } }),
+      prisma.inventoryItem.count({ where: { status: { in: ["IN_STOCK", "WITH_SALESPERSON", "SIGNED", "RECEIPT_EXCEPTION"] } } }),
       prisma.inventoryItem.count({ where: { ownerType: "WAREHOUSE", status: "IN_STOCK" } }),
       prisma.inventoryItem.count({ where: { ownerType: "SALESPERSON", status: "WITH_SALESPERSON" } }),
+      prisma.inventoryItem.count({ where: { ownerType: "TERMINAL_STORE", status: "SIGNED" } }),
+      prisma.inventoryItem.count({ where: { status: "RECEIPT_EXCEPTION" } }),
       prisma.inventoryItem.count({ where: { status: "WRITTEN_OFF" } }),
       prisma.warehouseStock.findMany({ orderBy: [{ warehouseId: "asc" }, { goodsId: "asc" }] }),
       prisma.warehouseStock.aggregate({ _sum: { quantity: true } }),
@@ -262,6 +270,8 @@ export async function getInventorySummary(): Promise<InventorySummary> {
     totalItems,
     inStock,
     withSales,
+    signed,
+    receiptExceptions,
     writtenOff,
     totalWarehouseQuantity: warehouseStockAggregate._sum.quantity ?? 0,
     warehouseStocks: warehouseStocks.map(mapWarehouseStock),
@@ -306,10 +316,16 @@ export async function validateBarcodes(input: BarcodeValidationInput): Promise<B
       if (input.goodsId && item.goodsId !== input.goodsId) {
         return { barcode, ok: false, label: "货物不符", detail: "该条码已绑定其他货物", item: mapInventoryItem(item) };
       }
-      if (item.ownerType !== "SALESPERSON" || !item.salespersonId) {
-        return { barcode, ok: false, label: "不可入库", detail: "该条码当前不在销售人员名下", item: mapInventoryItem(item) };
+      if (!isReturnableItem(item)) {
+        return { barcode, ok: false, label: "不可退回", detail: "该条码已在仓库或处于不可退回状态", item: mapInventoryItem(item) };
       }
-      return { barcode, ok: true, label: "可回仓", detail: "该条码当前在销售人员名下", item: mapInventoryItem(item) };
+      return {
+        barcode,
+        ok: true,
+        label: "可退回",
+        detail: item.ownerType === "TERMINAL_STORE" ? `当前归属终端店铺：${item.terminalStoreName ?? "未知"}` : "当前为待签收货物",
+        item: mapInventoryItem(item)
+      };
     }
 
     if (input.mode === "warehouse_outbound") {
@@ -327,10 +343,16 @@ export async function validateBarcodes(input: BarcodeValidationInput): Promise<B
 
     if (!item) return { barcode, ok: false, label: "不存在", detail: "系统内未找到该条码" };
 
-    if (item.ownerType !== "SALESPERSON" || !item.salespersonId) {
-      return { barcode, ok: false, label: "不可退回", detail: "条码当前不在销售人员名下", item: mapInventoryItem(item) };
+    if (!isReturnableItem(item)) {
+      return { barcode, ok: false, label: "不可退回", detail: "条码已在仓库或处于不可退回状态", item: mapInventoryItem(item) };
     }
-    return { barcode, ok: true, label: "可退回", detail: "条码当前在销售人员名下", item: mapInventoryItem(item) };
+    return {
+      barcode,
+      ok: true,
+      label: "可退回",
+      detail: item.ownerType === "TERMINAL_STORE" ? `当前归属终端店铺：${item.terminalStoreName ?? "未知"}` : "当前为待签收货物",
+      item: mapInventoryItem(item)
+    };
   });
 }
 
@@ -341,7 +363,7 @@ function buildInventoryWhere(input: InventoryQueryInput, exactItemId?: string): 
   const keyword = input.keyword?.trim();
   const statusScope = normalizeStatusScope(input.statusScope);
 
-  if (statusScope === "active") where.status = { in: ["IN_STOCK", "WITH_SALESPERSON"] };
+  if (statusScope === "active") where.status = { in: ["IN_STOCK", "WITH_SALESPERSON", "SIGNED", "RECEIPT_EXCEPTION"] };
   if (statusScope === "written_off") where.status = "WRITTEN_OFF";
   if (statusScope === "voided") where.status = "VOIDED";
 
@@ -351,6 +373,8 @@ function buildInventoryWhere(input: InventoryQueryInput, exactItemId?: string): 
   } else if (input.ownerScope === "salesperson") {
     where.ownerType = "SALESPERSON";
     if (input.salespersonId && input.salespersonId !== "all") where.salespersonId = input.salespersonId;
+  } else if (input.ownerScope === "terminal_store") {
+    where.ownerType = "TERMINAL_STORE";
   }
 
   if (input.goodsId && input.goodsId !== "all") {
@@ -361,7 +385,8 @@ function buildInventoryWhere(input: InventoryQueryInput, exactItemId?: string): 
     where.OR = [
       { barcode: { contains: keyword, mode: "insensitive" } },
       { goods: { name: { contains: keyword, mode: "insensitive" } } },
-      { goods: { code: { contains: keyword, mode: "insensitive" } } }
+      { goods: { code: { contains: keyword, mode: "insensitive" } } },
+      { terminalStoreName: { contains: keyword, mode: "insensitive" } }
     ];
   }
 
@@ -414,7 +439,9 @@ function mapInboundSource(source: DbInboundSource): TrackingSource {
 }
 
 function mapOwnerType(type: DbInventoryItem["ownerType"]): OwnerType {
-  return type === "WAREHOUSE" ? "warehouse" : "salesperson";
+  if (type === "WAREHOUSE") return "warehouse";
+  if (type === "SALESPERSON") return "salesperson";
+  return "terminal_store";
 }
 
 function mapMovementType(type: DbMovementType): MovementType {
@@ -445,19 +472,32 @@ function mapInventoryItem(item: DbInventoryItem): InventoryItem {
     warehouseId: item.warehouseId ?? undefined,
     locationId: item.locationId ?? undefined,
     salespersonId: item.salespersonId ?? undefined,
+    terminalStoreName: item.terminalStoreName ?? undefined,
+    signedAt: item.signedAt ? formatAppDateTime(item.signedAt) : undefined,
     status:
       item.status === "IN_STOCK"
         ? "in_stock"
         : item.status === "WITH_SALESPERSON"
           ? "with_salesperson"
-          : item.status === "WRITTEN_OFF"
-            ? "written_off"
-            : "voided",
+          : item.status === "SIGNED"
+            ? "signed"
+            : item.status === "RECEIPT_EXCEPTION"
+              ? "receipt_exception"
+              : item.status === "WRITTEN_OFF"
+                ? "written_off"
+                : "voided",
     productionDate: formatDate(item.productionDate),
     shelfLifeDate: formatDate(item.shelfLifeDate),
     inboundSource: mapInboundSource(item.inboundSource),
     lastMovedAt: formatAppDateTime(item.lastMovedAt)
   };
+}
+
+function isReturnableItem(item: { ownerType: string; status: string }) {
+  return (
+    (item.ownerType === "SALESPERSON" && item.status === "WITH_SALESPERSON") ||
+    (item.ownerType === "TERMINAL_STORE" && item.status === "SIGNED")
+  );
 }
 
 function mapStockMovement(movement: DbStockMovement): StockMovement {

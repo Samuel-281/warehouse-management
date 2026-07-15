@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       targetType: "TERMINAL_RECEIPT_IMPORT",
       targetId: result.id,
       result: "SUCCESS",
-      detail: `file=${file.name};imported=${result.importedRows};matched=${result.matchedRows};unmatched=${result.unmatchedRows};duplicates=${result.duplicateRows};replay=${result.replayed === true}`
+      detail: `file=${file.name};imported=${result.importedRows};matched=${result.matchedRows};unmatched=${result.unmatchedRows};conflicts=${result.conflictRows};duplicates=${result.duplicateRows};replay=${result.replayed === true}`
     });
     return ok(result);
   } catch (error) {

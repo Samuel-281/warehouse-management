@@ -22,11 +22,13 @@ type DbInventoryItem = {
   id: string;
   barcode: string;
   goodsId: string;
-  ownerType: "WAREHOUSE" | "SALESPERSON";
+  ownerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE";
   warehouseId: string | null;
   locationId: string | null;
   salespersonId: string | null;
-  status: "IN_STOCK" | "WITH_SALESPERSON" | "WRITTEN_OFF" | "VOIDED";
+  terminalStoreName: string | null;
+  signedAt: Date | null;
+  status: "IN_STOCK" | "WITH_SALESPERSON" | "SIGNED" | "RECEIPT_EXCEPTION" | "WRITTEN_OFF" | "VOIDED";
   productionDate: Date | null;
   shelfLifeDate: Date | null;
   inboundSource: DbInboundSource;
@@ -211,6 +213,8 @@ export async function submitOutbound(input: SubmitOutboundInput) {
           warehouseId: destinationType === "transfer" ? targetWarehouse!.id : null,
           locationId: destinationType === "transfer" ? targetLocation!.id : null,
           salespersonId: destinationType === "sales" ? salesperson!.id : null,
+          terminalStoreName: null,
+          signedAt: null,
           status: destinationType === "transfer" ? "IN_STOCK" : "WITH_SALESPERSON",
           productionDate: null,
           shelfLifeDate: null,
@@ -235,6 +239,8 @@ export async function submitOutbound(input: SubmitOutboundInput) {
                 warehouseId: targetWarehouse!.id,
                 locationId: targetLocation!.id,
                 salespersonId: null,
+                terminalStoreName: null,
+                signedAt: null,
                 status: "IN_STOCK",
                 lastMovedAt: time
               }
@@ -243,6 +249,8 @@ export async function submitOutbound(input: SubmitOutboundInput) {
                 warehouseId: null,
                 locationId: null,
                 salespersonId: salesperson!.id,
+                terminalStoreName: null,
+                signedAt: null,
                 status: "WITH_SALESPERSON",
                 lastMovedAt: time
               }
@@ -367,12 +375,16 @@ function mapInboundSource(source: DbInboundSource) {
 }
 
 function mapOwnerType(type: DbInventoryItem["ownerType"]) {
-  return type === "WAREHOUSE" ? "warehouse" : "salesperson";
+  if (type === "WAREHOUSE") return "warehouse";
+  if (type === "SALESPERSON") return "salesperson";
+  return "terminal_store";
 }
 
 function mapItemStatus(status: DbInventoryItem["status"]) {
   if (status === "IN_STOCK") return "in_stock";
   if (status === "WITH_SALESPERSON") return "with_salesperson";
+  if (status === "SIGNED") return "signed";
+  if (status === "RECEIPT_EXCEPTION") return "receipt_exception";
   if (status === "WRITTEN_OFF") return "written_off";
   return "voided";
 }
@@ -410,6 +422,8 @@ function mapInventoryItem(item: DbInventoryItem): InventoryItem {
     warehouseId: item.warehouseId ?? undefined,
     locationId: item.locationId ?? undefined,
     salespersonId: item.salespersonId ?? undefined,
+    terminalStoreName: item.terminalStoreName ?? undefined,
+    signedAt: item.signedAt ? formatDateTime(item.signedAt) : undefined,
     status: mapItemStatus(item.status),
     productionDate: formatDate(item.productionDate),
     shelfLifeDate: formatDate(item.shelfLifeDate),

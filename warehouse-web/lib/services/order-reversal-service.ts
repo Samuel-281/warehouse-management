@@ -277,6 +277,8 @@ async function voidSalesReturnOrder(tx: Prisma.TransactionClient, id: string, re
         warehouseId: null,
         locationId: null,
         salespersonId,
+        terminalStoreName: null,
+        signedAt: null,
         status: "WITH_SALESPERSON",
         lastMovedAt: time
       }
@@ -322,6 +324,24 @@ async function assertNoLaterMovements(
     const movement = latest.get(conflict);
     throw new Error(`条码 ${movement?.barcode ?? conflict} 在单据 ${orderNo} 后已有新的流转，不能撤销`);
   }
+  const orderMovements = await tx.stockMovement.findMany({
+    where: { itemId: { in: itemIds }, orderId },
+    select: { itemId: true, occurredAt: true }
+  });
+  const orderTimeByItem = new Map(orderMovements.map((movement) => [movement.itemId, movement.occurredAt]));
+  const laterReceipt = await tx.terminalReceiptRecord.findFirst({
+    where: {
+      inventoryItemId: { in: itemIds },
+      OR: itemIds.flatMap((itemId) => {
+        const occurredAt = orderTimeByItem.get(itemId);
+        return occurredAt ? [{ inventoryItemId: itemId, scannedAt: { gt: occurredAt } }] : [];
+      })
+    },
+    orderBy: { scannedAt: "asc" }
+  });
+  if (laterReceipt) {
+    throw new Error(`条码 ${laterReceipt.barcode} 在单据 ${orderNo} 后已有终端签收记录，不能撤销`);
+  }
 }
 
 async function latestMovementMap(tx: Prisma.TransactionClient, itemIds: string[]) {
@@ -344,10 +364,12 @@ function groupQuantities(items: Array<{ goodsId: string; quantity: number }>) {
 
 function restoreSnapshot(
   snapshot: {
-    beforeOwnerType: "WAREHOUSE" | "SALESPERSON" | null;
+    beforeOwnerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE" | null;
     beforeWarehouseId: string | null;
     beforeLocationId: string | null;
     beforeSalespersonId: string | null;
+    beforeTerminalStoreName: string | null;
+    beforeSignedAt: Date | null;
   },
   time: Date
 ): Prisma.InventoryItemUncheckedUpdateInput {
@@ -357,6 +379,8 @@ function restoreSnapshot(
       warehouseId: null,
       locationId: null,
       salespersonId: snapshot.beforeSalespersonId,
+      terminalStoreName: null,
+      signedAt: null,
       status: "WITH_SALESPERSON",
       lastMovedAt: time
     };
@@ -367,7 +391,21 @@ function restoreSnapshot(
       warehouseId: snapshot.beforeWarehouseId,
       locationId: snapshot.beforeLocationId,
       salespersonId: null,
+      terminalStoreName: null,
+      signedAt: null,
       status: "IN_STOCK",
+      lastMovedAt: time
+    };
+  }
+  if (snapshot.beforeOwnerType === "TERMINAL_STORE" && snapshot.beforeTerminalStoreName) {
+    return {
+      ownerType: "TERMINAL_STORE",
+      warehouseId: null,
+      locationId: null,
+      salespersonId: null,
+      terminalStoreName: snapshot.beforeTerminalStoreName,
+      signedAt: snapshot.beforeSignedAt,
+      status: "SIGNED",
       lastMovedAt: time
     };
   }
@@ -375,13 +413,16 @@ function restoreSnapshot(
 }
 
 function snapshotLabel(
-  snapshot: { beforeOwnerType: string | null; beforeSalespersonId: string | null },
+  snapshot: { beforeOwnerType: string | null; beforeSalespersonId: string | null; beforeTerminalStoreName?: string | null },
   warehouseName: string,
   locationName: string,
   salespersonNames: Map<string, string>
 ) {
   if (snapshot.beforeOwnerType === "SALESPERSON" && snapshot.beforeSalespersonId) {
     return `销售人员：${salespersonNames.get(snapshot.beforeSalespersonId) ?? "未知"}`;
+  }
+  if (snapshot.beforeOwnerType === "TERMINAL_STORE") {
+    return `终端店铺：${snapshot.beforeTerminalStoreName ?? "未知"}`;
   }
   return `${warehouseName} / ${locationName}`;
 }

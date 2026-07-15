@@ -1,0 +1,35 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  width: 360px;
+  background: #f8fafc;
+  color: #172033;
+}
+
+main { padding: 16px; }
+header { margin-bottom: 14px; }
+h1 { margin: 0; font-size: 17px; }
+header p, .hint { margin: 5px 0 0; color: #64748b; font-size: 12px; line-height: 1.5; }
+label { display: grid; gap: 6px; margin-top: 12px; color: #475569; font-size: 12px; font-weight: 600; }
+input {
+  height: 36px;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: white;
+  padding: 0 10px;
+  color: #172033;
+}
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+button { height: 36px; border-radius: 6px; border: 1px solid #cbd5e1; font-weight: 600; cursor: pointer; }
+button:disabled { cursor: wait; opacity: 0.6; }
+.primary { grid-column: 1 / -1; border-color: #0f766e; background: #0f766e; color: white; }
+.secondary { background: white; color: #334155; }
+#status { margin-top: 12px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; padding: 10px; font-size: 12px; line-height: 1.5; }
+#status[data-state="success"] { border-color: #86efac; background: #f0fdf4; color: #166534; }
+#status[data-state="error"] { border-color: #fca5a5; background: #fef2f2; color: #991b1b; }
+#status[data-state="running"] { border-color: #7dd3fc; background: #f0f9ff; color: #075985; }

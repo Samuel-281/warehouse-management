@@ -11,7 +11,7 @@ export async function GET(request: Request) {
       await listInventory({
         keyword: url.searchParams.get("keyword") ?? "",
         statusScope: (url.searchParams.get("statusScope") ?? "active") as InventoryStatusScope,
-        ownerScope: (url.searchParams.get("ownerScope") ?? "all") as "all" | "warehouse" | "salesperson",
+        ownerScope: (url.searchParams.get("ownerScope") ?? "all") as "all" | "warehouse" | "salesperson" | "terminal_store",
         warehouseId: url.searchParams.get("warehouseId") ?? "all",
         salespersonId: url.searchParams.get("salespersonId") ?? "all",
         goodsId: url.searchParams.get("goodsId") ?? "all",

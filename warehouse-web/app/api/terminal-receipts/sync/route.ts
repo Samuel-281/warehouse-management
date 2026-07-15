@@ -1,6 +1,9 @@
 import { fail, ok } from "@/lib/api-response";
 import { assertWarehouseOperationAllowed, requireCurrentUser } from "@/lib/auth-permissions";
-import { assertQinceOpenApiConfigured } from "@/lib/services/qince-terminal-receipt-client";
+import {
+  assertTerminalReceiptSyncConfigured,
+  getTerminalReceiptSyncMode
+} from "@/lib/services/terminal-receipt-sync-config";
 import {
   createTerminalReceiptSyncRun,
   executeTerminalReceiptSync,
@@ -22,16 +25,18 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await assertWarehouseOperationAllowed(request);
-    assertQinceOpenApiConfigured();
+    assertTerminalReceiptSyncConfigured();
     const run = await createTerminalReceiptSyncRun({
       trigger: "MANUAL",
       operatorName: user.displayName
     });
 
-    // The task continues in the persistent ECS process while the page polls its status.
-    void executeTerminalReceiptSync(run.id).catch((error) => {
-      console.error("Terminal receipt sync task stopped unexpectedly", error);
-    });
+    if (getTerminalReceiptSyncMode() === "openapi") {
+      // The task continues in the persistent server process while the page polls its status.
+      void executeTerminalReceiptSync(run.id).catch((error) => {
+        console.error("Terminal receipt sync task stopped unexpectedly", error);
+      });
+    }
     return ok(run, { status: 202 });
   } catch (error) {
     return fail(error);
