@@ -55,6 +55,7 @@ import { OrdersView } from "@/components/warehouse/OrdersView";
 import { InventoryView, type InventoryFilters } from "@/components/warehouse/InventoryView";
 import { TerminalReceiptView } from "@/components/warehouse/TerminalReceiptView";
 import { BarcodeCollector, type BarcodeReview } from "@/components/warehouse/BarcodeCollector";
+import { TraceabilityWorkspace } from "@/components/TraceabilityWorkspace";
 import { formatOperationAction, formatOperationDetail } from "@/lib/operation-log-labels";
 import { hasAnyRole } from "@/lib/role-utils";
 import type {
@@ -962,6 +963,30 @@ export default function WarehousePrototype() {
           setLoggedIn(true);
           setActiveView("dashboard");
         }}
+      />
+    );
+  }
+
+  if (Boolean(currentUser)) {
+    const workspaceUser = currentUser as CurrentUser;
+    return (
+      <TraceabilityWorkspace
+        currentUser={workspaceUser}
+        onLogout={logout}
+        renderSystemMaintenance={(notify) => (
+          <SystemMaintenanceView
+            currentUserId={workspaceUser.id}
+            onCurrentUserUpdated={(user) => {
+              setCurrentUser((previous) => previous ? { ...previous, displayName: user.displayName, roles: user.roles } : previous);
+            }}
+            onResetComplete={() => {
+              setCurrentUser(null);
+              setLoggedIn(false);
+              setActiveView("dashboard");
+            }}
+            showToast={notify}
+          />
+        )}
       />
     );
   }

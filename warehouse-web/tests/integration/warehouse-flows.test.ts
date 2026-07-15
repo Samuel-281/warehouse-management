@@ -17,6 +17,13 @@ import { submitOutbound } from "@/lib/services/outbound-service";
 import { submitSalesReturn } from "@/lib/services/sales-return-service";
 import { adjustStockManually } from "@/lib/services/stock-adjustment-service";
 import {
+  getTrackedBarcodeDetail,
+  getTrackingSummary,
+  submitTrackingOutbound,
+  submitTrackingReturn,
+  validateTrackingBarcodes
+} from "@/lib/services/tracking-service";
+import {
   importTerminalReceipts,
   previewTerminalReceiptImport
 } from "@/lib/services/terminal-receipt-service";
@@ -227,6 +234,165 @@ test("勤策签收更新终端归属，店铺间流转不改变仓库库存", as
     movedDetail.terminalReceipts.map((receipt) => receipt.receivingOrganizationName),
     ["测试收货门店 B", "测试收货门店 A"]
   );
+});
+
+test("条码流向模式无需商品库存，勤策补全商品并支持店铺间连续签收", async () => {
+  const barcode = "TRACE-FAST-001";
+  const requestId = randomUUID();
+  const input = {
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson" as const,
+    salespersonId: context.salespersonId,
+    barcodes: [barcode],
+    operatorName,
+    operatorUserId: currentUser.id,
+    clientRequestId: requestId
+  };
+
+  const first = await submitTrackingOutbound(input);
+  const replay = await submitTrackingOutbound(input);
+  assert.equal(first.orderNo, replay.orderNo);
+  assert.equal(first.idempotentReplay, false);
+  assert.equal(replay.idempotentReplay, true);
+  assert.equal(await prisma.trackingOrder.count(), 1, "相同请求编号不能重复创建流转单据");
+  assert.equal(await prisma.warehouseStock.count(), 0, "条码流向模式不应写入数量库存");
+  assert.equal(await prisma.inventoryItem.count(), 0, "条码流向模式不应依赖旧条码库存表");
+
+  const pending = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(pending.externalGoodsName, null);
+  assert.equal(pending.currentOwnerType, "SALESPERSON");
+  assert.equal(pending.receiptStatus, "PENDING");
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const firstReceiptAt = new Date();
+  const storeABuffer = await makeTerminalReceiptWorkbook([
+    {
+      barcode,
+      scannedAt: firstReceiptAt,
+      storeName: "流向测试店铺 A",
+      goodsName: "125ml35度中国劲酒_1*24"
+    }
+  ]);
+  await importTerminalReceipts({ fileName: "流向签收-A.xlsx", buffer: storeABuffer, operatorName });
+
+  const atStoreA = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(atStoreA.externalGoodsName, "125ml35度中国劲酒_1*24");
+  assert.equal(atStoreA.currentOwnerType, "TERMINAL_STORE");
+  assert.equal(atStoreA.terminalStoreName, "流向测试店铺 A");
+  assert.equal(atStoreA.receiptStatus, "SIGNED");
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const storeBReceiptAt = new Date();
+  const storeBBuffer = await makeTerminalReceiptWorkbook([
+    {
+      barcode,
+      scannedAt: storeBReceiptAt,
+      storeName: "流向测试店铺 B",
+      goodsName: "125ml35度中国劲酒_1*24"
+    }
+  ]);
+  await importTerminalReceipts({ fileName: "流向签收-B.xlsx", buffer: storeBBuffer, operatorName });
+  const atStoreB = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(atStoreB.terminalStoreName, "流向测试店铺 B");
+
+  const detail = await getTrackedBarcodeDetail(barcode);
+  assert.deepEqual(
+    detail.terminalReceipts.map((receipt) => receipt.receivingOrganizationName),
+    ["流向测试店铺 B", "流向测试店铺 A"]
+  );
+  assert.equal(detail.movements.filter((movement) => movement.type === "qince_receipt").length, 2);
+  assert.equal(detail.movements.some((movement) => movement.type === "sales_outbound"), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const returned = await submitTrackingReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    barcodes: [barcode],
+    operatorName,
+    operatorUserId: currentUser.id,
+    clientRequestId: randomUUID()
+  });
+  assert.equal(returned.quantity, 1);
+  const inWarehouse = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(inWarehouse.currentOwnerType, "WAREHOUSE");
+  assert.equal(inWarehouse.warehouseId, context.sourceWarehouseId);
+  assert.equal(await prisma.warehouseStock.count(), 0);
+
+  const validation = await validateTrackingBarcodes({
+    mode: "return",
+    returnWarehouseId: context.sourceWarehouseId,
+    barcodes: [barcode]
+  });
+  assert.equal(validation[0]?.ok, false);
+  assert.equal(validation[0]?.label, "已在仓库");
+
+  const summary = await getTrackingSummary();
+  assert.equal(summary.total, 1);
+  assert.equal(summary.inWarehouses, 1);
+});
+
+test("勤策商品覆盖旧系统简称且不会误报签收异常", async () => {
+  const barcode = "TRACE-LEGACY-NAME-001";
+  await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: [barcode],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await prisma.trackedBarcode.update({
+    where: { barcode },
+    data: { externalGoodsName: "125劲酒", goodsUnit: "箱" }
+  });
+
+  const buffer = await makeTerminalReceiptWorkbook([
+    {
+      barcode,
+      scannedAt: new Date(Date.now() + 1_000),
+      storeName: "旧数据修复测试店铺",
+      goodsName: "125ml35度中国劲酒_1*24"
+    }
+  ]);
+  const preview = await previewTerminalReceiptImport("旧商品简称.xlsx", buffer);
+  assert.equal(preview.matchedRows, 1);
+  assert.equal(preview.conflictRows, 0);
+  await importTerminalReceipts({ fileName: "旧商品简称.xlsx", buffer, operatorName });
+
+  const item = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(item.externalGoodsName, "125ml35度中国劲酒_1*24");
+  assert.equal(item.goodsUnit, "件");
+  assert.equal(item.receiptStatus, "SIGNED");
+  assert.equal(item.currentOwnerType, "TERMINAL_STORE");
+});
+
+test("勤策返回不同商品名称时标记签收异常且不覆盖原商品", async () => {
+  const barcode = "TRACE-CONFLICT-001";
+  await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: [barcode],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+
+  const firstAt = new Date(Date.now() + 1_000);
+  const firstBuffer = await makeTerminalReceiptWorkbook([
+    { barcode, scannedAt: firstAt, storeName: "商品冲突店铺 A", goodsName: "商品甲_1*12" }
+  ]);
+  await importTerminalReceipts({ fileName: "商品甲.xlsx", buffer: firstBuffer, operatorName });
+
+  const conflictBuffer = await makeTerminalReceiptWorkbook([
+    { barcode, scannedAt: new Date(firstAt.getTime() + 60_000), storeName: "商品冲突店铺 B", goodsName: "商品乙_1*6" }
+  ]);
+  const preview = await previewTerminalReceiptImport("商品乙.xlsx", conflictBuffer);
+  assert.equal(preview.conflictRows, 1);
+  await importTerminalReceipts({ fileName: "商品乙.xlsx", buffer: conflictBuffer, operatorName });
+
+  const item = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(item.externalGoodsName, "商品甲_1*12");
+  assert.equal(item.receiptStatus, "EXCEPTION");
+  assert.equal(item.terminalStoreName, "商品冲突店铺 B");
 });
 
 test("统一退回接收已签收货物，迟到的旧签收只补履历", async () => {
@@ -787,7 +953,7 @@ function makeBarcodes(prefix: string, count: number) {
 }
 
 async function makeTerminalReceiptWorkbook(
-  rows: Array<{ barcode: string; scannedAt: Date; storeName: string; scannerName?: string }>
+  rows: Array<{ barcode: string; scannedAt: Date; storeName: string; scannerName?: string; goodsName?: string }>
 ) {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("sheet1");
@@ -797,7 +963,7 @@ async function makeTerminalReceiptWorkbook(
       row.barcode,
       row.scannedAt,
       row.scannerName ?? "测试配送员",
-      "外部系统商品名称_1*24",
+      row.goodsName ?? "外部系统商品名称_1*24",
       "件",
       row.storeName
     ]);

@@ -21,6 +21,8 @@ const actionLabels: Record<string, string> = {
   INBOUND_CREATE: "创建入库单",
   OUTBOUND_CREATE: "创建出库单",
   SALES_RETURN_CREATE: "创建退回入库单",
+  TRACKING_OUTBOUND_CREATE: "创建条码流向出库单",
+  TRACKING_RETURN_CREATE: "创建扫码回库单",
   ORDERS_VOID: "撤销业务单据",
   BARCODE_CORRECT: "更正条码",
   INVENTORY_ITEM_WRITE_OFF: "核销货物",

@@ -275,6 +275,95 @@ export type TerminalReceiptSyncOverview = {
   runs: TerminalReceiptSyncRun[];
 };
 
+export type TrackingReceiptStatus = "pending" | "signed" | "exception";
+export type TrackingItemStatus = "active" | "written_off" | "voided";
+export type TrackingOrderType = "sales_outbound" | "transfer" | "return";
+export type TrackingMovementType =
+  | "legacy_inbound"
+  | "sales_outbound"
+  | "transfer"
+  | "return"
+  | "qince_receipt"
+  | "order_reversal"
+  | "barcode_correction"
+  | "write_off";
+
+export type TrackedBarcode = {
+  id: string;
+  barcode: string;
+  externalGoodsName?: string;
+  goodsUnit?: string;
+  currentOwnerType: OwnerType;
+  warehouseId?: string;
+  salespersonId?: string;
+  terminalStoreName?: string;
+  receiptStatus: TrackingReceiptStatus;
+  status: TrackingItemStatus;
+  signedAt?: string;
+  lastMovedAt: string;
+};
+
+export type TrackingMovement = {
+  id: string;
+  barcode: string;
+  type: TrackingMovementType;
+  fromOwnerType?: OwnerType;
+  toOwnerType: OwnerType;
+  fromLabel: string;
+  toLabel: string;
+  operator: string;
+  occurredAt: string;
+  note: string;
+  orderId?: string;
+  orderNo?: string;
+};
+
+export type TrackingBarcodeListResult = {
+  items: TrackedBarcode[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type TrackingBarcodeDetail = {
+  item: TrackedBarcode;
+  movements: TrackingMovement[];
+  terminalReceipts: TerminalReceiptRecord[];
+};
+
+export type TrackingSummary = {
+  total: number;
+  pending: number;
+  signed: number;
+  exceptions: number;
+  inWarehouses: number;
+  withSalespeople: number;
+  atTerminalStores: number;
+  recentMovements: TrackingMovement[];
+  latestSync?: TerminalReceiptSyncRun;
+};
+
+export type TrackingOrderSummary = {
+  id: string;
+  orderNo: string;
+  type: TrackingOrderType;
+  sourceWarehouseId?: string;
+  targetWarehouseId?: string;
+  salespersonId?: string;
+  operator: string;
+  createdAt: string;
+  barcodeCount: number;
+  barcodePreview: string[];
+  status: OrderStatus;
+};
+
+export type TrackingOrderListResult = {
+  items: TrackingOrderSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 export type BarcodeCorrection = {
   id: string;
   oldBarcode: string;

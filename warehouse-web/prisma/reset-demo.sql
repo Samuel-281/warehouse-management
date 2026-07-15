@@ -3,9 +3,13 @@
 
 TRUNCATE TABLE
   business_requests,
+  tracking_movements,
+  tracking_order_barcodes,
+  tracking_orders,
   terminal_receipt_sync_runs,
   terminal_receipt_records,
   terminal_receipt_imports,
+  tracked_barcodes,
   sales_return_order_items,
   sales_return_orders,
   outbound_order_items,

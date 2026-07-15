@@ -4,7 +4,12 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { ApiError } from "@/lib/api-response";
 
-export type IdempotencyOperation = "INBOUND" | "OUTBOUND" | "SALES_RETURN";
+export type IdempotencyOperation =
+  | "INBOUND"
+  | "OUTBOUND"
+  | "SALES_RETURN"
+  | "TRACKING_OUTBOUND"
+  | "TRACKING_RETURN";
 
 export type IdempotencyContext = {
   userId?: string;

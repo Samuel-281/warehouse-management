@@ -13,7 +13,10 @@ import type {
   TerminalReceiptRecord
 } from "@/lib/types";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
-import { reconcileTerminalReceiptOwnership } from "@/lib/services/terminal-receipt-ownership-service";
+import {
+  reconcileTerminalReceiptOwnership,
+  reconcileTrackedBarcodeReceipts
+} from "@/lib/services/terminal-receipt-ownership-service";
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 const MAX_DATA_ROWS = 10_000;
@@ -47,6 +50,7 @@ type MatchedItem = {
 
 type AnalyzedRow = ParsedReceiptRow & {
   inventoryItemId?: string;
+  trackedBarcodeId?: string;
   status: TerminalReceiptPreviewRow["status"];
   matchedGoodsName?: string;
   matchedOwner?: string;
@@ -109,6 +113,7 @@ export async function importTerminalReceipts(input: {
             data: importableRows.map((row) => ({
               importId: importBatch.id,
               inventoryItemId: row.inventoryItemId,
+              trackedBarcodeId: row.trackedBarcodeId,
               barcode: row.barcode,
               scannedAt: row.scannedAt as Date,
               scannerName: row.scannerName,
@@ -135,6 +140,10 @@ export async function importTerminalReceipts(input: {
       await reconcileTerminalReceiptOwnership(
         tx,
         importableRows.flatMap((row) => row.inventoryItemId ? [row.inventoryItemId] : [])
+      );
+      await reconcileTrackedBarcodeReceipts(
+        tx,
+        importableRows.flatMap((row) => row.trackedBarcodeId ? [row.trackedBarcodeId] : [])
       );
 
       const result = await tx.terminalReceiptImport.findUniqueOrThrow({ where: { id: importBatch.id } });
@@ -249,7 +258,19 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
   const scannedAtRange = scannedTimes.length > 0
     ? { gte: new Date(Math.min(...scannedTimes)), lte: new Date(Math.max(...scannedTimes)) }
     : undefined;
-  const [items, corrections, existingRecords] = await Promise.all([
+  const [trackedItems, items, corrections, existingRecords] = await Promise.all([
+    prisma.trackedBarcode.findMany({
+      where: { barcode: { in: barcodes } },
+      include: {
+        warehouse: true,
+        salesperson: true,
+        movements: { orderBy: [{ occurredAt: "asc" }, { id: "asc" }] },
+        terminalReceiptRecords: {
+          where: { matchStatus: "MATCHED" },
+          orderBy: [{ scannedAt: "asc" }, { createdAt: "asc" }]
+        }
+      }
+    }),
     prisma.inventoryItem.findMany({
       where: { barcode: { in: barcodes } },
       include: {
@@ -292,6 +313,13 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
   const itemByBarcode = new Map<string, MatchedItem>();
   for (const item of items) itemByBarcode.set(item.barcode, item);
   for (const correction of corrections) itemByBarcode.set(correction.oldBarcode, correction.item);
+  const trackedByBarcode = new Map(trackedItems.map((item) => [item.barcode, item]));
+  const confirmedGoodsByBarcode = new Map(
+    trackedItems.flatMap((item) => {
+      const confirmed = item.terminalReceiptRecords[0]?.externalGoodsName.trim();
+      return confirmed ? [[item.barcode, confirmed] as const] : [];
+    })
+  );
   const existingFingerprints = new Set(existingRecords.map((record) => record.fingerprint));
   const existingEvents = new Set(existingRecords.map((record) => receiptEventKey(record)));
   const fileEvents = new Set<string>();
@@ -313,6 +341,34 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
       return { ...row, status: "duplicate", issue: "该签收记录已经导入或在文件中重复" };
     }
     fileEvents.add(eventKey);
+    const trackedItem = trackedByBarcode.get(row.barcode);
+    if (trackedItem) {
+      const precedingMovement = [...trackedItem.movements]
+        .reverse()
+        .find((movement) => movement.occurredAt.getTime() <= row.scannedAt!.getTime());
+      const status = precedingMovement?.type === "SALES_OUTBOUND" || precedingMovement?.type === "QINCE_RECEIPT"
+        ? "matched"
+        : "conflict";
+      const confirmedGoodsName = confirmedGoodsByBarcode.get(row.barcode);
+      const goodsConflict = Boolean(
+        confirmedGoodsName && confirmedGoodsName !== row.externalGoodsName.trim()
+      );
+      if (!confirmedGoodsName && status === "matched") {
+        confirmedGoodsByBarcode.set(row.barcode, row.externalGoodsName.trim());
+      }
+      return {
+        ...row,
+        status: goodsConflict ? "conflict" : status,
+        trackedBarcodeId: trackedItem.id,
+        matchedGoodsName: confirmedGoodsName ?? "待勤策补全",
+        matchedOwner: formatTrackedOwner(trackedItem),
+        issue: goodsConflict
+          ? `该条码此前勤策已确认商品“${confirmedGoodsName}”，本次返回“${row.externalGoodsName}”`
+          : status === "conflict"
+            ? "签收时间前没有可对应的销售出库，仅保存记录，不改变当前归属"
+            : undefined
+      };
+    }
     const item = itemByBarcode.get(row.barcode);
     if (!item) return { ...row, status: "unmatched", issue: "仓库系统中尚未找到该条码" };
     const scannedAt = row.scannedAt;
@@ -459,6 +515,17 @@ function validateFile(fileName: string, buffer: Buffer) {
 function formatMatchedOwner(item: MatchedItem) {
   if (item.ownerType === "SALESPERSON") return `销售人员：${item.salesperson?.name ?? "未知"}`;
   if (item.ownerType === "TERMINAL_STORE") return `终端店铺：${item.terminalStoreName ?? "未知"}`;
+  return `仓库：${item.warehouse?.name ?? "未知"}`;
+}
+
+function formatTrackedOwner(item: {
+  currentOwnerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE";
+  warehouse: { name: string } | null;
+  salesperson: { name: string } | null;
+  terminalStoreName: string | null;
+}) {
+  if (item.currentOwnerType === "SALESPERSON") return `销售人员：${item.salesperson?.name ?? "未知"}`;
+  if (item.currentOwnerType === "TERMINAL_STORE") return `终端店铺：${item.terminalStoreName ?? "未知"}`;
   return `仓库：${item.warehouse?.name ?? "未知"}`;
 }
 

@@ -6,7 +6,7 @@ This workspace is for a warehouse goods management software project. The product
 
 The software now manages goods across a flat warehouse structure. The previous `总仓` / `分仓` distinction has been removed from user-facing business logic. All physical storage sites should be treated uniformly as `仓库`.
 
-The system uses a double-ledger model. Warehouse stock is recorded as quantity per `warehouse + goods`; physical items that enter a scanning workflow use one unique, non-repeatable `单件条形码编号` for traceability. Factory arrival inbound does not create barcode records.
+The current product is a barcode-flow traceability system. Each scanned carton has one unique, non-repeatable barcode. Local product and quantity-stock data remain only as legacy compatibility data; they are no longer part of the primary workflow or user-facing master data.
 
 Version 1.0 focuses on practical desktop web warehouse operations. The desktop work can now be treated as the baseline product. Future changes should avoid broad desktop rewrites unless the user explicitly reopens desktop UI or workflow work.
 
@@ -26,22 +26,22 @@ The current product state is:
 8. The desktop app has been stress-tested with large inventory counts; future list pages should avoid loading unbounded records into the browser.
 9. Warehouse master data is now single-level. Do not require a main warehouse before creating a warehouse.
 
-## Web 1.0 Current Business Model
+## Current Traceability Business Model
 
-The desktop web 1.0 model is now a double-ledger model:
+The current source of truth is the traceability model below:
 
-1. Warehouse stock is quantity-based: each `warehouse + goods` pair has a current quantity.
-2. Barcode tracking is traceability-based: only goods that have passed through scanning workflows need an `inventory_items` barcode record.
-3. Factory arrival inbound does not scan barcodes. It records warehouse, goods, and quantity, then increases the warehouse stock quantity ledger.
-4. Scanned outbound is the unified outbound entry. The operator selects source warehouse, goods, destination type, and barcodes. Destination type can be salesperson or warehouse.
-5. When scanned outbound goes to a salesperson, source warehouse stock decreases and the scanned barcodes enter the `待签收` state. The salesperson remains in the outbound history and pending ownership metadata.
-6. When scanned outbound goes to another warehouse, source warehouse stock decreases, target warehouse stock increases, and the scanned barcodes become traceable under the target warehouse.
-7. All returned goods use one `退回入库` branch. Pending salesperson goods, Qince-signed terminal-store goods, and previously unknown external returns may be mixed in one submission.
-8. Return inbound records only the return warehouse and barcodes. It does not ask for a salesperson, terminal store, production date, or shelf-life data. Unknown barcodes require a goods selection so the tracking profile can be created.
-9. Qince receipt data is the authority for the receiving terminal-store name. A valid receipt changes current barcode ownership from pending salesperson custody to the external terminal store without changing warehouse quantity. The outbound salesperson remains visible in history.
-10. Later Qince receipt events can move current external ownership from store A to store B without a warehouse return. Reconciliation uses Qince scan event time, and a late-imported old receipt must never overwrite a later warehouse return or other stock movement.
-11. User-facing sales lifecycle statuses are `待签收`, `已签收`, and `签收异常`; warehouse, written-off, and voided states remain separate inventory states.
-12. Do not display or design around "tracked in-warehouse quantity" versus "untracked quantity"; the user only wants to see warehouse stock quantity and separately query traceable barcodes.
+1. The system's primary responsibility is recording where each unique carton barcode went, not maintaining authoritative stock quantities.
+2. Daily master data contains only warehouses and salespeople. Goods and terminal stores are not locally maintained master data.
+3. `快速出库` records source warehouse, destination type, destination, and mixed carton barcodes. It does not ask for goods and does not change the legacy quantity-stock ledger.
+4. A sales outbound barcode enters `待签收` and is temporarily owned by the selected salesperson. The outbound salesperson remains permanently visible in history.
+5. A warehouse destination immediately changes the current owner to the target warehouse.
+6. `扫码回库` is the only return window. It records return warehouse and mixed barcodes only, with no goods, store, salesperson, production date, or stock-quantity input.
+7. Qince receipt data is authoritative for product name, product unit, receiving terminal-store name, and receipt time.
+8. A valid Qince receipt enriches the barcode profile, changes current ownership to the reported terminal store, and marks it `已签收` without changing quantity stock.
+9. A later receipt may move a barcode directly from store A to store B without a warehouse return. Both receipt events remain in history.
+10. A product-name conflict does not overwrite the first confirmed product. The barcode is marked `签收异常` and the conflicting receipt remains auditable.
+11. User-facing receipt statuses are `待签收`, `已签收`, and `签收异常`. Current owner is a separate dimension: warehouse, salesperson, or terminal store.
+12. Legacy goods, inventory, and order tables must be preserved for compatibility and migration history, but new daily workflows must not depend on them.
 
 Older documentation may still mention the previous prototype model where every inventory unit depended on a barcode record. Treat this Web 1.0 business model as the source of truth unless the user explicitly changes it.
 
@@ -51,10 +51,10 @@ When handling future requests, be careful not to reintroduce demo data during pr
 
 Important project documents live in `docs/`:
 
-1. `docs/warehouse-management-requirements.md` - requirements document, currently based on v0.5 business decisions.
-2. `docs/warehouse-management-user-manual.md` - software user manual based on the requirements.
-3. `docs/warehouse-management-user-manual.docx` - generated Word version of the user manual.
-4. `docs/warehouse-management-user-manual.pdf` - generated PDF version of the user manual.
+1. `docs/warehouse-management-requirements.md` - current barcode-flow traceability requirements.
+2. `docs/warehouse-management-user-manual.md` - current barcode-flow traceability user manual.
+3. `docs/warehouse-management-user-manual.docx` - generated Word snapshot from an older workflow; regenerate before external distribution.
+4. `docs/warehouse-management-user-manual.pdf` - generated PDF snapshot from an older workflow; regenerate before external distribution.
 5. `docs/frontend-desktop-requirements.md` - desktop frontend redesign/performance requirements created after large-data testing.
 6. `docs/frontend-mobile-requirements.md` - mobile frontend requirements for the next development stage.
 
@@ -74,29 +74,24 @@ The current server deployment path is documented in `docs/aliyun-ecs-deployment.
 
 ## Confirmed Business Scope
 
-The MVP scope includes:
+The current scope includes:
 
 1. Login and role-based access.
-2. Goods master data.
-3. Warehouse master data.
-4. Inbound management.
-5. Outbound management.
-6. Stock query.
-7. Item barcode movement query.
-8. Unified return inbound for pending, signed, and unknown external-return barcodes.
-9. Qince terminal receipt import/sync and terminal-store ownership reconciliation.
-10. Mobile/PDA scanning for inbound, outbound, unified return, and stock query as the next major follow-up.
-11. Operation logs.
+2. Warehouse and salesperson master data.
+3. Fast mixed-barcode outbound to a salesperson or warehouse.
+4. Unified mixed-barcode return to a warehouse.
+5. Exact barcode ownership, receipt-status, and movement-history query.
+6. Qince terminal receipt import/sync, product enrichment, and terminal-store ownership reconciliation.
+7. Web and native Android PDA operation surfaces.
+8. Operation logs.
 
-The first version should prioritize these workflows:
+Daily workflows should prioritize:
 
-1. `厂家到货入库`
-2. `统一退回入库`
-3. `挪仓`
-4. `销售出库`
-5. `勤策终端签收同步`
-6. `库存查询`
-7. `库存流转查询`
+1. `快速出库`
+2. `扫码回库`
+3. `条码查询`
+4. `勤策终端签收同步`
+5. `条码流转查询`
 
 ## Warehouse Rules
 
@@ -110,34 +105,20 @@ Each physical item has one unique barcode. The barcode must not be duplicated.
 
 The system does not need to generate barcode numbers. It only needs to accept scanned or manually entered barcodes, validate uniqueness, and use them as the main traceability key.
 
-Warehouse quantity and barcode traceability are separate ledgers. Do not derive warehouse quantity from barcode records, and do not require every warehouse unit to have a barcode record.
+Do not require goods or quantity-stock records before creating a traceable barcode. Product data is enriched later from Qince receipts.
 
-## Inbound Rules
+## Return Rules
 
-There are two user-facing inbound branches:
-
-1. `厂家到货`
-2. `退回入库`
-
-For `厂家到货`:
-
-1. Goods may enter any enabled warehouse.
-2. Production date is not mandatory.
-3. Shelf life does not need to be calculated by default.
-4. Factory arrival records goods and quantity only; it does not scan or create individual barcode records.
-
-For `退回入库`:
-
-1. There is only one return window; do not split salesperson return and terminal-store return into separate branches.
-2. Pending salesperson barcodes, signed terminal-store barcodes, and unknown external returns may be submitted together.
-3. Production date and shelf life are not recorded.
-4. The operator does not select a salesperson or terminal store.
-5. Unknown barcodes require a goods selection and create a new traceability profile.
-6. Barcodes already in warehouse inventory are rejected as duplicate inbound.
+1. There is only one `扫码回库` window.
+2. Pending salesperson barcodes, signed terminal-store barcodes, and unknown external-return barcodes may be submitted together.
+3. The operator selects only the return warehouse and scans barcodes.
+4. Product, terminal store, salesperson, production date, shelf life, and stock quantity are not requested.
+5. Unknown barcodes create a traceability profile without product data; Qince may enrich them later.
+6. Barcodes already owned by a warehouse are rejected as duplicate return.
 
 ## Outbound Rules
 
-The user-facing application has one unified `扫码出库` entry with two destination types:
+The user-facing application has one `快速出库` entry with two destination types:
 
 1. `挪仓`
 2. `销售出库`
@@ -148,14 +129,14 @@ For `挪仓`:
 2. Target warehouse can be any enabled warehouse.
 3. Source and target warehouses must be different.
 4. No approval and no receiver confirmation are required.
-5. The source warehouse quantity must be sufficient. A barcode not previously tracked is created during scanned outbound; an existing barcode must be valid for the selected source warehouse.
+5. No goods or stock quantity is selected. A new barcode creates a tracking profile; an existing barcode must be valid for the selected source warehouse.
 
 For `销售出库`:
 
 1. Goods may be shipped out from any enabled warehouse.
 2. Goods are assigned to a salesperson.
 3. Goods are not assigned to a specific terminal store.
-4. The source warehouse quantity must be sufficient. New scanned barcodes become tracked at submission; existing barcodes must be valid for the selected source warehouse.
+4. New scanned barcodes become tracked at submission; existing barcodes must be valid for the selected source warehouse.
 5. After submission, the item enters `待签收`; the selected salesperson remains its pending custodian and part of the permanent outbound history.
 
 ## Receipt And Return Rules
@@ -165,22 +146,21 @@ Qince receipt data and warehouse returns form one continuous barcode history.
 1. A valid Qince receipt changes the current owner to the reported terminal-store name and status to `已签收`; it does not change warehouse quantity.
 2. The store name comes from Qince and is not maintained as local terminal-store master data.
 3. Multiple valid receipts after one sales outbound may move external ownership from store A to store B without warehouse stock movement.
-4. Unified return moves pending, signed, or unknown external-return goods into the selected warehouse and increases warehouse quantity once per barcode.
+4. Unified return moves pending, signed, or unknown external-return barcodes into the selected warehouse without changing legacy quantity stock.
 5. Unified return does not record terminal store, salesperson, production date, or shelf life.
 6. Receipt reconciliation is ordered by the external scan time. Older data imported after a later return remains history only and cannot replace the current warehouse owner.
 
-## Stock Query Expectations
+## Traceability Query Expectations
 
-Stock query should support, at minimum:
+Traceability query should support, at minimum:
 
-1. Query by warehouse.
-2. Query pending barcodes by salesperson and signed barcodes by terminal-store name.
-3. Query by goods information.
-4. Query by single item barcode.
-5. Show current warehouse, pending salesperson, or signed terminal-store ownership.
-6. Show item barcode status.
-7. Show production date and shelf-life data where applicable.
-8. Show full stock movement history.
+1. Exact single-barcode lookup.
+2. Filtering by receipt status and current owner type.
+3. Search by Qince-enriched product name or terminal-store name.
+4. Show current warehouse, salesperson, or terminal-store ownership.
+5. Show `待签收`, `已签收`, or `签收异常` separately from current owner.
+6. Show Qince-enriched product and unit where available.
+7. Show full outbound, return, transfer, and Qince receipt history.
 
 Movement history should show the operation type, source ownership, target ownership, barcode, goods information, operator, and operation time.
 
@@ -213,7 +193,7 @@ At the start of every PDA change requested from this workspace:
 6. Keep the Android server address configurable. The current production API base URL is `http://43.108.14.102`.
 7. Verify Android changes with `./gradlew :app:assembleDebug` plus emulator or real-device checks where available.
 
-As of July 10, 2026, the Android repository `main` branch is at tag `v0.1.5`. Treat repository state as authoritative and re-check it each time rather than assuming this snapshot is still current.
+As of July 2026, the Android repository `main` branch has reached tag `v0.2.0`. Treat repository state as authoritative and re-check it each time rather than assuming this snapshot is still current.
 
 Mobile priorities:
 
@@ -230,14 +210,11 @@ Mobile priorities:
 Mobile workflows to prioritize:
 
 1. Login and role-aware entry.
-2. Barcode scan/entry hub.
-3. Inbound by factory arrival.
-4. Inbound by terminal store return/exchange.
-5. Warehouse transfer.
-6. Sales outbound.
-7. Sales return.
-8. Inventory lookup by barcode.
-9. Barcode movement detail.
+2. Fast mixed-barcode outbound to a salesperson.
+3. Fast mixed-barcode transfer to another warehouse.
+4. Unified barcode return to a warehouse.
+5. Exact barcode ownership and receipt-status lookup.
+6. Complete barcode movement and Qince receipt detail.
 
 The mobile UI should assume warehouse operators may be using a phone or PDA scanner in a noisy, repetitive work environment. Confirmation and error states should be obvious, but the flow should avoid unnecessary modal friction for normal scanning.
 
@@ -261,7 +238,7 @@ When updating requirements or manuals:
 1. Keep project documents under `docs/`.
 2. Preserve the distinction between requirements, user manual, and generated deliverables.
 3. Use Chinese for business-facing documentation unless the user asks otherwise.
-4. Keep terms consistent: `仓库`, `单件条形码编号`, `厂家到货`, `扫码出库`, `待签收`, `已签收`, `签收异常`, `统一退回入库`, `勤策终端签收`.
+4. Keep terms consistent: `仓库`, `销售人员`, `箱码`, `快速出库`, `扫码回库`, `待签收`, `已签收`, `签收异常`, `勤策终端签收`.
 5. If a new business rule changes an existing rule, update both the requirements document and user manual when appropriate.
 
 ## Development Guidance For Future Agents
@@ -275,19 +252,15 @@ Run the local prototype from `warehouse-web/`:
 
 The local database should be available before testing persisted flows. For large-data testing, avoid adding frontend behavior that depends on loading every inventory item, every movement, or every barcode at once.
 
-The production data model must preserve both the warehouse quantity ledger and item barcode traceability ledger. It should include:
+The production data model must preserve legacy stock tables for compatibility while using the tracking models for new daily work. It should include:
 
-1. Goods master data.
-2. Warehouse master data.
-3. Storage locations.
-4. Salespersons.
-5. Terminal stores.
-6. Warehouse-goods quantity balances and immutable quantity movements.
-7. Item barcode inventory records and immutable barcode movements.
-8. Inbound orders and inbound lines.
-9. Outbound orders and outbound lines.
-10. Sales return orders.
-11. Users, roles, and operation logs.
+1. Warehouse master data.
+2. Salespersons.
+3. Tracked carton barcodes with current owner and receipt status.
+4. Tracking orders and immutable tracking movements.
+5. Qince receipt records and synchronization runs.
+6. Users, roles, and operation logs.
+7. Legacy goods, quantity balances, inventory items, and old business orders until a separate archival migration is approved.
 
 Any business operation that changes item location or ownership should write an immutable movement ledger entry.
 
@@ -308,3 +281,9 @@ The July 2026 cleanup established these additional invariants:
 11. Users may change their own password. Super administrators may edit, enable, disable, and reset other accounts, but the system must retain at least one enabled super administrator.
 12. The super-administrator consistency audit is diagnostic only. It must not automatically repair quantity balances, barcode ownership, movements, or voided orders.
 13. Production health is exposed at `/api/health` without secrets. PostgreSQL backups are verified locally and uploaded to a private OSS bucket through an ECS RAM role; long-lived OSS AccessKeys must not be committed or stored in application environment files.
+14. New daily work uses `tracked_barcodes`, `tracking_orders`, `tracking_order_barcodes`, and `tracking_movements`; legacy quantity-stock records are compatibility data only.
+15. Fast outbound and unified return never require goods or quantity-stock records and never mutate the legacy quantity ledger.
+16. Qince is authoritative for product name, product unit, signed terminal-store name, and receipt time.
+17. Receipt status and current owner must remain separate fields.
+18. A later Qince receipt may move current external ownership from store A to store B while retaining both receipt events.
+19. Product conflicts must be visible as `签收异常`; do not silently overwrite the first confirmed product name.

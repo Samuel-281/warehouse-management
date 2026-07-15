@@ -76,6 +76,35 @@ enum TerminalReceiptSyncStatus {
   FAILURE
 }
 
+enum TrackingOrderType {
+  SALES_OUTBOUND
+  TRANSFER
+  RETURN
+}
+
+enum TrackingReceiptStatus {
+  PENDING
+  SIGNED
+  EXCEPTION
+}
+
+enum TrackingItemStatus {
+  ACTIVE
+  WRITTEN_OFF
+  VOIDED
+}
+
+enum TrackingMovementType {
+  LEGACY_INBOUND
+  SALES_OUTBOUND
+  TRANSFER
+  RETURN
+  QINCE_RECEIPT
+  ORDER_REVERSAL
+  BARCODE_CORRECTION
+  WRITE_OFF
+}
+
 model User {
   id           String          @id @default(uuid()) @db.Uuid
   username     String          @unique
@@ -88,6 +117,8 @@ model User {
   sessions     UserSession[]
   operationLogs OperationLog[]
   businessRequests BusinessRequest[]
+  trackingOrders TrackingOrder[]
+  trackingMovements TrackingMovement[]
 
   inboundOrders      InboundOrder[]
   outboundOrders     OutboundOrder[]
@@ -218,6 +249,9 @@ model Warehouse {
   sourceOutboundOrders OutboundOrder[]   @relation("SourceWarehouse")
   targetOutboundOrders OutboundOrder[]   @relation("TargetWarehouse")
   salesReturnOrders   SalesReturnOrder[]
+  trackedBarcodes     TrackedBarcode[]
+  sourceTrackingOrders TrackingOrder[] @relation("TrackingSourceWarehouse")
+  targetTrackingOrders TrackingOrder[] @relation("TrackingTargetWarehouse")
 
   @@index([sortOrder])
   @@map("warehouses")
@@ -257,6 +291,8 @@ model Salesperson {
   inventoryItems        InventoryItem[]
   outboundOrders        OutboundOrder[]
   salesReturnOrderItems SalesReturnOrderItem[]
+  trackedBarcodes        TrackedBarcode[]
+  trackingOrders         TrackingOrder[]
 
   @@map("salespeople")
 }
@@ -374,6 +410,7 @@ model TerminalReceiptRecord {
   id                        String             @id @default(uuid()) @db.Uuid
   importId                  String             @db.Uuid
   inventoryItemId           String?            @db.Uuid
+  trackedBarcodeId          String?            @db.Uuid
   barcode                   String
   scannedAt                 DateTime
   scannerName               String
@@ -386,12 +423,126 @@ model TerminalReceiptRecord {
 
   import        TerminalReceiptImport @relation(fields: [importId], references: [id], onDelete: Cascade)
   inventoryItem InventoryItem?        @relation(fields: [inventoryItemId], references: [id])
+  trackedBarcode TrackedBarcode?       @relation(fields: [trackedBarcodeId], references: [id])
+  trackingMovement TrackingMovement?
 
   @@index([barcode, scannedAt(sort: Desc)])
   @@index([inventoryItemId, scannedAt(sort: Desc)])
+  @@index([trackedBarcodeId, scannedAt(sort: Desc)])
   @@index([receivingOrganizationName])
   @@index([importId])
   @@map("terminal_receipt_records")
+}
+
+model TrackedBarcode {
+  id                    String                @id @default(uuid()) @db.Uuid
+  barcode               String                @unique
+  externalGoodsName     String?
+  goodsUnit             String?
+  currentOwnerType      OwnerType
+  warehouseId           String?               @db.Uuid
+  salespersonId         String?               @db.Uuid
+  terminalStoreName     String?
+  receiptStatus         TrackingReceiptStatus @default(PENDING)
+  status                TrackingItemStatus    @default(ACTIVE)
+  signedAt              DateTime?
+  lastMovedAt           DateTime
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  warehouse             Warehouse?             @relation(fields: [warehouseId], references: [id])
+  salesperson           Salesperson?           @relation(fields: [salespersonId], references: [id])
+  movements             TrackingMovement[]
+  orderItems            TrackingOrderBarcode[]
+  terminalReceiptRecords TerminalReceiptRecord[]
+
+  @@index([currentOwnerType, warehouseId, lastMovedAt(sort: Desc)])
+  @@index([currentOwnerType, salespersonId, lastMovedAt(sort: Desc)])
+  @@index([receiptStatus, lastMovedAt(sort: Desc)])
+  @@index([externalGoodsName])
+  @@index([terminalStoreName])
+  @@map("tracked_barcodes")
+}
+
+model TrackingOrder {
+  id                String            @id @default(uuid()) @db.Uuid
+  orderNo           String            @unique
+  type              TrackingOrderType
+  sourceWarehouseId String?           @db.Uuid
+  targetWarehouseId String?           @db.Uuid
+  salespersonId     String?           @db.Uuid
+  operatorId        String?           @db.Uuid
+  operatorName      String
+  status            OrderStatus       @default(ACTIVE)
+  voidedAt          DateTime?
+  voidedByUserId    String?           @db.Uuid
+  voidedByName      String?
+  voidReason        String?
+  createdAt         DateTime          @default(now())
+
+  sourceWarehouse   Warehouse?        @relation("TrackingSourceWarehouse", fields: [sourceWarehouseId], references: [id])
+  targetWarehouse   Warehouse?        @relation("TrackingTargetWarehouse", fields: [targetWarehouseId], references: [id])
+  salesperson       Salesperson?      @relation(fields: [salespersonId], references: [id])
+  operator          User?             @relation(fields: [operatorId], references: [id])
+  items             TrackingOrderBarcode[]
+  movements         TrackingMovement[]
+
+  @@index([type, createdAt(sort: Desc)])
+  @@index([sourceWarehouseId, createdAt(sort: Desc)])
+  @@index([targetWarehouseId, createdAt(sort: Desc)])
+  @@index([salespersonId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("tracking_orders")
+}
+
+model TrackingOrderBarcode {
+  id                        String       @id @default(uuid()) @db.Uuid
+  orderId                   String       @db.Uuid
+  trackedBarcodeId          String       @db.Uuid
+  barcode                   String
+  beforeOwnerType           OwnerType?
+  beforeWarehouseId         String?      @db.Uuid
+  beforeSalespersonId       String?      @db.Uuid
+  beforeTerminalStoreName   String?
+  beforeReceiptStatus       TrackingReceiptStatus?
+  createdTrackingItem       Boolean      @default(false)
+
+  order                     TrackingOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  trackedBarcode            TrackedBarcode @relation(fields: [trackedBarcodeId], references: [id])
+
+  @@unique([orderId, barcode])
+  @@index([barcode])
+  @@index([trackedBarcodeId])
+  @@map("tracking_order_barcodes")
+}
+
+model TrackingMovement {
+  id                    String               @id @default(uuid()) @db.Uuid
+  trackedBarcodeId      String               @db.Uuid
+  barcode               String
+  type                  TrackingMovementType
+  fromOwnerType         OwnerType?
+  toOwnerType           OwnerType
+  fromLabel             String
+  toLabel               String
+  operatorId            String?              @db.Uuid
+  operatorName          String
+  occurredAt            DateTime
+  note                  String
+  orderId               String?              @db.Uuid
+  orderNo               String?
+  receiptRecordId       String?              @unique @db.Uuid
+
+  trackedBarcode        TrackedBarcode       @relation(fields: [trackedBarcodeId], references: [id])
+  operator              User?                @relation(fields: [operatorId], references: [id])
+  order                 TrackingOrder?       @relation(fields: [orderId], references: [id])
+  receiptRecord         TerminalReceiptRecord? @relation(fields: [receiptRecordId], references: [id], onDelete: SetNull)
+
+  @@index([trackedBarcodeId, occurredAt(sort: Desc)])
+  @@index([barcode, occurredAt(sort: Desc)])
+  @@index([orderId])
+  @@index([type, occurredAt(sort: Desc)])
+  @@map("tracking_movements")
 }
 
 model WarehouseStock {
