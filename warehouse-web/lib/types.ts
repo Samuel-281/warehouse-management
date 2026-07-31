@@ -355,6 +355,8 @@ export type TrackingOrderSummary = {
   barcodeCount: number;
   barcodePreview: string[];
   status: OrderStatus;
+  groupId?: string;
+  groupNo?: string;
 };
 
 export type TrackingOrderListResult = {
@@ -362,6 +364,71 @@ export type TrackingOrderListResult = {
   total: number;
   page: number;
   pageSize: number;
+};
+
+export type TrackingOrderReceiptSummary = {
+  total: number;
+  signed: number;
+  pending: number;
+  exceptions: number;
+  signedRate: number;
+};
+
+export type TrackingOrderGoodsReceiptSummary = TrackingOrderReceiptSummary & {
+  goodsName: string;
+  goodsUnit?: string;
+};
+
+export type TrackingOrderBarcodeDetail = {
+  barcode: string;
+  externalGoodsName?: string;
+  goodsUnit?: string;
+  receiptStatus?: TrackingReceiptStatus;
+  signedAt?: string;
+  receivingOrganizationName?: string;
+  currentOwnerType: OwnerType;
+  warehouseId?: string;
+  salespersonId?: string;
+  terminalStoreName?: string;
+};
+
+export type TrackingOrderDetail = {
+  order: TrackingOrderSummary;
+  receiptSummary?: TrackingOrderReceiptSummary;
+  goodsReceiptSummaries: TrackingOrderGoodsReceiptSummary[];
+  items: TrackingOrderBarcodeDetail[];
+};
+
+export type TrackingOrderGroupSummary = {
+  id: string;
+  groupNo: string;
+  sourceWarehouseId: string;
+  salespersonId: string;
+  operator: string;
+  createdAt: string;
+  orderCount: number;
+  barcodeCount: number;
+  orderPreview: string[];
+};
+
+export type TrackingOrderGroupListResult = {
+  items: TrackingOrderGroupSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type TrackingOrderGroupBarcodeDetail = TrackingOrderBarcodeDetail & {
+  orderId: string;
+  orderNo: string;
+};
+
+export type TrackingOrderGroupDetail = {
+  group: TrackingOrderGroupSummary;
+  memberOrders: TrackingOrderSummary[];
+  receiptSummary: TrackingOrderReceiptSummary;
+  goodsReceiptSummaries: TrackingOrderGoodsReceiptSummary[];
+  items: TrackingOrderGroupBarcodeDetail[];
 };
 
 export type BarcodeCorrection = {

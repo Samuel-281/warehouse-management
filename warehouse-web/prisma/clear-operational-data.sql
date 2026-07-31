@@ -3,6 +3,7 @@
 
 TRUNCATE TABLE
   business_requests,
+  tracking_order_groups,
   tracking_movements,
   tracking_order_barcodes,
   tracking_orders,

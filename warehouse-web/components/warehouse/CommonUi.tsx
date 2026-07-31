@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export function EmptyState({ icon: Icon, title, detail }: { icon: LucideIcon; title: string; detail: string }) {
@@ -93,16 +94,83 @@ export function PaginationBar({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const end = Math.min(total, page * pageSize);
+  const pageItems = getPaginationItems(page, totalPages);
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm">
       <span className="text-xs text-muted">显示 {start}-{end} / {total}</span>
-      <div className="flex items-center gap-2">
-        <button className="secondary-button h-9 px-3" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>上一页</button>
-        <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
-          {page} / {totalPages}
-        </span>
-        <button className="secondary-button h-9 px-3" onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}>下一页</button>
+      <div className="flex items-center gap-1" aria-label={`分页，第 ${page} 页，共 ${totalPages} 页`}>
+        <button
+          className="icon-button h-9 w-9"
+          aria-label="上一页"
+          title="上一页"
+          onClick={() => onPageChange(page - 1)}
+          disabled={page <= 1}
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        {pageItems.map((item) => item.type === "page" ? (
+          <button
+            key={item.page}
+            className={`h-9 min-w-9 rounded-md border px-2 text-xs font-semibold transition ${
+              item.page === page
+                ? "border-work bg-work text-white shadow-sm"
+                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+            }`}
+            aria-label={`第 ${item.page} 页`}
+            aria-current={item.page === page ? "page" : undefined}
+            onClick={() => onPageChange(item.page)}
+          >
+            {item.page}
+          </button>
+        ) : (
+          <span key={item.key} className="flex h-9 min-w-6 items-center justify-center text-xs text-slate-400" aria-hidden="true">
+            ...
+          </span>
+        ))}
+        <button
+          className="icon-button h-9 w-9"
+          aria-label="下一页"
+          title="下一页"
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages}
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
       </div>
     </div>
   );
+}
+
+type PaginationItem = { type: "page"; page: number } | { type: "ellipsis"; key: string };
+
+function getPaginationItems(page: number, totalPages: number): PaginationItem[] {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => ({ type: "page" as const, page: index + 1 }));
+  }
+
+  if (page <= 4) {
+    return [
+      ...[1, 2, 3, 4, 5].map((pageNumber) => ({ type: "page" as const, page: pageNumber })),
+      { type: "ellipsis" as const, key: "right" },
+      { type: "page" as const, page: totalPages }
+    ];
+  }
+
+  if (page >= totalPages - 3) {
+    return [
+      { type: "page", page: 1 },
+      { type: "ellipsis", key: "left" },
+      ...Array.from({ length: 5 }, (_, index) => ({ type: "page" as const, page: totalPages - 4 + index }))
+    ];
+  }
+
+  return [
+    { type: "page", page: 1 },
+    { type: "ellipsis", key: "left" },
+    { type: "page", page: page - 1 },
+    { type: "page", page },
+    { type: "page", page: page + 1 },
+    { type: "ellipsis", key: "right" },
+    { type: "page", page: totalPages }
+  ];
 }

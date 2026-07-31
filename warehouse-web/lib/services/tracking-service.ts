@@ -12,8 +12,12 @@ import type {
   TrackingBarcodeDetail,
   TrackingBarcodeListResult,
   TrackingMovement,
+  TrackingOrderBarcodeDetail,
+  TrackingOrderDetail,
+  TrackingOrderGoodsReceiptSummary,
   TrackingOrderListResult,
   TrackingOrderSummary,
+  TrackingReceiptStatus,
   TrackingSummary
 } from "@/lib/types";
 
@@ -505,13 +509,179 @@ export async function listTrackingOrders(input: { page?: number; pageSize?: numb
     prisma.trackingOrder.count({ where }),
     prisma.trackingOrder.findMany({
       where,
-      include: { items: { orderBy: { barcode: "asc" }, take: 4 }, _count: { select: { items: true } } },
+      include: {
+        items: { orderBy: { barcode: "asc" }, take: 4 },
+        groupMembership: { include: { group: { select: { id: true, groupNo: true } } } },
+        _count: { select: { items: true } }
+      },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * pageSize,
       take: pageSize
     })
   ]);
   return { items: orders.map(mapTrackingOrder), total, page, pageSize };
+}
+
+export async function getTrackingOrderDetail(orderId: string): Promise<TrackingOrderDetail> {
+  const prisma = getPrisma();
+  const order = await prisma.trackingOrder.findUnique({
+    where: { id: orderId },
+    include: {
+      items: {
+        include: { trackedBarcode: true },
+        orderBy: { barcode: "asc" }
+      },
+      _count: { select: { items: true } }
+    }
+  });
+  if (!order) throw new ApiError("流转单据不存在", 404);
+
+  const trackedBarcodeIds = order.items.map((item) => item.trackedBarcodeId);
+  const [movements, receipts] = order.type === "SALES_OUTBOUND" && trackedBarcodeIds.length > 0
+    ? await Promise.all([
+        prisma.trackingMovement.findMany({
+          where: {
+            trackedBarcodeId: { in: trackedBarcodeIds },
+            occurredAt: { gte: order.createdAt }
+          },
+          orderBy: [{ occurredAt: "asc" }, { id: "asc" }]
+        }),
+        prisma.terminalReceiptRecord.findMany({
+          where: {
+            trackedBarcodeId: { in: trackedBarcodeIds },
+            scannedAt: { gte: order.createdAt }
+          },
+          orderBy: [{ scannedAt: "asc" }, { id: "asc" }]
+        })
+      ])
+    : [[], []];
+
+  const movementsByBarcode = new Map<string, typeof movements>();
+  for (const movement of movements) {
+    const entries = movementsByBarcode.get(movement.trackedBarcodeId) ?? [];
+    entries.push(movement);
+    movementsByBarcode.set(movement.trackedBarcodeId, entries);
+  }
+  const receiptsByBarcode = new Map<string, typeof receipts>();
+  for (const receipt of receipts) {
+    if (!receipt.trackedBarcodeId) continue;
+    const entries = receiptsByBarcode.get(receipt.trackedBarcodeId) ?? [];
+    entries.push(receipt);
+    receiptsByBarcode.set(receipt.trackedBarcodeId, entries);
+  }
+
+  const items: TrackingOrderBarcodeDetail[] = order.items.map((orderItem) => {
+    const tracked = orderItem.trackedBarcode;
+    const currentOwner = {
+      currentOwnerType: mapOwnerType(tracked.currentOwnerType),
+      warehouseId: tracked.warehouseId ?? undefined,
+      salespersonId: tracked.salespersonId ?? undefined,
+      terminalStoreName: tracked.terminalStoreName ?? undefined
+    };
+    if (order.type !== "SALES_OUTBOUND") {
+      return {
+        barcode: orderItem.barcode,
+        externalGoodsName: tracked.externalGoodsName ?? undefined,
+        goodsUnit: tracked.goodsUnit ?? undefined,
+        ...currentOwner
+      };
+    }
+
+    const itemMovements = movementsByBarcode.get(orderItem.trackedBarcodeId) ?? [];
+    const outboundMovement = itemMovements.find((movement) => movement.orderId === order.id);
+    const cycleStartAt = outboundMovement?.occurredAt ?? order.createdAt;
+    const boundary = itemMovements.find((movement) =>
+      movement.id !== outboundMovement?.id &&
+      movement.occurredAt.getTime() >= cycleStartAt.getTime() &&
+      closesSalesReceiptCycle(movement.type)
+    );
+    const cycleReceipts = (receiptsByBarcode.get(orderItem.trackedBarcodeId) ?? []).filter((receipt) =>
+      receipt.scannedAt.getTime() >= cycleStartAt.getTime() &&
+      (!boundary || receipt.scannedAt.getTime() < boundary.occurredAt.getTime())
+    );
+    const hasConflict = cycleReceipts.some((receipt) => receipt.matchStatus === "CONFLICT");
+    const matchedReceipt = cycleReceipts.find((receipt) => receipt.matchStatus === "MATCHED");
+    const latestReceipt = cycleReceipts.at(-1);
+    const receiptStatus: TrackingReceiptStatus = hasConflict ? "exception" : matchedReceipt ? "signed" : "pending";
+
+    return {
+      barcode: orderItem.barcode,
+      externalGoodsName: matchedReceipt?.externalGoodsName ?? tracked.externalGoodsName ?? undefined,
+      goodsUnit: matchedReceipt?.goodsUnit ?? tracked.goodsUnit ?? undefined,
+      receiptStatus,
+      signedAt: latestReceipt ? formatAppDateTime(latestReceipt.scannedAt) : undefined,
+      receivingOrganizationName: latestReceipt?.receivingOrganizationName,
+      ...currentOwner
+    };
+  });
+
+  const receiptSummary = order.type === "SALES_OUTBOUND"
+    ? summarizeTrackingOrderReceipts(items)
+    : undefined;
+  const goodsReceiptSummaries = order.type === "SALES_OUTBOUND"
+    ? summarizeTrackingOrderGoodsReceipts(items)
+    : [];
+
+  return {
+    order: mapTrackingOrder(order),
+    receiptSummary,
+    goodsReceiptSummaries,
+    items
+  };
+}
+
+function closesSalesReceiptCycle(type: "LEGACY_INBOUND" | "SALES_OUTBOUND" | "TRANSFER" | "RETURN" | "QINCE_RECEIPT" | "ORDER_REVERSAL" | "BARCODE_CORRECTION" | "WRITE_OFF") {
+  return type === "SALES_OUTBOUND" ||
+    type === "TRANSFER" ||
+    type === "RETURN" ||
+    type === "ORDER_REVERSAL" ||
+    type === "WRITE_OFF";
+}
+
+export function summarizeTrackingOrderReceipts(items: TrackingOrderBarcodeDetail[]) {
+  const signed = items.filter((item) => item.receiptStatus === "signed").length;
+  const exceptions = items.filter((item) => item.receiptStatus === "exception").length;
+  const pending = items.length - signed - exceptions;
+  return {
+    total: items.length,
+    signed,
+    pending,
+    exceptions,
+    signedRate: receiptRate(signed, items.length)
+  };
+}
+
+export function summarizeTrackingOrderGoodsReceipts(items: TrackingOrderBarcodeDetail[]): TrackingOrderGoodsReceiptSummary[] {
+  const grouped = new Map<string, TrackingOrderGoodsReceiptSummary>();
+  for (const item of items) {
+    const goodsName = item.externalGoodsName?.trim() || "待勤策补全";
+    const goodsUnit = item.goodsUnit?.trim() || undefined;
+    const key = `${goodsName}\u0000${goodsUnit ?? ""}`;
+    const summary = grouped.get(key) ?? {
+      goodsName,
+      goodsUnit,
+      total: 0,
+      signed: 0,
+      pending: 0,
+      exceptions: 0,
+      signedRate: 0
+    };
+    summary.total += 1;
+    if (item.receiptStatus === "signed") summary.signed += 1;
+    else if (item.receiptStatus === "exception") summary.exceptions += 1;
+    else summary.pending += 1;
+    summary.signedRate = receiptRate(summary.signed, summary.total);
+    grouped.set(key, summary);
+  }
+  return Array.from(grouped.values()).sort((left, right) => {
+    if (left.goodsName === "待勤策补全") return 1;
+    if (right.goodsName === "待勤策补全") return -1;
+    return left.goodsName.localeCompare(right.goodsName, "zh-CN");
+  });
+}
+
+function receiptRate(signed: number, total: number) {
+  return total === 0 ? 0 : Math.round((signed / total) * 1000) / 10;
 }
 
 function normalizeBarcodes(values: string[]) {
@@ -617,6 +787,7 @@ function mapTrackingOrder(order: {
   status: "ACTIVE" | "VOIDED";
   items: Array<{ barcode: string }>;
   _count: { items: number };
+  groupMembership?: { group: { id: string; groupNo: string } } | null;
 }): TrackingOrderSummary {
   return {
     id: order.id,
@@ -629,7 +800,9 @@ function mapTrackingOrder(order: {
     createdAt: formatAppDateTime(order.createdAt),
     barcodeCount: order._count.items,
     barcodePreview: order.items.map((item) => item.barcode),
-    status: order.status === "VOIDED" ? "voided" : "active"
+    status: order.status === "VOIDED" ? "voided" : "active",
+    groupId: order.groupMembership?.group.id,
+    groupNo: order.groupMembership?.group.groupNo
   };
 }
 

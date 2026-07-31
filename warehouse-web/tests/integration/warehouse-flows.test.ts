@@ -18,11 +18,19 @@ import { submitSalesReturn } from "@/lib/services/sales-return-service";
 import { adjustStockManually } from "@/lib/services/stock-adjustment-service";
 import {
   getTrackedBarcodeDetail,
+  getTrackingOrderDetail,
   getTrackingSummary,
+  listTrackingOrders,
   submitTrackingOutbound,
   submitTrackingReturn,
   validateTrackingBarcodes
 } from "@/lib/services/tracking-service";
+import {
+  createTrackingOrderGroup,
+  dissolveTrackingOrderGroup,
+  getTrackingOrderGroupDetail,
+  listTrackingOrderGroups
+} from "@/lib/services/tracking-order-group-service";
 import {
   importTerminalReceipts,
   previewTerminalReceiptImport
@@ -328,6 +336,178 @@ test("条码流向模式无需商品库存，勤策补全商品并支持店铺�
   const summary = await getTrackingSummary();
   assert.equal(summary.total, 1);
   assert.equal(summary.inWarehouses, 1);
+});
+
+test("销售出库单详情按本次流转统计整单与各商品签收率", async () => {
+  const barcodes = ["ORDER-RATE-A1", "ORDER-RATE-A2", "ORDER-RATE-B1", "ORDER-RATE-PENDING"];
+  const outbound = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes,
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const signedAt = new Date();
+  const signedBuffer = await makeTerminalReceiptWorkbook([
+    { barcode: barcodes[0], scannedAt: signedAt, storeName: "签收率测试店铺 A", goodsName: "商品甲_1*24" },
+    { barcode: barcodes[1], scannedAt: signedAt, storeName: "签收率测试店铺 B", goodsName: "商品甲_1*24" },
+    { barcode: barcodes[2], scannedAt: signedAt, storeName: "签收率测试店铺 C", goodsName: "商品乙_1*12" }
+  ]);
+  await importTerminalReceipts({ fileName: "出库单签收率.xlsx", buffer: signedBuffer, operatorName });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const conflictBuffer = await makeTerminalReceiptWorkbook([
+    { barcode: barcodes[2], scannedAt: new Date(), storeName: "签收率异常店铺", goodsName: "商品丙_1*6" }
+  ]);
+  await importTerminalReceipts({ fileName: "出库单签收异常.xlsx", buffer: conflictBuffer, operatorName });
+
+  const detail = await getTrackingOrderDetail(outbound.orderId);
+  assert.deepEqual(detail.receiptSummary, {
+    total: 4,
+    signed: 2,
+    pending: 1,
+    exceptions: 1,
+    signedRate: 50
+  });
+  assert.deepEqual(
+    detail.goodsReceiptSummaries.map((item) => ({
+      goodsName: item.goodsName,
+      total: item.total,
+      signed: item.signed,
+      pending: item.pending,
+      exceptions: item.exceptions,
+      signedRate: item.signedRate
+    })),
+    [
+      { goodsName: "商品甲_1*24", total: 2, signed: 2, pending: 0, exceptions: 0, signedRate: 100 },
+      { goodsName: "商品乙_1*12", total: 1, signed: 0, pending: 0, exceptions: 1, signedRate: 0 },
+      { goodsName: "待勤策补全", total: 1, signed: 0, pending: 1, exceptions: 0, signedRate: 0 }
+    ]
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await submitTrackingReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    barcodes: [barcodes[0]],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const secondOutbound = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: [barcodes[0]],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+
+  const historicalDetail = await getTrackingOrderDetail(outbound.orderId);
+  const currentDetail = await getTrackingOrderDetail(secondOutbound.orderId);
+  assert.equal(historicalDetail.items.find((item) => item.barcode === barcodes[0])?.receiptStatus, "signed");
+  assert.equal(historicalDetail.receiptSummary?.signedRate, 50, "后续回库和再次出库不能改写旧单签收率");
+  assert.equal(currentDetail.items[0]?.receiptStatus, "pending");
+  assert.equal(currentDetail.receiptSummary?.signedRate, 0);
+});
+
+test("同一路线的分批销售出库可合单汇总且解除后保留原始履历", async () => {
+  const batches = [
+    ["GROUP-A-001", "GROUP-A-002"],
+    ["GROUP-B-001", "GROUP-B-002"],
+    ["GROUP-C-001", "GROUP-C-002"]
+  ];
+  const orders = [];
+  for (const barcodes of batches) {
+    orders.push(await submitTrackingOutbound({
+      sourceWarehouseId: context.sourceWarehouseId,
+      destinationType: "salesperson",
+      salespersonId: context.salespersonId,
+      barcodes,
+      operatorName,
+      operatorUserId: currentUser.id
+    }));
+  }
+
+  const movementCountBefore = await prisma.trackingMovement.count();
+  const group = await createTrackingOrderGroup({
+    orderIds: orders.map((order) => order.orderId),
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  assert.equal(group.orderCount, 3);
+  assert.equal(group.barcodeCount, 6);
+  assert.match(group.groupNo, /^HD/);
+  assert.equal(await prisma.trackingMovement.count(), movementCountBefore, "创建合单不能新增条码流转");
+
+  const listedGroups = await listTrackingOrderGroups({ page: 1, pageSize: 20 });
+  assert.equal(listedGroups.total, 1);
+  assert.equal(listedGroups.items[0]?.groupNo, group.groupNo);
+
+  const listedOrders = await listTrackingOrders({ type: "sales_outbound", page: 1, pageSize: 20 });
+  assert.equal(listedOrders.items.filter((order) => order.groupNo === group.groupNo).length, 3);
+
+  await assert.rejects(
+    createTrackingOrderGroup({
+      orderIds: [orders[0]!.orderId, orders[1]!.orderId],
+      operatorName,
+      operatorUserId: currentUser.id
+    }),
+    /已属于合单/
+  );
+
+  const signedAt = new Date(Date.now() + 20);
+  await importTerminalReceipts({
+    fileName: "合单签收率.xlsx",
+    buffer: await makeTerminalReceiptWorkbook([
+      { barcode: batches[0]![0]!, scannedAt: signedAt, storeName: "合单测试店铺 A", goodsName: "合单商品甲_1*24" },
+      { barcode: batches[0]![1]!, scannedAt: signedAt, storeName: "合单测试店铺 B", goodsName: "合单商品甲_1*24" },
+      { barcode: batches[1]![0]!, scannedAt: signedAt, storeName: "合单测试店铺 C", goodsName: "合单商品乙_1*12" }
+    ]),
+    operatorName
+  });
+  await importTerminalReceipts({
+    fileName: "合单签收异常.xlsx",
+    buffer: await makeTerminalReceiptWorkbook([
+      { barcode: batches[1]![0]!, scannedAt: new Date(signedAt.getTime() + 20), storeName: "合单异常店铺", goodsName: "冲突商品_1*6" }
+    ]),
+    operatorName
+  });
+
+  const detail = await getTrackingOrderGroupDetail(group.id);
+  assert.equal(detail.memberOrders.length, 3);
+  assert.equal(detail.items.length, 6);
+  assert.deepEqual(detail.receiptSummary, {
+    total: 6,
+    signed: 2,
+    pending: 3,
+    exceptions: 1,
+    signedRate: 33.3
+  });
+  assert.deepEqual(
+    detail.goodsReceiptSummaries.map((item) => ({
+      goodsName: item.goodsName,
+      total: item.total,
+      signed: item.signed,
+      pending: item.pending,
+      exceptions: item.exceptions
+    })),
+    [
+      { goodsName: "合单商品甲_1*24", total: 2, signed: 2, pending: 0, exceptions: 0 },
+      { goodsName: "合单商品乙_1*12", total: 1, signed: 0, pending: 0, exceptions: 1 },
+      { goodsName: "待勤策补全", total: 3, signed: 0, pending: 3, exceptions: 0 }
+    ]
+  );
+
+  const movementCountBeforeDissolve = await prisma.trackingMovement.count();
+  await dissolveTrackingOrderGroup(group.id);
+  assert.equal(await prisma.trackingOrderGroup.count(), 0);
+  assert.equal(await prisma.trackingOrder.count({ where: { id: { in: orders.map((order) => order.orderId) } } }), 3);
+  assert.equal(await prisma.trackingMovement.count(), movementCountBeforeDissolve, "解除合单不能创建或删除条码流转");
+  const ungroupedOrders = await listTrackingOrders({ type: "sales_outbound", page: 1, pageSize: 20 });
+  assert.equal(ungroupedOrders.items.some((order) => order.groupId), false);
 });
 
 test("勤策商品覆盖旧系统简称且不会误报签收异常", async () => {

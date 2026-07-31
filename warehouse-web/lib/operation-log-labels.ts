@@ -23,6 +23,8 @@ const actionLabels: Record<string, string> = {
   SALES_RETURN_CREATE: "创建退回入库单",
   TRACKING_OUTBOUND_CREATE: "创建条码流向出库单",
   TRACKING_RETURN_CREATE: "创建扫码回库单",
+  TRACKING_ORDER_GROUP_CREATE: "创建出库合单",
+  TRACKING_ORDER_GROUP_DISSOLVE: "解除出库合单",
   ORDERS_VOID: "撤销业务单据",
   BARCODE_CORRECT: "更正条码",
   INVENTORY_ITEM_WRITE_OFF: "核销货物",
@@ -37,6 +39,8 @@ const actionLabels: Record<string, string> = {
 const detailKeyLabels: Record<string, string> = {
   quantity: "数量",
   barcodes: "条码数量",
+  orders: "原单数量",
+  groupNo: "合单编号",
   replay: "重复请求",
   lines: "货物行数",
   voided: "撤销单据数",

@@ -118,6 +118,7 @@ model User {
   operationLogs OperationLog[]
   businessRequests BusinessRequest[]
   trackingOrders TrackingOrder[]
+  trackingOrderGroups TrackingOrderGroup[]
   trackingMovements TrackingMovement[]
 
   inboundOrders      InboundOrder[]
@@ -252,6 +253,7 @@ model Warehouse {
   trackedBarcodes     TrackedBarcode[]
   sourceTrackingOrders TrackingOrder[] @relation("TrackingSourceWarehouse")
   targetTrackingOrders TrackingOrder[] @relation("TrackingTargetWarehouse")
+  sourceTrackingOrderGroups TrackingOrderGroup[] @relation("TrackingGroupSourceWarehouse")
 
   @@index([sortOrder])
   @@map("warehouses")
@@ -293,6 +295,7 @@ model Salesperson {
   salesReturnOrderItems SalesReturnOrderItem[]
   trackedBarcodes        TrackedBarcode[]
   trackingOrders         TrackingOrder[]
+  trackingOrderGroups    TrackingOrderGroup[]
 
   @@map("salespeople")
 }
@@ -486,6 +489,7 @@ model TrackingOrder {
   operator          User?             @relation(fields: [operatorId], references: [id])
   items             TrackingOrderBarcode[]
   movements         TrackingMovement[]
+  groupMembership   TrackingOrderGroupMember?
 
   @@index([type, createdAt(sort: Desc)])
   @@index([sourceWarehouseId, createdAt(sort: Desc)])
@@ -493,6 +497,39 @@ model TrackingOrder {
   @@index([salespersonId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@map("tracking_orders")
+}
+
+model TrackingOrderGroup {
+  id                String   @id @default(uuid()) @db.Uuid
+  groupNo           String   @unique
+  sourceWarehouseId String   @db.Uuid
+  salespersonId     String   @db.Uuid
+  operatorId        String?  @db.Uuid
+  operatorName      String
+  createdAt         DateTime @default(now())
+
+  sourceWarehouse   Warehouse @relation("TrackingGroupSourceWarehouse", fields: [sourceWarehouseId], references: [id])
+  salesperson       Salesperson @relation(fields: [salespersonId], references: [id])
+  operator          User? @relation(fields: [operatorId], references: [id])
+  members           TrackingOrderGroupMember[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([sourceWarehouseId, salespersonId, createdAt(sort: Desc)])
+  @@map("tracking_order_groups")
+}
+
+model TrackingOrderGroupMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  groupId   String   @db.Uuid
+  orderId   String   @unique @db.Uuid
+  createdAt DateTime @default(now())
+
+  group TrackingOrderGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  order TrackingOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@unique([groupId, orderId])
+  @@index([groupId])
+  @@map("tracking_order_group_members")
 }
 
 model TrackingOrderBarcode {
