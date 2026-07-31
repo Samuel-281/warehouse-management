@@ -1201,6 +1201,9 @@ function TrackingOrderDetailDialog({
     : order.targetWarehouseId
       ? `仓库：${warehouseNames.get(order.targetWarehouseId) ?? "未知"}`
       : "回库仓库";
+  const receiptCycleDescription = order.type === "transfer"
+    ? "签收状态只计算本次挪仓至下一次业务流转之间的勤策记录。"
+    : "签收状态只计算本次销售出库至下一次业务流转之间的勤策记录。";
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-2 sm:p-4">
@@ -1212,7 +1215,7 @@ function TrackingOrderDetailDialog({
               <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-600">{trackingOrderLabel(order.type)}</span>
               {order.status === "voided" ? <span className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-danger">已作废</span> : null}
             </div>
-            <p className="mt-1 text-sm text-muted">单据详情与本次出库后的勤策签收进度</p>
+            <p className="mt-1 text-sm text-muted">单据详情与本次流转后的勤策签收进度</p>
           </div>
           <button className="icon-button shrink-0" onClick={onClose} aria-label="关闭单据详情"><X className="h-4 w-4" /></button>
         </div>
@@ -1277,7 +1280,7 @@ function TrackingOrderDetailDialog({
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div>
               <h3 className="text-sm font-semibold text-ink">单据箱码明细</h3>
-              <p className="mt-1 text-xs text-muted">{receiptSummary ? "签收状态只计算本次销售出库至下一次业务流转之间的勤策记录。" : "当前归属为实时状态，便于继续追查箱码去向。"}</p>
+              <p className="mt-1 text-xs text-muted">{receiptSummary ? receiptCycleDescription : "当前归属为实时状态，便于继续追查箱码去向。"}</p>
             </div>
             <span className="text-xs text-muted">{detail.items.length} 件</span>
           </div>

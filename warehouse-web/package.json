@@ -1,6 +1,6 @@
 {
   "name": "warehouse-web",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "scripts": {
     "postinstall": "prisma generate",
@@ -20,6 +20,7 @@
     "db:benchmark": "tsx scripts/benchmark-large-data.ts",
     "db:cleanup-runtime": "node scripts/cleanup-runtime-data.mjs",
     "terminal-receipts:sync-weekly": "tsx scripts/sync-terminal-receipts.ts",
+    "terminal-receipts:reconcile": "tsx scripts/reconcile-terminal-receipts.ts",
     "backup:oss": "node scripts/backup-postgres-to-oss.mjs",
     "backup:local": "node scripts/backup-postgres-to-oss.mjs --local-only",
     "db:studio": "prisma studio"

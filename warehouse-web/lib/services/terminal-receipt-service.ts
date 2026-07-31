@@ -14,6 +14,7 @@ import type {
 } from "@/lib/types";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import {
+  canTerminalReceiptFollow,
   reconcileTerminalReceiptOwnership,
   reconcileTrackedBarcodeReceipts
 } from "@/lib/services/terminal-receipt-ownership-service";
@@ -346,7 +347,7 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
       const precedingMovement = [...trackedItem.movements]
         .reverse()
         .find((movement) => movement.occurredAt.getTime() <= row.scannedAt!.getTime());
-      const status = precedingMovement?.type === "SALES_OUTBOUND" || precedingMovement?.type === "QINCE_RECEIPT"
+      const status = canTerminalReceiptFollow(precedingMovement?.type)
         ? "matched"
         : "conflict";
       const confirmedGoodsName = confirmedGoodsByBarcode.get(row.barcode);
@@ -365,7 +366,7 @@ async function analyzeWorkbook(fileName: string, buffer: Buffer): Promise<Workbo
         issue: goodsConflict
           ? `该条码此前勤策已确认商品“${confirmedGoodsName}”，本次返回“${row.externalGoodsName}”`
           : status === "conflict"
-            ? "签收时间前没有可对应的销售出库，仅保存记录，不改变当前归属"
+            ? "签收时间前没有可对应的销售出库或挪仓，仅保存记录，不改变当前归属"
             : undefined
       };
     }

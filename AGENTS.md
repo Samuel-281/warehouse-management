@@ -35,13 +35,14 @@ The current source of truth is the traceability model below:
 3. `快速出库` records source warehouse, destination type, destination, and mixed carton barcodes. It does not ask for goods and does not change the legacy quantity-stock ledger.
 4. A sales outbound barcode enters `待签收` and is temporarily owned by the selected salesperson. The outbound salesperson remains permanently visible in history.
 5. A warehouse destination immediately changes the current owner to the target warehouse.
-6. `扫码回库` is the only return window. It records return warehouse and mixed barcodes only, with no goods, store, salesperson, production date, or stock-quantity input.
-7. Qince receipt data is authoritative for product name, product unit, receiving terminal-store name, and receipt time.
-8. A valid Qince receipt enriches the barcode profile, changes current ownership to the reported terminal store, and marks it `已签收` without changing quantity stock.
-9. A later receipt may move a barcode directly from store A to store B without a warehouse return. Both receipt events remain in history.
-10. A product-name conflict does not overwrite the first confirmed product. The barcode is marked `签收异常` and the conflicting receipt remains auditable.
-11. User-facing receipt statuses are `待签收`, `已签收`, and `签收异常`. Current owner is a separate dimension: warehouse, salesperson, or terminal store.
-12. Legacy goods, inventory, and order tables must be preserved for compatibility and migration history, but new daily workflows must not depend on them.
+6. The target warehouse may deliver directly without recording another sales outbound. A later valid Qince receipt may follow the transfer and move current ownership from the target warehouse to the reported terminal store.
+7. `扫码回库` is the only return window. It records return warehouse and mixed barcodes only, with no goods, store, salesperson, production date, or stock-quantity input.
+8. Qince receipt data is authoritative for product name, product unit, receiving terminal-store name, and receipt time.
+9. A valid Qince receipt enriches the barcode profile, changes current ownership to the reported terminal store, and marks it `已签收` without changing quantity stock.
+10. A later receipt may move a barcode directly from store A to store B without a warehouse return. Both receipt events remain in history.
+11. A product-name conflict does not overwrite the first confirmed product. The barcode is marked `签收异常` and the conflicting receipt remains auditable.
+12. User-facing receipt statuses are `待签收`, `已签收`, and `签收异常`. Current owner is a separate dimension: warehouse, salesperson, or terminal store.
+13. Legacy goods, inventory, and order tables must be preserved for compatibility and migration history, but new daily workflows must not depend on them.
 
 Older documentation may still mention the previous prototype model where every inventory unit depended on a barcode record. Treat this Web 1.0 business model as the source of truth unless the user explicitly changes it.
 
@@ -145,10 +146,11 @@ Qince receipt data and warehouse returns form one continuous barcode history.
 
 1. A valid Qince receipt changes the current owner to the reported terminal-store name and status to `已签收`; it does not change warehouse quantity.
 2. The store name comes from Qince and is not maintained as local terminal-store master data.
-3. Multiple valid receipts after one sales outbound may move external ownership from store A to store B without warehouse stock movement.
-4. Unified return moves pending, signed, or unknown external-return barcodes into the selected warehouse without changing legacy quantity stock.
-5. Unified return does not record terminal store, salesperson, production date, or shelf life.
-6. Receipt reconciliation is ordered by the external scan time. Older data imported after a later return remains history only and cannot replace the current warehouse owner.
+3. A valid Qince receipt may follow either a sales outbound or a warehouse transfer. After a transfer, the target warehouse may directly deliver to the terminal store without an intermediate sales-outbound record.
+4. Multiple valid receipts after one sales outbound or transfer may move external ownership from store A to store B without warehouse stock movement.
+5. Unified return moves pending, signed, or unknown external-return barcodes into the selected warehouse without changing legacy quantity stock.
+6. Unified return does not record terminal store, salesperson, production date, or shelf life.
+7. Receipt reconciliation is ordered by the external scan time. Older data imported after a later return remains history only and cannot replace the current warehouse owner.
 
 ## Traceability Query Expectations
 

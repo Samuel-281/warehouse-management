@@ -197,7 +197,7 @@ export async function submitTrackingOutbound(input: SubmitTrackingOutboundInput)
             salespersonId: salesperson?.id ?? null,
             terminalStoreName: null,
             signedAt: null,
-            receiptStatus: input.destinationType === "salesperson" ? "PENDING" : undefined,
+            receiptStatus: "PENDING",
             lastMovedAt: time
           }
         });
@@ -537,7 +537,8 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
   if (!order) throw new ApiError("流转单据不存在", 404);
 
   const trackedBarcodeIds = order.items.map((item) => item.trackedBarcodeId);
-  const [movements, receipts] = order.type === "SALES_OUTBOUND" && trackedBarcodeIds.length > 0
+  const tracksTerminalReceipts = order.type === "SALES_OUTBOUND" || order.type === "TRANSFER";
+  const [movements, receipts] = tracksTerminalReceipts && trackedBarcodeIds.length > 0
     ? await Promise.all([
         prisma.trackingMovement.findMany({
           where: {
@@ -578,7 +579,7 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
       salespersonId: tracked.salespersonId ?? undefined,
       terminalStoreName: tracked.terminalStoreName ?? undefined
     };
-    if (order.type !== "SALES_OUTBOUND") {
+    if (!tracksTerminalReceipts) {
       return {
         barcode: orderItem.barcode,
         externalGoodsName: tracked.externalGoodsName ?? undefined,
@@ -588,12 +589,12 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
     }
 
     const itemMovements = movementsByBarcode.get(orderItem.trackedBarcodeId) ?? [];
-    const outboundMovement = itemMovements.find((movement) => movement.orderId === order.id);
-    const cycleStartAt = outboundMovement?.occurredAt ?? order.createdAt;
+    const startingMovement = itemMovements.find((movement) => movement.orderId === order.id);
+    const cycleStartAt = startingMovement?.occurredAt ?? order.createdAt;
     const boundary = itemMovements.find((movement) =>
-      movement.id !== outboundMovement?.id &&
+      movement.id !== startingMovement?.id &&
       movement.occurredAt.getTime() >= cycleStartAt.getTime() &&
-      closesSalesReceiptCycle(movement.type)
+      closesTrackingReceiptCycle(movement.type)
     );
     const cycleReceipts = (receiptsByBarcode.get(orderItem.trackedBarcodeId) ?? []).filter((receipt) =>
       receipt.scannedAt.getTime() >= cycleStartAt.getTime() &&
@@ -615,10 +616,10 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
     };
   });
 
-  const receiptSummary = order.type === "SALES_OUTBOUND"
+  const receiptSummary = tracksTerminalReceipts
     ? summarizeTrackingOrderReceipts(items)
     : undefined;
-  const goodsReceiptSummaries = order.type === "SALES_OUTBOUND"
+  const goodsReceiptSummaries = tracksTerminalReceipts
     ? summarizeTrackingOrderGoodsReceipts(items)
     : [];
 
@@ -630,7 +631,7 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
   };
 }
 
-function closesSalesReceiptCycle(type: "LEGACY_INBOUND" | "SALES_OUTBOUND" | "TRANSFER" | "RETURN" | "QINCE_RECEIPT" | "ORDER_REVERSAL" | "BARCODE_CORRECTION" | "WRITE_OFF") {
+function closesTrackingReceiptCycle(type: "LEGACY_INBOUND" | "SALES_OUTBOUND" | "TRANSFER" | "RETURN" | "QINCE_RECEIPT" | "ORDER_REVERSAL" | "BARCODE_CORRECTION" | "WRITE_OFF") {
   return type === "SALES_OUTBOUND" ||
     type === "TRANSFER" ||
     type === "RETURN" ||

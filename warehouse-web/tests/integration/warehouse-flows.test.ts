@@ -35,6 +35,7 @@ import {
   importTerminalReceipts,
   previewTerminalReceiptImport
 } from "@/lib/services/terminal-receipt-service";
+import { reconcileTrackedReceiptConflicts } from "@/lib/services/terminal-receipt-ownership-service";
 import {
   createTerminalReceiptSyncRun,
   executeTerminalReceiptSync,
@@ -413,6 +414,132 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
   assert.equal(currentDetail.receiptSummary?.signedRate, 0);
 });
 
+test("挪仓后允许目标仓库直接配送签收，并可重算旧流转异常", async () => {
+  const barcodes = ["TRANSFER-RECEIPT-001", "TRANSFER-RECEIPT-002", "TRANSFER-RECEIPT-PENDING"];
+  const transfer = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "warehouse",
+    targetWarehouseId: context.targetWarehouseId,
+    barcodes,
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+
+  const transferred = await prisma.trackedBarcode.findMany({ where: { barcode: { in: barcodes } } });
+  assert.equal(transferred.every((item) => item.currentOwnerType === "WAREHOUSE"), true);
+  assert.equal(transferred.every((item) => item.warehouseId === context.targetWarehouseId), true);
+  assert.equal(transferred.every((item) => item.receiptStatus === "PENDING"), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const scannedAt = new Date();
+  const buffer = await makeTerminalReceiptWorkbook([
+    { barcode: barcodes[0], scannedAt, storeName: "目标仓直送店铺 A", goodsName: "直送商品甲_1*24" },
+    { barcode: barcodes[1], scannedAt, storeName: "目标仓直送店铺 B", goodsName: "直送商品乙_1*12" }
+  ]);
+  const preview = await previewTerminalReceiptImport("挪仓直送签收.xlsx", buffer);
+  assert.equal(preview.matchedRows, 2);
+  assert.equal(preview.conflictRows, 0);
+  const imported = await importTerminalReceipts({ fileName: "挪仓直送签收.xlsx", buffer, operatorName });
+
+  const signedItem = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: barcodes[0] } });
+  assert.equal(signedItem.currentOwnerType, "TERMINAL_STORE");
+  assert.equal(signedItem.terminalStoreName, "目标仓直送店铺 A");
+  assert.equal(signedItem.externalGoodsName, "直送商品甲_1*24");
+  assert.equal(signedItem.receiptStatus, "SIGNED");
+  const receiptMovement = await prisma.trackingMovement.findFirstOrThrow({
+    where: { barcode: barcodes[0], type: "QINCE_RECEIPT" }
+  });
+  assert.equal(receiptMovement.fromLabel, "仓库：测试仓库 B");
+  assert.equal(receiptMovement.toLabel, "终端店铺：目标仓直送店铺 A");
+
+  const detail = await getTrackingOrderDetail(transfer.orderId);
+  assert.deepEqual(detail.receiptSummary, {
+    total: 3,
+    signed: 2,
+    pending: 1,
+    exceptions: 0,
+    signedRate: 66.7
+  });
+  assert.deepEqual(
+    detail.goodsReceiptSummaries.map((item) => ({ goodsName: item.goodsName, total: item.total, signedRate: item.signedRate })),
+    [
+      { goodsName: "直送商品甲_1*24", total: 1, signedRate: 100 },
+      { goodsName: "直送商品乙_1*12", total: 1, signedRate: 100 },
+      { goodsName: "待勤策补全", total: 1, signedRate: 0 }
+    ]
+  );
+
+  const historicalReceipt = await prisma.terminalReceiptRecord.findFirstOrThrow({
+    where: { barcode: barcodes[1], importId: imported.id }
+  });
+  const transferMovement = await prisma.trackingMovement.findFirstOrThrow({
+    where: { barcode: barcodes[1], type: "TRANSFER", orderId: transfer.orderId }
+  });
+  await prisma.trackingMovement.deleteMany({ where: { receiptRecordId: historicalReceipt.id } });
+  await prisma.terminalReceiptRecord.update({
+    where: { id: historicalReceipt.id },
+    data: { matchStatus: "CONFLICT" }
+  });
+  await prisma.trackedBarcode.update({
+    where: { id: historicalReceipt.trackedBarcodeId as string },
+    data: {
+      externalGoodsName: null,
+      goodsUnit: null,
+      currentOwnerType: "WAREHOUSE",
+      warehouseId: context.targetWarehouseId,
+      salespersonId: null,
+      terminalStoreName: null,
+      signedAt: null,
+      receiptStatus: "EXCEPTION",
+      lastMovedAt: transferMovement.occurredAt
+    }
+  });
+  await prisma.terminalReceiptImport.update({
+    where: { id: imported.id },
+    data: { matchedRows: 1, conflictRows: 1 }
+  });
+  const syncRun = await prisma.terminalReceiptSyncRun.create({
+    data: {
+      trigger: "MANUAL",
+      status: "SUCCESS",
+      logicalStartAt: scannedAt,
+      logicalEndAt: scannedAt,
+      exportStartDate: scannedAt,
+      exportEndDate: scannedAt,
+      importId: imported.id,
+      totalRows: 2,
+      importedRows: 2,
+      matchedRows: 1,
+      conflictRows: 1,
+      operatorName,
+      finishedAt: new Date()
+    }
+  });
+
+  const reconciliation = await reconcileTrackedReceiptConflicts();
+  assert.deepEqual(reconciliation, {
+    reviewedBarcodes: 1,
+    reviewedRows: 1,
+    resolvedRows: 1,
+    remainingConflictRows: 0,
+    updatedImports: 1
+  });
+  const repairedReceipt = await prisma.terminalReceiptRecord.findUniqueOrThrow({ where: { id: historicalReceipt.id } });
+  const repairedItem = await prisma.trackedBarcode.findUniqueOrThrow({ where: { id: historicalReceipt.trackedBarcodeId as string } });
+  const repairedImport = await prisma.terminalReceiptImport.findUniqueOrThrow({ where: { id: imported.id } });
+  const repairedSyncRun = await prisma.terminalReceiptSyncRun.findUniqueOrThrow({ where: { id: syncRun.id } });
+  assert.equal(repairedReceipt.matchStatus, "MATCHED");
+  assert.equal(repairedItem.currentOwnerType, "TERMINAL_STORE");
+  assert.equal(repairedItem.terminalStoreName, "目标仓直送店铺 B");
+  assert.equal(repairedItem.externalGoodsName, "直送商品乙_1*12");
+  assert.equal(repairedItem.receiptStatus, "SIGNED");
+  assert.equal(await prisma.trackingMovement.count({ where: { receiptRecordId: historicalReceipt.id } }), 1);
+  assert.equal(repairedImport.matchedRows, 2);
+  assert.equal(repairedImport.conflictRows, 0);
+  assert.equal(repairedSyncRun.matchedRows, 2);
+  assert.equal(repairedSyncRun.conflictRows, 0);
+});
+
 test("同一路线的分批销售出库可合单汇总且解除后保留原始履历", async () => {
   const batches = [
     ["GROUP-A-001", "GROUP-A-002"],
@@ -573,6 +700,14 @@ test("勤策返回不同商品名称时标记签收异常且不覆盖原商品",
   assert.equal(item.externalGoodsName, "商品甲_1*12");
   assert.equal(item.receiptStatus, "EXCEPTION");
   assert.equal(item.terminalStoreName, "商品冲突店铺 B");
+
+  const reconciliation = await reconcileTrackedReceiptConflicts();
+  assert.equal(reconciliation.reviewedRows, 1);
+  assert.equal(reconciliation.resolvedRows, 0);
+  assert.equal(reconciliation.remainingConflictRows, 1);
+  const afterReconciliation = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode } });
+  assert.equal(afterReconciliation.externalGoodsName, "商品甲_1*12");
+  assert.equal(afterReconciliation.receiptStatus, "EXCEPTION");
 });
 
 test("统一退回接收已签收货物，迟到的旧签收只补履历", async () => {

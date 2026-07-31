@@ -1,6 +1,13 @@
 import { Prisma } from "@prisma/client";
 
+import { getPrisma } from "@/lib/db";
+
 type DbClient = Prisma.TransactionClient;
+const RECONCILIATION_BATCH_SIZE = 100;
+
+export function canTerminalReceiptFollow(movementType?: string | null) {
+  return movementType === "SALES_OUTBOUND" || movementType === "TRANSFER" || movementType === "QINCE_RECEIPT";
+}
 
 export async function reconcileTerminalReceiptOwnership(
   tx: DbClient,
@@ -117,7 +124,7 @@ export async function reconcileTrackedBarcodeReceipts(
           movement.receiptRecordId !== receipt.id &&
           movement.occurredAt.getTime() <= receipt.scannedAt.getTime()
         );
-      const canFollow = precedingMovement?.type === "SALES_OUTBOUND" || precedingMovement?.type === "QINCE_RECEIPT";
+      const canFollow = canTerminalReceiptFollow(precedingMovement?.type);
 
       if (!canFollow) {
         conflictReceiptIds.push(receipt.id);
@@ -173,7 +180,11 @@ export async function reconcileTrackedBarcodeReceipts(
       const receipt = item.terminalReceiptRecords.find((entry) => entry.id === id);
       return Boolean(receipt && latestMovement && receipt.scannedAt.getTime() >= latestMovement.occurredAt.getTime());
     });
-    const receiptStatus = hasGoodsConflict || hasCurrentFlowConflict ? "EXCEPTION" : "SIGNED";
+    const receiptStatus = hasGoodsConflict || hasCurrentFlowConflict
+      ? "EXCEPTION"
+      : latestMovement?.type === "SALES_OUTBOUND" || latestMovement?.type === "TRANSFER"
+        ? "PENDING"
+        : "SIGNED";
 
     if (latestMovement?.type === "QINCE_RECEIPT" && latestReceipt) {
       await tx.trackedBarcode.update({
@@ -190,7 +201,7 @@ export async function reconcileTrackedBarcodeReceipts(
           lastMovedAt: latestReceipt.scannedAt
         }
       });
-    } else if (canonicalReceipt || hasCurrentFlowConflict) {
+    } else if (canonicalReceipt || hasCurrentFlowConflict || hasGoodsConflict) {
       await tx.trackedBarcode.update({
         where: { id: item.id },
         data: {
@@ -215,4 +226,67 @@ export async function linkAndReconcileTrackedReceipts(
     });
   }
   await reconcileTrackedBarcodeReceipts(tx, items.map((item) => item.id));
+}
+
+export async function reconcileTrackedReceiptConflicts() {
+  const prisma = getPrisma();
+  const candidates = await prisma.terminalReceiptRecord.findMany({
+    where: { matchStatus: "CONFLICT", trackedBarcodeId: { not: null } },
+    select: { id: true, importId: true, trackedBarcodeId: true }
+  });
+  const trackedBarcodeIds = Array.from(new Set(candidates.flatMap((record) => record.trackedBarcodeId ? [record.trackedBarcodeId] : [])));
+  const importIds = Array.from(new Set(candidates.map((record) => record.importId)));
+
+  for (let index = 0; index < trackedBarcodeIds.length; index += RECONCILIATION_BATCH_SIZE) {
+    const batch = trackedBarcodeIds.slice(index, index + RECONCILIATION_BATCH_SIZE);
+    await prisma.$transaction(
+      (tx) => reconcileTrackedBarcodeReceipts(tx, batch),
+      { maxWait: 10_000, timeout: 60_000 }
+    );
+  }
+
+  const reviewedRecords = candidates.length > 0
+    ? await prisma.terminalReceiptRecord.findMany({
+        where: { id: { in: candidates.map((record) => record.id) } },
+        select: { matchStatus: true }
+      })
+    : [];
+
+  if (importIds.length > 0) {
+    const groupedCounts = await prisma.terminalReceiptRecord.groupBy({
+      by: ["importId", "matchStatus"],
+      where: { importId: { in: importIds } },
+      _count: { _all: true }
+    });
+    const countsByImport = new Map<string, { matched: number; unmatched: number; conflicts: number }>();
+    for (const row of groupedCounts) {
+      const counts = countsByImport.get(row.importId) ?? { matched: 0, unmatched: 0, conflicts: 0 };
+      if (row.matchStatus === "MATCHED") counts.matched = row._count._all;
+      else if (row.matchStatus === "UNMATCHED") counts.unmatched = row._count._all;
+      else counts.conflicts = row._count._all;
+      countsByImport.set(row.importId, counts);
+    }
+    for (const importId of importIds) {
+      const counts = countsByImport.get(importId) ?? { matched: 0, unmatched: 0, conflicts: 0 };
+      await prisma.$transaction([
+        prisma.terminalReceiptImport.update({
+          where: { id: importId },
+          data: { matchedRows: counts.matched, unmatchedRows: counts.unmatched, conflictRows: counts.conflicts }
+        }),
+        prisma.terminalReceiptSyncRun.updateMany({
+          where: { importId },
+          data: { matchedRows: counts.matched, unmatchedRows: counts.unmatched, conflictRows: counts.conflicts }
+        })
+      ]);
+    }
+  }
+
+  const remainingConflictRows = reviewedRecords.filter((record) => record.matchStatus === "CONFLICT").length;
+  return {
+    reviewedBarcodes: trackedBarcodeIds.length,
+    reviewedRows: candidates.length,
+    resolvedRows: reviewedRecords.length - remainingConflictRows,
+    remainingConflictRows,
+    updatedImports: importIds.length
+  };
 }
