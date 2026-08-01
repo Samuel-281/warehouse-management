@@ -254,6 +254,7 @@ model Warehouse {
   sourceTrackingOrders TrackingOrder[] @relation("TrackingSourceWarehouse")
   targetTrackingOrders TrackingOrder[] @relation("TrackingTargetWarehouse")
   sourceTrackingOrderGroups TrackingOrderGroup[] @relation("TrackingGroupSourceWarehouse")
+  targetTrackingOrderGroups TrackingOrderGroup[] @relation("TrackingGroupTargetWarehouse")
 
   @@index([sortOrder])
   @@map("warehouses")
@@ -492,6 +493,7 @@ model TrackingOrder {
   groupMembership   TrackingOrderGroupMember?
 
   @@index([type, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
   @@index([sourceWarehouseId, createdAt(sort: Desc)])
   @@index([targetWarehouseId, createdAt(sort: Desc)])
   @@index([salespersonId, createdAt(sort: Desc)])
@@ -502,19 +504,24 @@ model TrackingOrder {
 model TrackingOrderGroup {
   id                String   @id @default(uuid()) @db.Uuid
   groupNo           String   @unique
+  type              TrackingOrderType
   sourceWarehouseId String   @db.Uuid
-  salespersonId     String   @db.Uuid
+  targetWarehouseId String?  @db.Uuid
+  salespersonId     String?  @db.Uuid
   operatorId        String?  @db.Uuid
   operatorName      String
   createdAt         DateTime @default(now())
 
   sourceWarehouse   Warehouse @relation("TrackingGroupSourceWarehouse", fields: [sourceWarehouseId], references: [id])
-  salesperson       Salesperson @relation(fields: [salespersonId], references: [id])
+  targetWarehouse   Warehouse? @relation("TrackingGroupTargetWarehouse", fields: [targetWarehouseId], references: [id])
+  salesperson       Salesperson? @relation(fields: [salespersonId], references: [id])
   operator          User? @relation(fields: [operatorId], references: [id])
   members           TrackingOrderGroupMember[]
 
   @@index([createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
   @@index([sourceWarehouseId, salespersonId, createdAt(sort: Desc)])
+  @@index([sourceWarehouseId, targetWarehouseId, createdAt(sort: Desc)])
   @@map("tracking_order_groups")
 }
 

@@ -11,6 +11,9 @@ export async function GET(request: Request) {
     await requireCurrentUser(request);
     const { searchParams } = new URL(request.url);
     return ok(await listTrackingOrderGroups({
+      type: searchParams.get("type") ?? undefined,
+      startDate: searchParams.get("startDate") ?? undefined,
+      endDate: searchParams.get("endDate") ?? undefined,
       page: Number(searchParams.get("page") || 1),
       pageSize: Number(searchParams.get("pageSize") || 20)
     }));

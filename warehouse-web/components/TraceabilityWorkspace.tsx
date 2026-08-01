@@ -877,6 +877,9 @@ function TrackingOrdersTable({
 }) {
   const [view, setView] = useState<"orders" | "groups">("orders");
   const [type, setType] = useState<TrackingOrderType | "all">("all");
+  const [groupType, setGroupType] = useState<Exclude<TrackingOrderType, "return"> | "all">("all");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [page, setPage] = useState(1);
   const [result, setResult] = useState<TrackingOrderListResult>({ items: [], total: 0, page: 1, pageSize: 20 });
   const [groupPage, setGroupPage] = useState(1);
@@ -893,6 +896,8 @@ function TrackingOrdersTable({
     setLoading(true);
     try {
       const params = new URLSearchParams({ type, page: String(nextPage), pageSize: "20" });
+      if (startDate) params.set("startDate", startDate);
+      if (endDate) params.set("endDate", endDate);
       const nextResult = await getJson<TrackingOrderListResult>(`/api/tracking/orders?${params.toString()}`);
       setResult(nextResult);
       setPage(nextResult.page);
@@ -902,14 +907,19 @@ function TrackingOrdersTable({
     } finally {
       setLoading(false);
     }
-  }, [showToast, type]);
+  }, [endDate, showToast, startDate, type]);
 
-  useEffect(() => { void load(1); }, [load]);
+  useEffect(() => {
+    if (view === "orders") void load(1);
+  }, [load, view]);
 
   const loadGroups = useCallback(async (nextPage: number) => {
     setGroupLoading(true);
     try {
-      const nextResult = await getJson<TrackingOrderGroupListResult>(`/api/tracking/order-groups?page=${nextPage}&pageSize=20`);
+      const params = new URLSearchParams({ type: groupType, page: String(nextPage), pageSize: "20" });
+      if (startDate) params.set("startDate", startDate);
+      if (endDate) params.set("endDate", endDate);
+      const nextResult = await getJson<TrackingOrderGroupListResult>(`/api/tracking/order-groups?${params.toString()}`);
       setGroupResult(nextResult);
       setGroupPage(nextResult.page);
     } catch (error) {
@@ -917,11 +927,11 @@ function TrackingOrdersTable({
     } finally {
       setGroupLoading(false);
     }
-  }, [showToast]);
+  }, [endDate, groupType, showToast, startDate]);
 
   useEffect(() => {
-    if (view === "groups" && groupResult.items.length === 0) void loadGroups(1);
-  }, [groupResult.items.length, loadGroups, view]);
+    if (view === "groups") void loadGroups(1);
+  }, [loadGroups, view]);
 
   async function openDetail(orderId: string) {
     setDetailLoading(true);
@@ -959,7 +969,8 @@ function TrackingOrdersTable({
     const selectedOrders = result.items.filter((order) => selectedIds.has(order.id));
     if (selectedOrders.length < 2) return;
     const barcodeCount = selectedOrders.reduce((total, order) => total + order.barcodeCount, 0);
-    if (!window.confirm(`确认将 ${selectedOrders.length} 张销售出库单（共 ${barcodeCount} 件）合并查看吗？\n\n原始单据和条码履历会完整保留。`)) return;
+    const orderLabel = selectedOrders[0]?.type === "transfer" ? "挪仓单" : "销售出库单";
+    if (!window.confirm(`确认将 ${selectedOrders.length} 张${orderLabel}（共 ${barcodeCount} 件）合并查看吗？\n\n原始单据和条码履历会完整保留。`)) return;
     setGrouping(true);
     try {
       const group = await postJson<TrackingOrderGroupSummary>("/api/tracking/order-groups", { orderIds: selectedOrders.map((order) => order.id) });
@@ -993,9 +1004,17 @@ function TrackingOrdersTable({
   const selectionAnchor = selectedOrders[0];
   const selectedBarcodeCount = selectedOrders.reduce((total, order) => total + order.barcodeCount, 0);
   function isGroupableOrder(order: TrackingOrderListResult["items"][number]) {
-    if (!canManageGroups || order.type !== "sales_outbound" || order.status !== "active" || order.groupId) return false;
+    if (!canManageGroups || order.type === "return" || order.status !== "active" || order.groupId) return false;
     if (!selectionAnchor || selectedIds.has(order.id)) return true;
-    return order.sourceWarehouseId === selectionAnchor.sourceWarehouseId && order.salespersonId === selectionAnchor.salespersonId;
+    if (order.type !== selectionAnchor.type || order.sourceWarehouseId !== selectionAnchor.sourceWarehouseId) return false;
+    return order.type === "transfer"
+      ? order.targetWarehouseId === selectionAnchor.targetWarehouseId
+      : order.salespersonId === selectionAnchor.salespersonId;
+  }
+
+  function clearDateRange() {
+    setStartDate("");
+    setEndDate("");
   }
 
   return (
@@ -1008,17 +1027,20 @@ function TrackingOrdersTable({
       </div>
 
       {view === "orders" ? <>
-        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 p-4">
-          <label className="w-full sm:w-52"><span className="label">业务类型</span><select className="field" value={type} onChange={(event) => setType(event.target.value as TrackingOrderType | "all")}><option value="all">全部流转</option><option value="sales_outbound">销售出库</option><option value="transfer">仓库流转</option><option value="return">扫码回库</option></select></label>
+        <div className="flex flex-wrap items-end gap-3 border-b border-slate-200 p-4">
+          <label className="w-full sm:w-48"><span className="label">业务类型</span><select className="field" value={type} onChange={(event) => setType(event.target.value as TrackingOrderType | "all")}><option value="all">全部流转</option><option value="sales_outbound">销售出库</option><option value="transfer">仓库流转</option><option value="return">扫码回库</option></select></label>
+          <label className="w-full sm:w-44"><span className="label">开始日期</span><input className="field" type="date" value={startDate} max={endDate || undefined} onChange={(event) => setStartDate(event.target.value)} /></label>
+          <label className="w-full sm:w-44"><span className="label">结束日期</span><input className="field" type="date" value={endDate} min={startDate || undefined} onChange={(event) => setEndDate(event.target.value)} /></label>
           <div className="flex flex-wrap items-center justify-end gap-2">
             {canManageGroups ? <button className="primary-button" disabled={selectedIds.size < 2 || grouping} onClick={() => void createGroup()}><Layers3 className="h-4 w-4" />{grouping ? "正在合单" : `合并所选${selectedIds.size ? ` (${selectedIds.size})` : ""}`}</button> : null}
+            {startDate || endDate ? <button className="secondary-button" onClick={clearDateRange}><X className="h-4 w-4" />清除日期</button> : null}
             <button className="secondary-button" onClick={() => void load(1)}><RefreshCw className="h-4 w-4" />刷新</button>
           </div>
-          {selectedIds.size > 0 ? <p className="w-full text-xs text-muted">已选 {selectedIds.size} 张，共 {selectedBarcodeCount} 件。只能继续选择同一来源仓库、同一销售人员的销售出库单。</p> : null}
+          {selectedIds.size > 0 ? <p className="w-full text-xs text-muted">已选 {selectedIds.size} 张，共 {selectedBarcodeCount} 件。{selectionAnchor?.type === "transfer" ? "只能继续选择来源仓库和目标仓库都相同的挪仓单。" : "只能继续选择来源仓库和销售人员都相同的销售出库单。"}</p> : null}
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-left text-sm">
-            <thead className="bg-slate-50 text-xs text-slate-500"><tr>{canManageGroups ? <th className="w-12 px-4 py-3">选择</th> : null}<th className="px-4 py-3">单号</th><th className="px-4 py-3">业务</th><th className="px-4 py-3">来源 / 去向</th><th className="px-4 py-3">箱码</th><th className="px-4 py-3">操作信息</th><th className="w-10 px-4 py-3"></th></tr></thead>
+          <table className="w-full min-w-[1120px] table-fixed text-left text-sm">
+            <thead className="bg-slate-50 text-xs text-slate-500"><tr>{canManageGroups ? <th className="w-14 px-4 py-3">选择</th> : null}<th className="w-56 px-4 py-3">单号</th><th className="w-28 px-4 py-3">业务</th><th className="w-56 px-4 py-3">来源 / 去向</th><th className="px-4 py-3">箱码</th><th className="w-32 px-4 py-3">操作信息</th><th className="w-12 px-4 py-3"></th></tr></thead>
             <tbody className="divide-y divide-slate-200">
               {result.items.map((order) => {
                 const selectable = isGroupableOrder(order);
@@ -1036,10 +1058,10 @@ function TrackingOrdersTable({
                 >
                   {canManageGroups ? <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}><input aria-label={`选择单据 ${order.orderNo}`} className="h-4 w-4 accent-emerald-700" type="checkbox" checked={selectedIds.has(order.id)} disabled={!selectable} onChange={() => toggleSelection(order)} /></td> : null}
                   <td className="px-4 py-3"><p className="font-mono font-semibold text-work">{order.orderNo}</p><p className="mt-1 text-xs text-muted">{order.createdAt}</p>{order.groupNo ? <span className="mt-1 inline-flex rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-xs font-semibold text-sky-700">已合入 {order.groupNo}</span> : null}</td>
-                  <td className="px-4 py-3 font-medium text-slate-700">{trackingOrderLabel(order.type)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-700">{trackingOrderLabel(order.type)}</td>
                   <td className="px-4 py-3 text-slate-600">{order.sourceWarehouseId ? warehouseNames.get(order.sourceWarehouseId) ?? "仓库" : "外部流入"} <ArrowRight className="mx-1 inline h-3.5 w-3.5" /> {order.salespersonId ? `销售人员：${salespersonNames.get(order.salespersonId) ?? "未知"}` : order.targetWarehouseId ? warehouseNames.get(order.targetWarehouseId) ?? "仓库" : "回库仓库"}</td>
                   <td className="px-4 py-3"><p className="font-semibold text-slate-700">{order.barcodeCount} 件</p><p className="mt-1 max-w-md truncate font-mono text-xs text-muted">{order.barcodePreview.join("、")}</p></td>
-                  <td className="px-4 py-3 text-slate-600">{order.operator}</td>
+                  <td className="break-words px-4 py-3 text-slate-600">{order.operator}</td>
                   <td className="px-4 py-3"><ArrowRight className="h-4 w-4 text-slate-400" /></td>
                 </tr>;
               })}
@@ -1050,8 +1072,12 @@ function TrackingOrdersTable({
         {!loading && result.items.length === 0 ? <div className="p-4"><EmptyState icon={ClipboardList} title="暂无流转单据" detail="扫码出库和扫码回库提交后会生成流转单据。" /></div> : null}
         <PaginationBar page={page} pageSize={result.pageSize} total={result.total} onPageChange={(nextPage) => void load(nextPage)} />
       </> : <>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
-          <div><h2 className="text-sm font-semibold text-ink">出库合单</h2><p className="mt-1 text-xs text-muted">汇总多张分批销售出库单，原始单据和条码履历保持不变。</p></div>
+        <div className="flex flex-wrap items-end gap-3 border-b border-slate-200 p-4">
+          <div className="mr-auto min-w-full lg:min-w-0"><h2 className="text-sm font-semibold text-ink">出库合单</h2><p className="mt-1 text-xs text-muted">汇总同一路线的分批销售出库单或挪仓单，原始单据和条码履历保持不变。</p></div>
+          <label className="w-full sm:w-44"><span className="label">合单类型</span><select className="field" value={groupType} onChange={(event) => setGroupType(event.target.value as typeof groupType)}><option value="all">全部合单</option><option value="sales_outbound">销售出库</option><option value="transfer">仓库流转</option></select></label>
+          <label className="w-full sm:w-44"><span className="label">开始日期</span><input className="field" type="date" value={startDate} max={endDate || undefined} onChange={(event) => setStartDate(event.target.value)} /></label>
+          <label className="w-full sm:w-44"><span className="label">结束日期</span><input className="field" type="date" value={endDate} min={startDate || undefined} onChange={(event) => setEndDate(event.target.value)} /></label>
+          {startDate || endDate ? <button className="secondary-button" onClick={clearDateRange}><X className="h-4 w-4" />清除日期</button> : null}
           <button className="secondary-button" onClick={() => void loadGroups(1)}><RefreshCw className="h-4 w-4" />刷新</button>
         </div>
         <div className="overflow-x-auto">
@@ -1059,8 +1085,8 @@ function TrackingOrdersTable({
             <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-4 py-3">合单编号</th><th className="px-4 py-3">来源 / 去向</th><th className="px-4 py-3">汇总范围</th><th className="px-4 py-3">操作信息</th><th className="w-10 px-4 py-3"></th></tr></thead>
             <tbody className="divide-y divide-slate-200">
               {groupResult.items.map((group) => <tr className="cursor-pointer transition hover:bg-slate-50" key={group.id} onClick={() => void openGroupDetail(group.id)}>
-                <td className="px-4 py-3"><p className="font-mono font-semibold text-work">{group.groupNo}</p><p className="mt-1 text-xs text-muted">{group.createdAt}</p></td>
-                <td className="px-4 py-3 text-slate-600">{warehouseNames.get(group.sourceWarehouseId) ?? "仓库"} <ArrowRight className="mx-1 inline h-3.5 w-3.5" /> 销售人员：{salespersonNames.get(group.salespersonId) ?? "未知"}</td>
+                <td className="px-4 py-3"><p className="font-mono font-semibold text-work">{group.groupNo}</p><p className="mt-1 text-xs text-muted">{group.createdAt}</p><span className="mt-1 inline-flex rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-xs font-semibold text-slate-600">{trackingOrderLabel(group.type)}</span></td>
+                <td className="px-4 py-3 text-slate-600">{warehouseNames.get(group.sourceWarehouseId) ?? "仓库"} <ArrowRight className="mx-1 inline h-3.5 w-3.5" /> {group.type === "transfer" ? warehouseNames.get(group.targetWarehouseId ?? "") ?? "未知仓库" : `销售人员：${salespersonNames.get(group.salespersonId ?? "") ?? "未知"}`}</td>
                 <td className="px-4 py-3"><p className="font-semibold text-slate-700">{group.orderCount} 张原单 · {group.barcodeCount} 件</p><p className="mt-1 max-w-md truncate font-mono text-xs text-muted">{group.orderPreview.join("、")}</p></td>
                 <td className="px-4 py-3 text-slate-600">{group.operator}</td>
                 <td className="px-4 py-3"><ArrowRight className="h-4 w-4 text-slate-400" /></td>
@@ -1069,7 +1095,7 @@ function TrackingOrdersTable({
           </table>
         </div>
         {groupLoading ? <p className="border-t border-slate-200 px-4 py-3 text-sm text-muted">正在读取合单...</p> : null}
-        {!groupLoading && groupResult.items.length === 0 ? <div className="p-4"><EmptyState icon={Layers3} title="暂无出库合单" detail="在原始单据中选择同一路线的多张销售出库单进行合并。" /></div> : null}
+        {!groupLoading && groupResult.items.length === 0 ? <div className="p-4"><EmptyState icon={Layers3} title="暂无出库合单" detail="在原始单据中选择同一路线的多张销售出库单或挪仓单进行合并。" /></div> : null}
         <PaginationBar page={groupPage} pageSize={groupResult.pageSize} total={groupResult.total} onPageChange={(nextPage) => void loadGroups(nextPage)} />
       </>}
       {detailLoading ? <OrderDetailLoadingDialog /> : null}
@@ -1324,7 +1350,9 @@ function TrackingOrderGroupDetailDialog({
   const warehouseNames = new Map(warehouses.map((item) => [item.id, item.name]));
   const salespersonNames = new Map(salespeople.map((item) => [item.id, item.name]));
   const source = warehouseNames.get(detail.group.sourceWarehouseId) ?? "未知仓库";
-  const salesperson = salespersonNames.get(detail.group.salespersonId) ?? "未知";
+  const destination = detail.group.type === "transfer"
+    ? warehouseNames.get(detail.group.targetWarehouseId ?? "") ?? "未知仓库"
+    : `销售人员：${salespersonNames.get(detail.group.salespersonId ?? "") ?? "未知"}`;
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-2 sm:p-4">
@@ -1333,7 +1361,7 @@ function TrackingOrderGroupDetailDialog({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate font-mono text-lg font-semibold text-ink" id="tracking-order-group-detail-title">{detail.group.groupNo}</h2>
-              <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">出库合单</span>
+              <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">{detail.group.type === "transfer" ? "挪仓合单" : "销售合单"}</span>
             </div>
             <p className="mt-1 text-sm text-muted">分批出库的汇总签收进度；下方每张原始单据仍可独立追查。</p>
           </div>
@@ -1344,7 +1372,7 @@ function TrackingOrderGroupDetailDialog({
         </div>
 
         <div className="grid gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-4">
-          <DetailMetric label="来源 / 去向" value={`${source} → 销售人员：${salesperson}`} />
+          <DetailMetric label="来源 / 去向" value={`${source} → ${destination}`} />
           <DetailMetric label="汇总箱数" value={`${detail.group.barcodeCount} 件`} />
           <DetailMetric label="原始单据" value={`${detail.group.orderCount} 张`} />
           <DetailMetric label="合单信息" value={`${detail.group.operator} · ${detail.group.createdAt}`} />
@@ -1424,7 +1452,7 @@ function TrackingReceiptProgress({
     </div> : null}
 
     <div className="p-4 sm:p-5">
-      <div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-sm font-semibold text-ink">{showSourceOrder ? "合单箱码明细" : "单据箱码明细"}</h3><p className="mt-1 text-xs text-muted">签收状态按每张原始销售出库单各自的业务周期计算。</p></div><span className="text-xs text-muted">{items.length} 件</span></div>
+      <div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-sm font-semibold text-ink">{showSourceOrder ? "合单箱码明细" : "单据箱码明细"}</h3><p className="mt-1 text-xs text-muted">签收状态按每张原始出库单各自的业务周期计算。</p></div><span className="text-xs text-muted">{items.length} 件</span></div>
       <div className="mt-3 max-h-[420px] overflow-auto rounded-md border border-slate-200">
         <table className={`w-full ${showSourceOrder ? "min-w-[1040px]" : "min-w-[860px]"} text-left text-sm`}>
           <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500 shadow-[0_1px_0_0_#e2e8f0]"><tr>{showSourceOrder ? <th className="px-3 py-2.5">原单号</th> : null}<th className="px-3 py-2.5">箱码</th><th className="px-3 py-2.5">勤策商品</th><th className="px-3 py-2.5">本单签收状态</th><th className="px-3 py-2.5">签收店铺 / 时间</th><th className="px-3 py-2.5">当前归属（实时）</th></tr></thead>

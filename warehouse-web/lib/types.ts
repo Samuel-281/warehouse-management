@@ -402,8 +402,10 @@ export type TrackingOrderDetail = {
 export type TrackingOrderGroupSummary = {
   id: string;
   groupNo: string;
+  type: Exclude<TrackingOrderType, "return">;
   sourceWarehouseId: string;
-  salespersonId: string;
+  targetWarehouseId?: string;
+  salespersonId?: string;
   operator: string;
   createdAt: string;
   orderCount: number;

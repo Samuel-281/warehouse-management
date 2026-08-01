@@ -5,6 +5,7 @@ import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { getPrisma } from "@/lib/db";
 import { runIdempotentTransaction } from "@/lib/services/idempotency-service";
 import { linkAndReconcileTrackedReceipts } from "@/lib/services/terminal-receipt-ownership-service";
+import { buildTrackingCreatedAtRange } from "@/lib/services/tracking-date-range";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
 import type {
   OwnerType,
@@ -497,7 +498,13 @@ export async function getTrackingSummary(): Promise<TrackingSummary> {
   };
 }
 
-export async function listTrackingOrders(input: { page?: number; pageSize?: number; type?: string }): Promise<TrackingOrderListResult> {
+export async function listTrackingOrders(input: {
+  page?: number;
+  pageSize?: number;
+  type?: string;
+  startDate?: string;
+  endDate?: string;
+}): Promise<TrackingOrderListResult> {
   const prisma = getPrisma();
   const page = normalizePage(input.page);
   const pageSize = normalizePageSize(input.pageSize);
@@ -505,6 +512,8 @@ export async function listTrackingOrders(input: { page?: number; pageSize?: numb
   if (input.type === "sales_outbound") where.type = "SALES_OUTBOUND";
   if (input.type === "transfer") where.type = "TRANSFER";
   if (input.type === "return") where.type = "RETURN";
+  const createdAt = buildTrackingCreatedAtRange(input);
+  if (createdAt) where.createdAt = createdAt;
   const [total, orders] = await Promise.all([
     prisma.trackingOrder.count({ where }),
     prisma.trackingOrder.findMany({

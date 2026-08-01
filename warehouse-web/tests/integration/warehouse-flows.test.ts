@@ -637,6 +637,131 @@ test("同一路线的分批销售出库可合单汇总且解除后保留原始�
   assert.equal(ungroupedOrders.items.some((order) => order.groupId), false);
 });
 
+test("同一路线的分批挪仓可合单，且不同目标仓库不能混合", async () => {
+  const transfers = [];
+  for (const barcodes of [["TRANSFER-GROUP-A-001", "TRANSFER-GROUP-A-002"], ["TRANSFER-GROUP-B-001"]]) {
+    transfers.push(await submitTrackingOutbound({
+      sourceWarehouseId: context.sourceWarehouseId,
+      destinationType: "warehouse",
+      targetWarehouseId: context.targetWarehouseId,
+      barcodes,
+      operatorName,
+      operatorUserId: currentUser.id
+    }));
+  }
+
+  const movementCountBefore = await prisma.trackingMovement.count();
+  const group = await createTrackingOrderGroup({
+    orderIds: transfers.map((order) => order.orderId),
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  assert.equal(group.type, "transfer");
+  assert.equal(group.sourceWarehouseId, context.sourceWarehouseId);
+  assert.equal(group.targetWarehouseId, context.targetWarehouseId);
+  assert.equal(group.salespersonId, undefined);
+  assert.equal(group.barcodeCount, 3);
+  assert.equal(await prisma.trackingMovement.count(), movementCountBefore, "挪仓合单不能新增条码流转");
+
+  await prisma.trackingOrderGroup.update({
+    where: { id: group.id },
+    data: { createdAt: new Date("2026-08-01T04:00:00.000Z") }
+  });
+  const datedGroups = await listTrackingOrderGroups({
+    type: "transfer",
+    startDate: "2026-08-01",
+    endDate: "2026-08-01",
+    page: 1,
+    pageSize: 20
+  });
+  assert.equal(datedGroups.total, 1);
+  assert.equal(datedGroups.items[0]?.id, group.id);
+  assert.equal((await listTrackingOrderGroups({ startDate: "2026-08-02", endDate: "2026-08-02" })).total, 0);
+
+  const detail = await getTrackingOrderGroupDetail(group.id);
+  assert.equal(detail.receiptSummary.total, 3);
+  assert.equal(detail.receiptSummary.pending, 3);
+
+  const thirdWarehouseId = randomUUID();
+  await prisma.warehouse.create({
+    data: { id: thirdWarehouseId, code: "TEST-WH-C", name: "测试仓库 C", manager: "测试员" }
+  });
+  const routeB = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "warehouse",
+    targetWarehouseId: context.targetWarehouseId,
+    barcodes: ["TRANSFER-GROUP-ROUTE-B"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const routeC = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "warehouse",
+    targetWarehouseId: thirdWarehouseId,
+    barcodes: ["TRANSFER-GROUP-ROUTE-C"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await assert.rejects(
+    createTrackingOrderGroup({
+      orderIds: [routeB.orderId, routeC.orderId],
+      operatorName,
+      operatorUserId: currentUser.id
+    }),
+    /来源仓库和目标仓库都相同/
+  );
+});
+
+test("流转单据按上海业务日期筛选并覆盖分页总数", async () => {
+  const orders = [];
+  for (let index = 0; index < 4; index += 1) {
+    orders.push(await submitTrackingOutbound({
+      sourceWarehouseId: context.sourceWarehouseId,
+      destinationType: "salesperson",
+      salespersonId: context.salespersonId,
+      barcodes: [`DATE-FILTER-${index + 1}`],
+      operatorName,
+      operatorUserId: currentUser.id
+    }));
+  }
+  const timestamps = [
+    "2026-07-31T15:59:59.000Z",
+    "2026-07-31T16:00:00.000Z",
+    "2026-08-01T15:59:59.000Z",
+    "2026-08-01T16:00:00.000Z"
+  ];
+  await Promise.all(orders.map((order, index) => prisma.trackingOrder.update({
+    where: { id: order.orderId },
+    data: { createdAt: new Date(timestamps[index]!) }
+  })));
+
+  const filtered = await listTrackingOrders({
+    type: "sales_outbound",
+    startDate: "2026-08-01",
+    endDate: "2026-08-01",
+    page: 1,
+    pageSize: 1
+  });
+  assert.equal(filtered.total, 2, "分页总数必须使用同一日期条件");
+  assert.equal(filtered.items.length, 1);
+  const filteredIds = new Set([
+    ...filtered.items.map((order) => order.id),
+    ...(await listTrackingOrders({
+      type: "sales_outbound",
+      startDate: "2026-08-01",
+      endDate: "2026-08-01",
+      page: 2,
+      pageSize: 1
+    })).items.map((order) => order.id)
+  ]);
+  assert.deepEqual(filteredIds, new Set([orders[1]!.orderId, orders[2]!.orderId]));
+  await assert.rejects(
+    listTrackingOrders({ startDate: "2026-08-02", endDate: "2026-08-01" }),
+    /开始日期不能晚于结束日期/
+  );
+  await assert.rejects(listTrackingOrders({ startDate: "2026-02-30" }), /开始日期格式无效/);
+});
+
 test("勤策商品覆盖旧系统简称且不会误报签收异常", async () => {
   const barcode = "TRACE-LEGACY-NAME-001";
   await submitTrackingOutbound({

@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { ApiError } from "@/lib/api-response";
 import { getPrisma } from "@/lib/db";
+import { buildTrackingCreatedAtRange } from "@/lib/services/tracking-date-range";
 import {
   getTrackingOrderDetail,
   summarizeTrackingOrderGoodsReceipts,
@@ -26,8 +27,8 @@ export type CreateTrackingOrderGroupInput = {
 
 export async function createTrackingOrderGroup(input: CreateTrackingOrderGroupInput): Promise<TrackingOrderGroupSummary> {
   const orderIds = Array.from(new Set(input.orderIds.map((value) => value.trim()).filter(Boolean)));
-  if (orderIds.length < MIN_GROUP_ORDERS) throw new ApiError("请至少选择 2 张销售出库单", 400);
-  if (orderIds.length > MAX_GROUP_ORDERS) throw new ApiError(`单次最多合并 ${MAX_GROUP_ORDERS} 张销售出库单`, 400);
+  if (orderIds.length < MIN_GROUP_ORDERS) throw new ApiError("请至少选择 2 张出库单", 400);
+  if (orderIds.length > MAX_GROUP_ORDERS) throw new ApiError(`单次最多合并 ${MAX_GROUP_ORDERS} 张出库单`, 400);
 
   const prisma = getPrisma();
   try {
@@ -42,17 +43,35 @@ export async function createTrackingOrderGroup(input: CreateTrackingOrderGroupIn
       });
       if (orders.length !== orderIds.length) throw new ApiError("部分流转单据不存在，请刷新后重试", 404);
 
-      const invalid = orders.find((order) => order.type !== "SALES_OUTBOUND" || order.status !== "ACTIVE");
-      if (invalid) throw new ApiError(`单据 ${invalid.orderNo} 不是有效的销售出库单`, 409);
+      const invalid = orders.find((order) =>
+        (order.type !== "SALES_OUTBOUND" && order.type !== "TRANSFER") || order.status !== "ACTIVE"
+      );
+      if (invalid) throw new ApiError(`单据 ${invalid.orderNo} 不是有效的销售出库或挪仓单`, 409);
       const grouped = orders.find((order) => order.groupMembership);
       if (grouped) throw new ApiError(`单据 ${grouped.orderNo} 已属于合单 ${grouped.groupMembership?.group.groupNo}`, 409);
 
       const first = orders[0]!;
-      if (!first.sourceWarehouseId || !first.salespersonId) throw new ApiError("销售出库单缺少来源仓库或销售人员", 409);
+      if (!first.sourceWarehouseId) throw new ApiError("出库单缺少来源仓库", 409);
+      if (first.type === "SALES_OUTBOUND" && !first.salespersonId) {
+        throw new ApiError("销售出库单缺少销售人员", 409);
+      }
+      if (first.type === "TRANSFER" && !first.targetWarehouseId) {
+        throw new ApiError("挪仓单缺少目标仓库", 409);
+      }
       const mismatched = orders.find((order) =>
-        order.sourceWarehouseId !== first.sourceWarehouseId || order.salespersonId !== first.salespersonId
+        order.type !== first.type
+        || order.sourceWarehouseId !== first.sourceWarehouseId
+        || order.salespersonId !== first.salespersonId
+        || order.targetWarehouseId !== first.targetWarehouseId
       );
-      if (mismatched) throw new ApiError("只能合并来源仓库和销售人员都相同的销售出库单", 409);
+      if (mismatched) {
+        throw new ApiError(
+          first.type === "TRANSFER"
+            ? "只能合并来源仓库和目标仓库都相同的挪仓单"
+            : "只能合并来源仓库和销售人员都相同的销售出库单",
+          409
+        );
+      }
 
       const barcodeCount = orders.reduce((total, order) => total + order._count.items, 0);
       if (barcodeCount > MAX_GROUP_BARCODES) throw new ApiError(`一个合单最多汇总 ${MAX_GROUP_BARCODES} 件箱码`, 400);
@@ -60,7 +79,9 @@ export async function createTrackingOrderGroup(input: CreateTrackingOrderGroupIn
       const group = await tx.trackingOrderGroup.create({
         data: {
           groupNo: makeGroupNo(),
+          type: first.type,
           sourceWarehouseId: first.sourceWarehouseId,
+          targetWarehouseId: first.targetWarehouseId,
           salespersonId: first.salespersonId,
           operatorId: input.operatorUserId,
           operatorName: input.operatorName,
@@ -89,13 +110,25 @@ export async function createTrackingOrderGroup(input: CreateTrackingOrderGroupIn
   }
 }
 
-export async function listTrackingOrderGroups(input: { page?: number; pageSize?: number }): Promise<TrackingOrderGroupListResult> {
+export async function listTrackingOrderGroups(input: {
+  page?: number;
+  pageSize?: number;
+  type?: string;
+  startDate?: string;
+  endDate?: string;
+}): Promise<TrackingOrderGroupListResult> {
   const prisma = getPrisma();
   const page = normalizePage(input.page);
   const pageSize = normalizePageSize(input.pageSize);
+  const where: Prisma.TrackingOrderGroupWhereInput = {};
+  if (input.type === "sales_outbound") where.type = "SALES_OUTBOUND";
+  if (input.type === "transfer") where.type = "TRANSFER";
+  const createdAt = buildTrackingCreatedAtRange(input);
+  if (createdAt) where.createdAt = createdAt;
   const [total, groups] = await Promise.all([
-    prisma.trackingOrderGroup.count(),
+    prisma.trackingOrderGroup.count({ where }),
     prisma.trackingOrderGroup.findMany({
+      where,
       include: {
         members: {
           include: {
@@ -166,8 +199,10 @@ export async function dissolveTrackingOrderGroup(groupId: string) {
 type GroupWithOrders = {
   id: string;
   groupNo: string;
+  type: "SALES_OUTBOUND" | "TRANSFER" | "RETURN";
   sourceWarehouseId: string;
-  salespersonId: string;
+  targetWarehouseId: string | null;
+  salespersonId: string | null;
   operatorName: string;
   createdAt: Date;
   members: Array<{
@@ -183,8 +218,10 @@ function mapTrackingOrderGroup(group: GroupWithOrders): TrackingOrderGroupSummar
   return {
     id: group.id,
     groupNo: group.groupNo,
+    type: group.type === "TRANSFER" ? "transfer" : "sales_outbound",
     sourceWarehouseId: group.sourceWarehouseId,
-    salespersonId: group.salespersonId,
+    targetWarehouseId: group.targetWarehouseId ?? undefined,
+    salespersonId: group.salespersonId ?? undefined,
     operator: group.operatorName,
     createdAt: formatAppDateTime(group.createdAt),
     orderCount: orderedMembers.length,
