@@ -785,7 +785,7 @@ export function mapTrackingMovement(movement: {
   };
 }
 
-function mapTrackingOrder(order: {
+export function mapTrackingOrder(order: {
   id: string;
   orderNo: string;
   type: "SALES_OUTBOUND" | "TRANSFER" | "RETURN";

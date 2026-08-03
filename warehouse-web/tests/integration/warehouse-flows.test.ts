@@ -29,6 +29,7 @@ import {
   createTrackingOrderGroup,
   dissolveTrackingOrderGroup,
   getTrackingOrderGroupDetail,
+  listTrackingOrderFeed,
   listTrackingOrderGroups
 } from "@/lib/services/tracking-order-group-service";
 import {
@@ -663,9 +664,13 @@ test("同一路线的分批挪仓可合单，且不同目标仓库不能混合",
   assert.equal(group.barcodeCount, 3);
   assert.equal(await prisma.trackingMovement.count(), movementCountBefore, "挪仓合单不能新增条码流转");
 
+  await prisma.trackingOrder.updateMany({
+    where: { id: { in: transfers.map((order) => order.orderId) } },
+    data: { createdAt: new Date("2026-08-01T04:00:00.000Z") }
+  });
   await prisma.trackingOrderGroup.update({
     where: { id: group.id },
-    data: { createdAt: new Date("2026-08-01T04:00:00.000Z") }
+    data: { createdAt: new Date("2026-08-02T04:00:00.000Z") }
   });
   const datedGroups = await listTrackingOrderGroups({
     type: "transfer",
@@ -710,6 +715,57 @@ test("同一路线的分批挪仓可合单，且不同目标仓库不能混合",
     }),
     /来源仓库和目标仓库都相同/
   );
+});
+
+test("普通单据与合单使用同一根级分页且合单成员只在展开数据中出现", async () => {
+  const orders = [];
+  for (const barcode of ["FEED-GROUP-001", "FEED-GROUP-002", "FEED-ORDER-003"]) {
+    orders.push(await submitTrackingOutbound({
+      sourceWarehouseId: context.sourceWarehouseId,
+      destinationType: "salesperson",
+      salespersonId: context.salespersonId,
+      barcodes: [barcode],
+      operatorName,
+      operatorUserId: currentUser.id
+    }));
+  }
+  const group = await createTrackingOrderGroup({
+    orderIds: [orders[0]!.orderId, orders[1]!.orderId],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await prisma.trackingOrder.update({ where: { id: orders[0]!.orderId }, data: { createdAt: new Date("2026-08-01T01:00:00.000Z") } });
+  await prisma.trackingOrder.update({ where: { id: orders[1]!.orderId }, data: { createdAt: new Date("2026-08-02T01:00:00.000Z") } });
+  await prisma.trackingOrderGroup.update({ where: { id: group.id }, data: { createdAt: new Date("2026-08-20T01:00:00.000Z") } });
+
+  const firstPage = await listTrackingOrderFeed({ type: "sales_outbound", page: 1, pageSize: 1 });
+  const secondPage = await listTrackingOrderFeed({ type: "sales_outbound", page: 2, pageSize: 1 });
+  assert.equal(firstPage.total, 2, "合单整体只能占一个根级分页名额");
+  assert.equal(secondPage.total, 2);
+  assert.equal(firstPage.items.length, 1);
+  assert.equal(secondPage.items.length, 1);
+
+  const feedItems = [...firstPage.items, ...secondPage.items];
+  const groupItem = feedItems.find((item) => item.kind === "group");
+  const orderItem = feedItems.find((item) => item.kind === "order");
+  assert.ok(groupItem && groupItem.kind === "group");
+  assert.equal(groupItem.group.id, group.id);
+  assert.equal(groupItem.group.createdAt, "2026-08-02 09:00");
+  assert.deepEqual(
+    new Set(groupItem.memberOrders.map((order) => order.id)),
+    new Set([orders[0]!.orderId, orders[1]!.orderId])
+  );
+  assert.ok(orderItem && orderItem.kind === "order");
+  assert.equal(orderItem.order.id, orders[2]!.orderId);
+  assert.equal((await listTrackingOrderFeed({ type: "return" })).total, 0);
+  const datedFeed = await listTrackingOrderFeed({ startDate: "2026-08-02", endDate: "2026-08-02" });
+  assert.equal(datedFeed.total, 1, "合单日期必须使用最晚成员原单时间，而不是合单创建时间");
+  assert.equal(datedFeed.items[0]?.kind, "group");
+
+  await dissolveTrackingOrderGroup(group.id);
+  const dissolvedFeed = await listTrackingOrderFeed({ type: "sales_outbound", page: 1, pageSize: 20 });
+  assert.equal(dissolvedFeed.total, 3);
+  assert.equal(dissolvedFeed.items.every((item) => item.kind === "order"), true);
 });
 
 test("流转单据按上海业务日期筛选并覆盖分页总数", async () => {

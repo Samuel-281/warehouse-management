@@ -420,6 +420,17 @@ export type TrackingOrderGroupListResult = {
   pageSize: number;
 };
 
+export type TrackingOrderFeedItem =
+  | { kind: "order"; order: TrackingOrderSummary }
+  | { kind: "group"; group: TrackingOrderGroupSummary; memberOrders: TrackingOrderSummary[] };
+
+export type TrackingOrderFeedResult = {
+  items: TrackingOrderFeedItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 export type TrackingOrderGroupBarcodeDetail = TrackingOrderBarcodeDetail & {
   orderId: string;
   orderNo: string;
