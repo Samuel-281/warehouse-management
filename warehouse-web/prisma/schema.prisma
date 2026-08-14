@@ -21,6 +21,38 @@ enum OrderStatus {
   VOIDED
 }
 
+enum TrackingOrderStatus {
+  ACTIVE
+  MERGED
+  VOIDED
+}
+
+enum TrackingReviewStatus {
+  PENDING
+  REVIEWED
+  EXEMPT
+}
+
+enum TrackingGroupStatus {
+  ACTIVE
+  VOIDED
+}
+
+enum ProductCategorySource {
+  MANUAL
+  QINCE
+}
+
+enum TrackingReviewTargetType {
+  ORDER
+  GROUP
+}
+
+enum TrackingCorrectionTargetType {
+  ORDER
+  GROUP
+}
+
 enum OwnerType {
   WAREHOUSE
   SALESPERSON
@@ -102,6 +134,8 @@ enum TrackingMovementType {
   QINCE_RECEIPT
   ORDER_REVERSAL
   BARCODE_CORRECTION
+  ORDER_CORRECTION
+  TRACKING_VOID
   WRITE_OFF
 }
 
@@ -120,6 +154,8 @@ model User {
   trackingOrders TrackingOrder[]
   trackingOrderGroups TrackingOrderGroup[]
   trackingMovements TrackingMovement[]
+  trackingOrderReviews TrackingOrderReview[] @relation("TrackingReviewOperator")
+  trackingOrderCorrections TrackingOrderCorrection[] @relation("TrackingCorrectionOperator")
 
   inboundOrders      InboundOrder[]
   outboundOrders     OutboundOrder[]
@@ -423,11 +459,13 @@ model TerminalReceiptRecord {
   receivingOrganizationName String
   fingerprint               String             @unique
   matchStatus               ReceiptMatchStatus
+  productCategoryId         String?            @db.Uuid
   createdAt                 DateTime           @default(now())
 
   import        TerminalReceiptImport @relation(fields: [importId], references: [id], onDelete: Cascade)
   inventoryItem InventoryItem?        @relation(fields: [inventoryItemId], references: [id])
   trackedBarcode TrackedBarcode?       @relation(fields: [trackedBarcodeId], references: [id])
+  productCategory ProductCategory?      @relation(fields: [productCategoryId], references: [id], onDelete: SetNull)
   trackingMovement TrackingMovement?
 
   @@index([barcode, scannedAt(sort: Desc)])
@@ -435,6 +473,7 @@ model TerminalReceiptRecord {
   @@index([trackedBarcodeId, scannedAt(sort: Desc)])
   @@index([receivingOrganizationName])
   @@index([importId])
+  @@index([productCategoryId])
   @@map("terminal_receipt_records")
 }
 
@@ -443,6 +482,7 @@ model TrackedBarcode {
   barcode               String                @unique
   externalGoodsName     String?
   goodsUnit             String?
+  productCategoryId     String?               @db.Uuid
   currentOwnerType      OwnerType
   warehouseId           String?               @db.Uuid
   salespersonId         String?               @db.Uuid
@@ -459,12 +499,14 @@ model TrackedBarcode {
   movements             TrackingMovement[]
   orderItems            TrackingOrderBarcode[]
   terminalReceiptRecords TerminalReceiptRecord[]
+  productCategory       ProductCategory?       @relation(fields: [productCategoryId], references: [id], onDelete: SetNull)
 
   @@index([currentOwnerType, warehouseId, lastMovedAt(sort: Desc)])
   @@index([currentOwnerType, salespersonId, lastMovedAt(sort: Desc)])
   @@index([receiptStatus, lastMovedAt(sort: Desc)])
   @@index([externalGoodsName])
   @@index([terminalStoreName])
+  @@index([productCategoryId])
   @@map("tracked_barcodes")
 }
 
@@ -477,7 +519,9 @@ model TrackingOrder {
   salespersonId     String?           @db.Uuid
   operatorId        String?           @db.Uuid
   operatorName      String
-  status            OrderStatus       @default(ACTIVE)
+  status            TrackingOrderStatus @default(ACTIVE)
+  reviewStatus      TrackingReviewStatus @default(PENDING)
+  correctedAfterReview Boolean        @default(false)
   voidedAt          DateTime?
   voidedByUserId    String?           @db.Uuid
   voidedByName      String?
@@ -491,6 +535,8 @@ model TrackingOrder {
   items             TrackingOrderBarcode[]
   movements         TrackingMovement[]
   groupMembership   TrackingOrderGroupMember?
+  reviews           TrackingOrderReview[]
+  corrections       TrackingOrderCorrection[]
 
   @@index([type, createdAt(sort: Desc)])
   @@index([createdAt(sort: Desc)])
@@ -498,6 +544,7 @@ model TrackingOrder {
   @@index([targetWarehouseId, createdAt(sort: Desc)])
   @@index([salespersonId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
+  @@index([reviewStatus, createdAt(sort: Desc)])
   @@map("tracking_orders")
 }
 
@@ -510,6 +557,14 @@ model TrackingOrderGroup {
   salespersonId     String?  @db.Uuid
   operatorId        String?  @db.Uuid
   operatorName      String
+  status            TrackingGroupStatus @default(ACTIVE)
+  reviewStatus      TrackingReviewStatus @default(PENDING)
+  correctedAfterReview Boolean @default(false)
+  correctedAt       DateTime?
+  voidedAt          DateTime?
+  voidedByUserId    String? @db.Uuid
+  voidedByName      String?
+  voidReason        String?
   createdAt         DateTime @default(now())
 
   sourceWarehouse   Warehouse @relation("TrackingGroupSourceWarehouse", fields: [sourceWarehouseId], references: [id])
@@ -517,11 +572,15 @@ model TrackingOrderGroup {
   salesperson       Salesperson? @relation(fields: [salespersonId], references: [id])
   operator          User? @relation(fields: [operatorId], references: [id])
   members           TrackingOrderGroupMember[]
+  reviews           TrackingOrderReview[]
+  corrections       TrackingOrderCorrection[]
+  movements         TrackingMovement[]
 
   @@index([createdAt(sort: Desc)])
   @@index([type, createdAt(sort: Desc)])
   @@index([sourceWarehouseId, salespersonId, createdAt(sort: Desc)])
   @@index([sourceWarehouseId, targetWarehouseId, createdAt(sort: Desc)])
+  @@index([status, reviewStatus, createdAt(sort: Desc)])
   @@map("tracking_order_groups")
 }
 
@@ -549,6 +608,7 @@ model TrackingOrderBarcode {
   beforeSalespersonId       String?      @db.Uuid
   beforeTerminalStoreName   String?
   beforeReceiptStatus       TrackingReceiptStatus?
+  beforeSignedAt            DateTime?
   createdTrackingItem       Boolean      @default(false)
 
   order                     TrackingOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -558,6 +618,90 @@ model TrackingOrderBarcode {
   @@index([barcode])
   @@index([trackedBarcodeId])
   @@map("tracking_order_barcodes")
+}
+
+model ProductCategory {
+  id             String                @id @default(uuid()) @db.Uuid
+  name           String
+  normalizedName String                @unique
+  status         RecordStatus          @default(ENABLED)
+  source         ProductCategorySource
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  trackedBarcodes TrackedBarcode[]
+  terminalReceiptRecords TerminalReceiptRecord[]
+  reviewItems     TrackingOrderReviewItem[]
+
+  @@index([status, name])
+  @@map("product_categories")
+}
+
+model TrackingOrderReview {
+  id                  String                   @id @default(uuid()) @db.Uuid
+  targetType          TrackingReviewTargetType
+  orderId             String?                  @db.Uuid
+  groupId             String?                  @db.Uuid
+  version             Int
+  actualTotalQuantity Int
+  activeBarcodeCount  Int
+  operatorId          String?                  @db.Uuid
+  operatorName        String
+  createdAt           DateTime                 @default(now())
+
+  order               TrackingOrder?           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  group               TrackingOrderGroup?      @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  operator            User?                    @relation("TrackingReviewOperator", fields: [operatorId], references: [id])
+  items               TrackingOrderReviewItem[]
+
+  @@unique([orderId, version])
+  @@unique([groupId, version])
+  @@index([targetType, createdAt(sort: Desc)])
+  @@index([operatorId])
+  @@map("tracking_order_reviews")
+}
+
+model TrackingOrderReviewItem {
+  id                String              @id @default(uuid()) @db.Uuid
+  reviewId          String              @db.Uuid
+  productCategoryId String              @db.Uuid
+  categoryName      String
+  quantity          Int
+
+  review            TrackingOrderReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  productCategory   ProductCategory     @relation(fields: [productCategoryId], references: [id], onDelete: Restrict)
+
+  @@unique([reviewId, productCategoryId])
+  @@index([productCategoryId])
+  @@map("tracking_order_review_items")
+}
+
+model TrackingOrderCorrection {
+  id                        String                       @id @default(uuid()) @db.Uuid
+  targetType                TrackingCorrectionTargetType
+  orderId                   String?                      @db.Uuid
+  groupId                   String?                      @db.Uuid
+  beforeType                TrackingOrderType
+  afterType                 TrackingOrderType
+  beforeSourceWarehouseId   String                       @db.Uuid
+  afterSourceWarehouseId    String                       @db.Uuid
+  beforeTargetWarehouseId   String?                      @db.Uuid
+  afterTargetWarehouseId    String?                      @db.Uuid
+  beforeSalespersonId       String?                      @db.Uuid
+  afterSalespersonId        String?                      @db.Uuid
+  note                      String?
+  operatorId                String?                      @db.Uuid
+  operatorName              String
+  createdAt                 DateTime                     @default(now())
+
+  order                     TrackingOrder?               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  group                     TrackingOrderGroup?          @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  operator                  User?                        @relation("TrackingCorrectionOperator", fields: [operatorId], references: [id])
+
+  @@index([orderId, createdAt(sort: Desc)])
+  @@index([groupId, createdAt(sort: Desc)])
+  @@index([operatorId])
+  @@map("tracking_order_corrections")
 }
 
 model TrackingMovement {
@@ -575,16 +719,20 @@ model TrackingMovement {
   note                  String
   orderId               String?              @db.Uuid
   orderNo               String?
+  groupId               String?              @db.Uuid
+  groupNo               String?
   receiptRecordId       String?              @unique @db.Uuid
 
   trackedBarcode        TrackedBarcode       @relation(fields: [trackedBarcodeId], references: [id])
   operator              User?                @relation(fields: [operatorId], references: [id])
   order                 TrackingOrder?       @relation(fields: [orderId], references: [id])
+  group                 TrackingOrderGroup?  @relation(fields: [groupId], references: [id])
   receiptRecord         TerminalReceiptRecord? @relation(fields: [receiptRecordId], references: [id], onDelete: SetNull)
 
   @@index([trackedBarcodeId, occurredAt(sort: Desc)])
   @@index([barcode, occurredAt(sort: Desc)])
   @@index([orderId])
+  @@index([groupId])
   @@index([type, occurredAt(sort: Desc)])
   @@map("tracking_movements")
 }

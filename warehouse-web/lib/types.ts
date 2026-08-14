@@ -3,7 +3,7 @@ export type WarehouseType = "warehouse";
 export type OwnerType = "warehouse" | "salesperson" | "terminal_store";
 export type ItemStatus = "in_stock" | "with_salesperson" | "signed" | "receipt_exception" | "written_off" | "voided";
 export type InventoryStatusScope = "active" | "written_off" | "voided" | "all";
-export type OrderStatus = "active" | "voided";
+export type OrderStatus = "active" | "merged" | "voided";
 export type InboundSource = "factory" | "terminal_return";
 export type TrackingSource = InboundSource | "outbound_scan";
 export type OutboundType = "transfer" | "sales" | "direct";
@@ -286,7 +286,20 @@ export type TrackingMovementType =
   | "qince_receipt"
   | "order_reversal"
   | "barcode_correction"
+  | "order_correction"
+  | "tracking_void"
   | "write_off";
+
+export type TrackingReviewStatus = "pending" | "reviewed" | "exempt";
+
+export type ProductCategoryRecord = {
+  id: string;
+  name: string;
+  status: "enabled" | "disabled";
+  source: "manual" | "qince";
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type TrackedBarcode = {
   id: string;
@@ -316,6 +329,8 @@ export type TrackingMovement = {
   note: string;
   orderId?: string;
   orderNo?: string;
+  groupId?: string;
+  groupNo?: string;
 };
 
 export type TrackingBarcodeListResult = {
@@ -355,6 +370,10 @@ export type TrackingOrderSummary = {
   barcodeCount: number;
   barcodePreview: string[];
   status: OrderStatus;
+  reviewStatus: TrackingReviewStatus;
+  correctedAfterReview: boolean;
+  activeBarcodeCount: number;
+  voidedBarcodeCount: number;
   groupId?: string;
   groupNo?: string;
 };
@@ -367,20 +386,36 @@ export type TrackingOrderListResult = {
 };
 
 export type TrackingOrderReceiptSummary = {
+  basis: "barcode" | "review";
+  reviewVersion?: number;
   total: number;
   signed: number;
   pending: number;
   exceptions: number;
-  signedRate: number;
+  signedRate: number | null;
+  reviewedCategoryQuantity: number;
+  unallocatedCategoryQuantity: number;
+  categoryExcessQuantity: number;
+  excessQuantity: number;
 };
 
-export type TrackingOrderGoodsReceiptSummary = TrackingOrderReceiptSummary & {
+export type TrackingOrderGoodsReceiptSummary = {
+  productCategoryId?: string;
   goodsName: string;
   goodsUnit?: string;
+  quantitySource: "barcode" | "review" | "unreviewed";
+  total: number | null;
+  signed: number;
+  pending: number | null;
+  exceptions: number;
+  signedRate: number | null;
+  needsReviewQuantity: boolean;
+  excessQuantity: number;
 };
 
 export type TrackingOrderBarcodeDetail = {
   barcode: string;
+  productCategoryId?: string;
   externalGoodsName?: string;
   goodsUnit?: string;
   receiptStatus?: TrackingReceiptStatus;
@@ -390,6 +425,38 @@ export type TrackingOrderBarcodeDetail = {
   warehouseId?: string;
   salespersonId?: string;
   terminalStoreName?: string;
+  trackingStatus: TrackingItemStatus;
+};
+
+export type TrackingOrderReviewItem = {
+  productCategoryId: string;
+  categoryName: string;
+  quantity: number;
+};
+
+export type TrackingOrderReview = {
+  id: string;
+  version: number;
+  actualTotalQuantity: number;
+  activeBarcodeCount: number;
+  operator: string;
+  createdAt: string;
+  items: TrackingOrderReviewItem[];
+};
+
+export type TrackingOrderCorrection = {
+  id: string;
+  beforeType: Exclude<TrackingOrderType, "return">;
+  afterType: Exclude<TrackingOrderType, "return">;
+  beforeSourceWarehouseId: string;
+  afterSourceWarehouseId: string;
+  beforeTargetWarehouseId?: string;
+  afterTargetWarehouseId?: string;
+  beforeSalespersonId?: string;
+  afterSalespersonId?: string;
+  note?: string;
+  operator: string;
+  createdAt: string;
 };
 
 export type TrackingOrderDetail = {
@@ -397,6 +464,8 @@ export type TrackingOrderDetail = {
   receiptSummary?: TrackingOrderReceiptSummary;
   goodsReceiptSummaries: TrackingOrderGoodsReceiptSummary[];
   items: TrackingOrderBarcodeDetail[];
+  reviews: TrackingOrderReview[];
+  corrections: TrackingOrderCorrection[];
 };
 
 export type TrackingOrderGroupSummary = {
@@ -408,9 +477,13 @@ export type TrackingOrderGroupSummary = {
   salespersonId?: string;
   operator: string;
   createdAt: string;
-  orderCount: number;
   barcodeCount: number;
-  orderPreview: string[];
+  barcodePreview: string[];
+  status: "active" | "voided";
+  reviewStatus: TrackingReviewStatus;
+  correctedAfterReview: boolean;
+  activeBarcodeCount: number;
+  voidedBarcodeCount: number;
 };
 
 export type TrackingOrderGroupListResult = {
@@ -422,7 +495,7 @@ export type TrackingOrderGroupListResult = {
 
 export type TrackingOrderFeedItem =
   | { kind: "order"; order: TrackingOrderSummary }
-  | { kind: "group"; group: TrackingOrderGroupSummary; memberOrders: TrackingOrderSummary[] };
+  | { kind: "group"; group: TrackingOrderGroupSummary };
 
 export type TrackingOrderFeedResult = {
   items: TrackingOrderFeedItem[];
@@ -431,17 +504,38 @@ export type TrackingOrderFeedResult = {
   pageSize: number;
 };
 
-export type TrackingOrderGroupBarcodeDetail = TrackingOrderBarcodeDetail & {
-  orderId: string;
-  orderNo: string;
-};
-
 export type TrackingOrderGroupDetail = {
   group: TrackingOrderGroupSummary;
-  memberOrders: TrackingOrderSummary[];
   receiptSummary: TrackingOrderReceiptSummary;
   goodsReceiptSummaries: TrackingOrderGoodsReceiptSummary[];
-  items: TrackingOrderGroupBarcodeDetail[];
+  items: TrackingOrderBarcodeDetail[];
+  reviews: TrackingOrderReview[];
+  corrections: TrackingOrderCorrection[];
+};
+
+export type TrackingReviewTargetSummary = {
+  targetType: "order" | "group";
+  id: string;
+  orderNo: string;
+  type: Exclude<TrackingOrderType, "return">;
+  sourceWarehouseId: string;
+  targetWarehouseId?: string;
+  salespersonId?: string;
+  operator: string;
+  createdAt: string;
+  reviewStatus: TrackingReviewStatus;
+  barcodeCount: number;
+  activeBarcodeCount: number;
+  voidedBarcodeCount: number;
+  latestReview?: TrackingOrderReview;
+};
+
+export type TrackingReviewListResult = {
+  items: TrackingReviewTargetSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pendingCount: number;
 };
 
 export type BarcodeCorrection = {

@@ -39,7 +39,7 @@ export async function POST(request: Request) {
       targetType: "TRACKING_ORDER_GROUP",
       targetId: group.id,
       result: "SUCCESS",
-      detail: `groupNo=${group.groupNo};orders=${group.orderCount};barcodes=${group.barcodeCount}`
+      detail: `groupNo=${group.groupNo};orders=${input.orderIds?.length ?? 0};barcodes=${group.barcodeCount}`
     });
     return ok(group, { status: 201 });
   } catch (error) {

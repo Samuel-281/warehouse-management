@@ -4,14 +4,12 @@ import {
   ArrowRight,
   Barcode,
   Building2,
-  ChevronDown,
-  ChevronRight,
   ClipboardList,
+  ClipboardCheck,
   Eye,
   Home,
   KeyRound,
   Layers3,
-  Link2Off,
   LogOut,
   PackageCheck,
   Pencil,
@@ -22,6 +20,7 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  TriangleAlert,
   Truck,
   UserRound,
   Users,
@@ -29,7 +28,6 @@ import {
   X
 } from "lucide-react";
 import {
-  Fragment,
   type ReactNode,
   useCallback,
   useEffect,
@@ -42,6 +40,9 @@ import { BarcodeCollector, type BarcodeReview } from "@/components/warehouse/Bar
 import { EmptyState, PaginationBar, SectionHeader } from "@/components/warehouse/CommonUi";
 import { ResultDialogBox, ToastBox, type ResultDialog } from "@/components/warehouse/FeedbackDialogs";
 import { TerminalReceiptView } from "@/components/warehouse/TerminalReceiptView";
+import { TrackingReviewView } from "@/components/tracking/TrackingReviewView";
+import { TrackedBarcodeAdminActions, TrackingBusinessAdminActions } from "@/components/tracking/TrackingGovernanceActions";
+import { ProductCategoryManager } from "@/components/tracking/ProductCategoryManager";
 import {
   ClientApiError,
   apiErrorMessage,
@@ -75,7 +76,7 @@ import type {
 import { apiContractVersion, webVersion } from "@/lib/version";
 import { uniqueBarcodes } from "@/lib/warehouse-utils";
 
-type ViewKey = "dashboard" | "outbound" | "return" | "query" | "masters" | "system";
+type ViewKey = "dashboard" | "outbound" | "return" | "review" | "query" | "masters" | "system";
 type QueryTab = "barcodes" | "orders" | "receipts";
 type DestinationType = "salesperson" | "warehouse";
 type ValidationResult = {
@@ -113,6 +114,7 @@ const navItems = [
   { key: "dashboard" as const, label: "首页", icon: Home },
   { key: "outbound" as const, label: "快速出库", icon: ScanLine },
   { key: "return" as const, label: "扫码回库", icon: RotateCcw },
+  { key: "review" as const, label: "出库复核", icon: ClipboardCheck },
   { key: "query" as const, label: "条码查询", icon: Search },
   { key: "masters" as const, label: "基础资料", icon: Building2 },
   { key: "system" as const, label: "系统维护", icon: ShieldCheck }
@@ -332,11 +334,21 @@ export function TraceabilityWorkspace({
                   onCompleted={() => void loadWorkspace()}
                 />
               ) : null}
+              {activeView === "review" ? (
+                <TrackingReviewView
+                  canReview={canOperate}
+                  canRevise={canMaintain}
+                  warehouses={masterData.warehouses}
+                  salespeople={masterData.salespeople}
+                  showToast={showToast}
+                />
+              ) : null}
               {activeView === "query" ? (
                 <TrackingQueryView
                   warehouses={masterData.warehouses}
                   salespeople={masterData.salespeople}
                   canImport={canOperate}
+                  canMaintain={canMaintain}
                   showToast={showToast}
                 />
               ) : null}
@@ -761,11 +773,13 @@ function TrackingQueryView({
   warehouses,
   salespeople,
   canImport,
+  canMaintain,
   showToast
 }: {
   warehouses: WarehouseRecord[];
   salespeople: Salesperson[];
   canImport: boolean;
+  canMaintain: boolean;
   showToast: (toast: Toast) => void;
 }) {
   const [tab, setTab] = useState<QueryTab>("barcodes");
@@ -778,15 +792,16 @@ function TrackingQueryView({
           <button className={segmentClass(tab === "receipts")} onClick={() => setTab("receipts")}>勤策签收</button>
         </div>
       </section>
-      {tab === "barcodes" ? <TrackedBarcodeTable warehouses={warehouses} salespeople={salespeople} showToast={showToast} /> : null}
-      {tab === "orders" ? <TrackingOrdersTable warehouses={warehouses} salespeople={salespeople} canManageGroups={canImport} showToast={showToast} /> : null}
+      {tab === "barcodes" ? <TrackedBarcodeTable warehouses={warehouses} salespeople={salespeople} canMaintain={canMaintain} showToast={showToast} /> : null}
+      {tab === "orders" ? <TrackingOrdersTable warehouses={warehouses} salespeople={salespeople} canManageGroups={canImport} canMaintain={canMaintain} showToast={showToast} /> : null}
       {tab === "receipts" ? <TerminalReceiptView canImport={canImport} showToast={showToast} /> : null}
     </div>
   );
 }
 
-function TrackedBarcodeTable({ warehouses, salespeople, showToast }: { warehouses: WarehouseRecord[]; salespeople: Salesperson[]; showToast: (toast: Toast) => void }) {
+function TrackedBarcodeTable({ warehouses, salespeople, canMaintain, showToast }: { warehouses: WarehouseRecord[]; salespeople: Salesperson[]; canMaintain: boolean; showToast: (toast: Toast) => void }) {
   const [keyword, setKeyword] = useState("");
+  const [trackingStatus, setTrackingStatus] = useState<"active" | "voided">("active");
   const [receiptStatus, setReceiptStatus] = useState<TrackingReceiptStatus | "all">("all");
   const [ownerType, setOwnerType] = useState<"all" | "warehouse" | "salesperson" | "terminal_store">("all");
   const [page, setPage] = useState(1);
@@ -801,7 +816,7 @@ function TrackedBarcodeTable({ warehouses, salespeople, showToast }: { warehouse
     requestRef.current = requestId;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ keyword: keyword.trim(), receiptStatus, ownerType, page: String(nextPage), pageSize: "20" });
+      const params = new URLSearchParams({ keyword: keyword.trim(), trackingStatus, receiptStatus, ownerType, page: String(nextPage), pageSize: "20" });
       const nextResult = await getJson<TrackingBarcodeListResult>(`/api/tracking?${params.toString()}`);
       if (requestId === requestRef.current) {
         setResult(nextResult);
@@ -812,7 +827,7 @@ function TrackedBarcodeTable({ warehouses, salespeople, showToast }: { warehouse
     } finally {
       if (requestId === requestRef.current) setLoading(false);
     }
-  }, [keyword, ownerType, receiptStatus, showToast]);
+  }, [keyword, ownerType, receiptStatus, showToast, trackingStatus]);
 
   useEffect(() => { void load(1); }, [load]);
 
@@ -830,8 +845,9 @@ function TrackedBarcodeTable({ warehouses, salespeople, showToast }: { warehouse
   return (
     <section className="panel overflow-hidden">
       <div className="border-b border-slate-200 p-4">
-        <div className="grid gap-3 xl:grid-cols-[minmax(260px,1fr)_180px_180px_auto] xl:items-end">
+        <div className="grid gap-3 xl:grid-cols-[minmax(240px,1fr)_150px_160px_160px_auto] xl:items-end">
           <label><span className="label">条码、商品或签收店铺</span><input className="field" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="输入关键词" onKeyDown={(event) => { if (event.key === "Enter") void load(1); }} /></label>
+          <label><span className="label">追踪状态</span><select className="field" value={trackingStatus} onChange={(event) => setTrackingStatus(event.target.value as typeof trackingStatus)}><option value="active">有效条码</option><option value="voided">已撤销条码</option></select></label>
           <label><span className="label">签收状态</span><select className="field" value={receiptStatus} onChange={(event) => setReceiptStatus(event.target.value as TrackingReceiptStatus | "all")}><option value="all">全部状态</option><option value="pending">待签收</option><option value="signed">已签收</option><option value="exception">签收异常</option></select></label>
           <label><span className="label">当前归属</span><select className="field" value={ownerType} onChange={(event) => setOwnerType(event.target.value as typeof ownerType)}><option value="all">全部归属</option><option value="warehouse">仓库</option><option value="salesperson">销售人员</option><option value="terminal_store">终端店铺</option></select></label>
           <button className="primary-button justify-center" onClick={() => void load(1)}><Search className="h-4 w-4" />查询</button>
@@ -860,10 +876,10 @@ function TrackedBarcodeTable({ warehouses, salespeople, showToast }: { warehouse
         </table>
       </div>
       {loading ? <p className="border-t border-slate-200 px-4 py-3 text-sm text-muted">正在读取条码...</p> : null}
-      {!loading && result.items.length === 0 ? <div className="p-4"><EmptyState icon={Barcode} title="没有符合条件的条码" detail="调整筛选条件或先完成扫码出库。" /></div> : null}
+      {!loading && result.items.length === 0 ? <div className="p-4"><EmptyState icon={Barcode} title="没有符合条件的条码" detail={trackingStatus === "voided" ? "当前没有待清理的已撤销条码。" : "调整筛选条件或先完成扫码出库。"} /></div> : null}
       <PaginationBar page={page} pageSize={result.pageSize} total={result.total} onPageChange={(nextPage) => void load(nextPage)} />
       {detailLoading ? <DetailLoadingDialog /> : null}
-      {detail ? <TrackingDetailDialog detail={detail} warehouses={warehouses} salespeople={salespeople} onClose={() => setDetail(null)} /> : null}
+      {detail ? <TrackingDetailDialog detail={detail} warehouses={warehouses} salespeople={salespeople} canMaintain={canMaintain} onRemoved={async () => { setDetail(null); await load(page); }} showToast={showToast} onClose={() => setDetail(null)} /> : null}
     </section>
   );
 }
@@ -872,11 +888,13 @@ function TrackingOrdersTable({
   warehouses,
   salespeople,
   canManageGroups,
+  canMaintain,
   showToast
 }: {
   warehouses: WarehouseRecord[];
   salespeople: Salesperson[];
   canManageGroups: boolean;
+  canMaintain: boolean;
   showToast: (toast: Toast) => void;
 }) {
   const [type, setType] = useState<TrackingOrderType | "all">("all");
@@ -887,7 +905,6 @@ function TrackingOrdersTable({
   const [loading, setLoading] = useState(true);
   const [grouping, setGrouping] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<TrackingOrderDetail | null>(null);
   const [groupDetail, setGroupDetail] = useState<TrackingOrderGroupDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -929,7 +946,7 @@ function TrackingOrdersTable({
     try {
       setGroupDetail(await getJson<TrackingOrderGroupDetail>(`/api/tracking/order-groups/${groupId}`));
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "读取出库合单详情失败") });
+      showToast({ tone: "error", message: apiErrorMessage(error, "读取出库单详情失败") });
     } finally {
       setDetailLoading(false);
     }
@@ -945,49 +962,28 @@ function TrackingOrdersTable({
     });
   }
 
-  function toggleGroup(groupId: string) {
-    setExpandedGroupIds((current) => {
-      const next = new Set(current);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  }
-
   async function createGroup() {
     const selectedOrders = rootOrders.filter((order) => selectedIds.has(order.id));
     if (selectedOrders.length < 2) return;
     const barcodeCount = selectedOrders.reduce((total, order) => total + order.barcodeCount, 0);
     const orderLabel = selectedOrders[0]?.type === "transfer" ? "挪仓单" : "销售出库单";
-    if (!window.confirm(`确认将 ${selectedOrders.length} 张${orderLabel}（共 ${barcodeCount} 件）合并查看吗？\n\n原始单据和条码履历会完整保留。`)) return;
+    const dates = new Set(selectedOrders.map((order) => order.createdAt.slice(0, 10)));
+    const reviewedCount = selectedOrders.filter((order) => order.reviewStatus === "reviewed").length;
+    const reviewNotice = reviewedCount > 0
+      ? `\n\n其中 ${reviewedCount} 张已复核。合并后的出库单将重新进入待复核，之前的复核记录仅保留在后台审计中。`
+      : "\n\n合并后只显示一张新的出库单，之前的分批单不再单独显示。";
+    if (!window.confirm(`确认将 ${selectedOrders.length} 张${orderLabel}（共 ${barcodeCount} 件）合并成一张新的出库单吗？${reviewNotice}`)) return;
+    if (dates.size > 1 && !window.confirm("所选单据跨日期。合并后出库单时间将取最迟一笔出库时间，请再次确认是否继续。")) return;
     setGrouping(true);
     try {
       const group = await postJson<TrackingOrderGroupSummary>("/api/tracking/order-groups", { orderIds: selectedOrders.map((order) => order.id) });
       setSelectedIds(new Set());
-      setExpandedGroupIds((current) => new Set(current).add(group.id));
       await load(1);
-      showToast({ tone: "success", message: `已生成合单 ${group.groupNo}，共 ${group.barcodeCount} 件` });
+      showToast({ tone: "success", message: `已生成出库单 ${group.groupNo}，共 ${group.barcodeCount} 件` });
     } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "创建出库合单失败") });
+      showToast({ tone: "error", message: apiErrorMessage(error, "合并出库单失败") });
     } finally {
       setGrouping(false);
-    }
-  }
-
-  async function dissolveGroup(group: TrackingOrderGroupSummary) {
-    if (!window.confirm(`确认解除合单 ${group.groupNo} 吗？\n\n原始单据和条码履历不会被删除。`)) return;
-    try {
-      await deleteJson(`/api/tracking/order-groups/${group.id}`);
-      setGroupDetail(null);
-      setExpandedGroupIds((current) => {
-        const next = new Set(current);
-        next.delete(group.id);
-        return next;
-      });
-      await load(1);
-      showToast({ tone: "success", message: "合单关系已解除，原始单据保持不变" });
-    } catch (error) {
-      showToast({ tone: "error", message: apiErrorMessage(error, "解除出库合单失败") });
     }
   }
 
@@ -998,7 +994,7 @@ function TrackingOrdersTable({
   const selectionAnchor = selectedOrders[0];
   const selectedBarcodeCount = selectedOrders.reduce((total, order) => total + order.barcodeCount, 0);
   function isGroupableOrder(order: TrackingOrderSummary) {
-    if (!canManageGroups || order.type === "return" || order.status !== "active" || order.groupId) return false;
+    if (!canManageGroups || order.type === "return" || order.status !== "active" || order.reviewStatus === "exempt" || order.groupId) return false;
     if (!selectionAnchor || selectedIds.has(order.id)) return true;
     if (order.type !== selectionAnchor.type || order.sourceWarehouseId !== selectionAnchor.sourceWarehouseId) return false;
     return order.type === "transfer"
@@ -1026,7 +1022,7 @@ function TrackingOrdersTable({
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1120px] table-fixed text-left text-sm">
-          <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="w-14 px-4 py-3">{canManageGroups ? "选择" : "展开"}</th><th className="w-56 px-4 py-3">单号</th><th className="w-28 px-4 py-3">业务</th><th className="w-56 px-4 py-3">来源 / 去向</th><th className="px-4 py-3">箱码</th><th className="w-32 px-4 py-3">操作信息</th><th className="w-14 px-4 py-3"></th></tr></thead>
+          <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="w-14 px-4 py-3">{canManageGroups ? "选择" : ""}</th><th className="w-56 px-4 py-3">单号</th><th className="w-28 px-4 py-3">业务</th><th className="w-56 px-4 py-3">来源 / 去向</th><th className="px-4 py-3">箱码</th><th className="w-32 px-4 py-3">操作信息</th><th className="w-14 px-4 py-3"></th></tr></thead>
           <tbody className="divide-y divide-slate-200">
             {result.items.map((item) => {
               if (item.kind === "order") {
@@ -1034,7 +1030,6 @@ function TrackingOrdersTable({
                 const selectable = isGroupableOrder(order);
                 return <TrackingOrderFeedRow
                   canSelect={canManageGroups}
-                  isChild={false}
                   isSelected={selectedIds.has(order.id)}
                   key={order.id}
                   order={order}
@@ -1046,42 +1041,29 @@ function TrackingOrdersTable({
                 />;
               }
 
-              const { group, memberOrders } = item;
-              const expanded = expandedGroupIds.has(group.id);
-              return <Fragment key={group.id}>
+              const { group } = item;
+              return (
                 <tr
-                  aria-expanded={expanded}
-                  className="cursor-pointer bg-emerald-50/50 transition hover:bg-emerald-50 focus-visible:bg-emerald-50 focus-visible:outline-none"
+                  key={group.id}
+                  className="cursor-pointer transition hover:bg-slate-50 focus-visible:bg-emerald-50 focus-visible:outline-none"
                   tabIndex={0}
-                  onClick={() => toggleGroup(group.id)}
+                  onClick={() => void openGroupDetail(group.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      toggleGroup(group.id);
+                      void openGroupDetail(group.id);
                     }
                   }}
                 >
-                  <td className="px-4 py-3"><button aria-label={`${expanded ? "收起" : "展开"}合单 ${group.groupNo}`} className="icon-button h-8 w-8" type="button" onClick={(event) => { event.stopPropagation(); toggleGroup(group.id); }}>{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button></td>
-                  <td className="px-4 py-3"><p className="font-mono font-semibold text-work">{group.groupNo}</p><p className="mt-1 text-xs text-muted">{group.createdAt}</p><span className="mt-1 inline-flex rounded-md border border-emerald-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-emerald-700">合单</span></td>
+                  <td className="px-4 py-3"></td>
+                  <td className="px-4 py-3"><p className="font-mono font-semibold text-work">{group.groupNo}</p><p className="mt-1 text-xs text-muted">{group.createdAt}</p><div className="mt-1 flex flex-wrap gap-1"><ReviewStatusBadge status={group.reviewStatus} />{group.status === "voided" ? <LifecycleBadge label="已作废" tone="danger" /> : null}</div></td>
                   <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-700">{trackingOrderLabel(group.type)}</td>
                   <td className="px-4 py-3 text-slate-600">{warehouseNames.get(group.sourceWarehouseId) ?? "仓库"} <ArrowRight className="mx-1 inline h-3.5 w-3.5" /> {group.type === "transfer" ? warehouseNames.get(group.targetWarehouseId ?? "") ?? "未知仓库" : `销售人员：${salespersonNames.get(group.salespersonId ?? "") ?? "未知"}`}</td>
-                  <td className="px-4 py-3"><p className="font-semibold text-slate-700">{group.orderCount} 张原单 · {group.barcodeCount} 件</p><p className="mt-1 max-w-md truncate font-mono text-xs text-muted">{group.orderPreview.join("、")}</p></td>
+                  <td className="px-4 py-3"><p className="font-semibold text-slate-700">{group.activeBarcodeCount} 件有效</p>{group.voidedBarcodeCount > 0 ? <p className="mt-0.5 text-xs font-semibold text-danger">{group.voidedBarcodeCount} 件已删除</p> : null}<p className="mt-1 max-w-md truncate font-mono text-xs text-muted">{group.barcodePreview.join("、")}</p></td>
                   <td className="break-words px-4 py-3 text-slate-600">{group.operator}</td>
-                  <td className="px-4 py-3"><button aria-label={`查看合单 ${group.groupNo} 详情`} className="icon-button h-8 w-8" title="查看合单详情" type="button" onClick={(event) => { event.stopPropagation(); void openGroupDetail(group.id); }}><Eye className="h-4 w-4" /></button></td>
+                  <td className="px-4 py-3"><button aria-label={`查看单据 ${group.groupNo} 详情`} className="icon-button h-8 w-8" title="查看单据详情" type="button" onClick={(event) => { event.stopPropagation(); void openGroupDetail(group.id); }}><Eye className="h-4 w-4" /></button></td>
                 </tr>
-                {expanded ? memberOrders.map((order) => <TrackingOrderFeedRow
-                  canSelect={false}
-                  isChild
-                  isSelected={false}
-                  key={order.id}
-                  order={order}
-                  salespersonNames={salespersonNames}
-                  selectable={false}
-                  warehouseNames={warehouseNames}
-                  onOpen={() => void openDetail(order.id)}
-                  onToggle={() => undefined}
-                />) : null}
-              </Fragment>;
+              );
             })}
           </tbody>
         </table>
@@ -1090,8 +1072,8 @@ function TrackingOrdersTable({
       {!loading && result.items.length === 0 ? <div className="p-4"><EmptyState icon={ClipboardList} title="暂无流转单据" detail="扫码出库和扫码回库提交后会生成流转单据。" /></div> : null}
       <PaginationBar page={page} pageSize={result.pageSize} total={result.total} onPageChange={(nextPage) => void load(nextPage)} />
       {detailLoading ? <OrderDetailLoadingDialog /> : null}
-      {detail ? <TrackingOrderDetailDialog detail={detail} warehouses={warehouses} salespeople={salespeople} onClose={() => setDetail(null)} /> : null}
-      {groupDetail ? <TrackingOrderGroupDetailDialog detail={groupDetail} warehouses={warehouses} salespeople={salespeople} canDissolve={canManageGroups} onDissolve={() => void dissolveGroup(groupDetail.group)} onClose={() => setGroupDetail(null)} /> : null}
+      {detail ? <TrackingOrderDetailDialog detail={detail} warehouses={warehouses} salespeople={salespeople} canMaintain={canMaintain} onChanged={async () => { setDetail(null); await load(page); }} showToast={showToast} onClose={() => setDetail(null)} /> : null}
+      {groupDetail ? <TrackingOrderGroupDetailDialog detail={groupDetail} warehouses={warehouses} salespeople={salespeople} canMaintain={canMaintain} onChanged={async () => { setGroupDetail(null); await load(page); }} showToast={showToast} onClose={() => setGroupDetail(null)} /> : null}
     </section>
   );
 }
@@ -1103,7 +1085,6 @@ function TrackingOrderFeedRow({
   canSelect,
   selectable,
   isSelected,
-  isChild,
   onToggle,
   onOpen
 }: {
@@ -1113,12 +1094,11 @@ function TrackingOrderFeedRow({
   canSelect: boolean;
   selectable: boolean;
   isSelected: boolean;
-  isChild: boolean;
   onToggle: () => void;
   onOpen: () => void;
 }) {
   return <tr
-    className={`${isChild ? "bg-slate-50/80" : ""} cursor-pointer transition hover:bg-slate-50 focus-visible:bg-emerald-50 focus-visible:outline-none`}
+    className="cursor-pointer transition hover:bg-slate-50 focus-visible:bg-emerald-50 focus-visible:outline-none"
     tabIndex={0}
     onClick={onOpen}
     onKeyDown={(event) => {
@@ -1128,11 +1108,11 @@ function TrackingOrderFeedRow({
       }
     }}
   >
-    <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}>{canSelect ? <input aria-label={`选择单据 ${order.orderNo}`} className="h-4 w-4 accent-emerald-700" type="checkbox" checked={isSelected} disabled={!selectable} onChange={onToggle} /> : isChild ? <span className="inline-flex rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-slate-500">原单</span> : null}</td>
-    <td className={`${isChild ? "pl-8" : "px-4"} py-3`}><p className="font-mono font-semibold text-work">{order.orderNo}</p><p className="mt-1 text-xs text-muted">{order.createdAt}</p></td>
+    <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}>{canSelect ? <input aria-label={`选择单据 ${order.orderNo}`} className="h-4 w-4 accent-emerald-700" type="checkbox" checked={isSelected} disabled={!selectable} onChange={onToggle} /> : null}</td>
+    <td className="px-4 py-3"><p className="font-mono font-semibold text-work">{order.orderNo}</p><p className="mt-1 text-xs text-muted">{order.createdAt}</p><div className="mt-1 flex flex-wrap gap-1"><ReviewStatusBadge status={order.reviewStatus} />{order.status === "voided" ? <LifecycleBadge label="已作废" tone="danger" /> : null}</div></td>
     <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-700">{trackingOrderLabel(order.type)}</td>
     <td className="px-4 py-3 text-slate-600">{order.sourceWarehouseId ? warehouseNames.get(order.sourceWarehouseId) ?? "仓库" : "外部流入"} <ArrowRight className="mx-1 inline h-3.5 w-3.5" /> {order.salespersonId ? `销售人员：${salespersonNames.get(order.salespersonId) ?? "未知"}` : order.targetWarehouseId ? warehouseNames.get(order.targetWarehouseId) ?? "仓库" : "回库仓库"}</td>
-    <td className="px-4 py-3"><p className="font-semibold text-slate-700">{order.barcodeCount} 件</p><p className="mt-1 max-w-md truncate font-mono text-xs text-muted">{order.barcodePreview.join("、")}</p></td>
+    <td className="px-4 py-3"><p className="font-semibold text-slate-700">{order.activeBarcodeCount} 件有效</p>{order.voidedBarcodeCount > 0 ? <p className="mt-0.5 text-xs font-semibold text-danger">{order.voidedBarcodeCount} 件已撤销</p> : null}<p className="mt-1 max-w-md truncate font-mono text-xs text-muted">{order.barcodePreview.join("、")}</p></td>
     <td className="break-words px-4 py-3 text-slate-600">{order.operator}</td>
     <td className="px-4 py-3"><ArrowRight className="h-4 w-4 text-slate-400" /></td>
   </tr>;
@@ -1151,7 +1131,7 @@ function TrackingMastersView({
   showToast: (toast: Toast) => void;
   reload: () => Promise<void>;
 }) {
-  const [tab, setTab] = useState<"warehouses" | "salespeople">("warehouses");
+  const [tab, setTab] = useState<"warehouses" | "salespeople" | "categories">("warehouses");
   const [warehouseDraft, setWarehouseDraft] = useState<Partial<WarehouseRecord> | null>(null);
   const [salespersonDraft, setSalespersonDraft] = useState<Partial<Salesperson> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1210,8 +1190,10 @@ function TrackingMastersView({
   return (
     <div className="space-y-4">
       <section className="panel p-2">
-        <div className="grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1"><button className={segmentClass(tab === "warehouses")} onClick={() => setTab("warehouses")}><Warehouse className="h-4 w-4" />仓库</button><button className={segmentClass(tab === "salespeople")} onClick={() => setTab("salespeople")}><Users className="h-4 w-4" />销售人员</button></div>
+        <div className="grid grid-cols-3 gap-1 rounded-md bg-slate-100 p-1"><button className={segmentClass(tab === "warehouses")} onClick={() => setTab("warehouses")}><Warehouse className="h-4 w-4" />仓库</button><button className={segmentClass(tab === "salespeople")} onClick={() => setTab("salespeople")}><Users className="h-4 w-4" />销售人员</button><button className={segmentClass(tab === "categories")} onClick={() => setTab("categories")}><PackageCheck className="h-4 w-4" />商品品类</button></div>
       </section>
+      {tab === "categories" ? <ProductCategoryManager canEdit={canEdit} showToast={showToast} /> : null}
+      {tab !== "categories" ? (
       <section className="panel overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3"><div><h2 className="text-sm font-semibold text-ink">{tab === "warehouses" ? "仓库资料" : "销售人员资料"}</h2><p className="mt-1 text-xs text-muted">商品资料和终端店铺不再由本系统维护。</p></div>{canEdit ? <button className="primary-button" onClick={() => tab === "warehouses" ? setWarehouseDraft({ code: "", name: "", manager: "" }) : setSalespersonDraft({ code: "", name: "", phone: "", region: "" })}><Plus className="h-4 w-4" />新增</button> : null}</div>
         <div className="overflow-x-auto">
@@ -1222,6 +1204,7 @@ function TrackingMastersView({
           )}
         </div>
       </section>
+      ) : null}
       {warehouseDraft ? <WarehouseEditor draft={warehouseDraft} setDraft={setWarehouseDraft} busy={busy} save={() => void saveWarehouse()} /> : null}
       {salespersonDraft ? <SalespersonEditor draft={salespersonDraft} setDraft={setSalespersonDraft} busy={busy} save={() => void saveSalesperson()} /> : null}
     </div>
@@ -1236,19 +1219,25 @@ function SubmitBand({ title, detail, disabled, busy, label, icon: Icon, onClick 
   return <section className="panel flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-ink">{title}</p><p className="mt-1 text-xs text-muted">{detail}</p></div><button className="primary-button min-w-36 justify-center" disabled={disabled} onClick={onClick}><Icon className="h-4 w-4" />{busy ? "正在提交" : label}</button></section>;
 }
 
-function TrackingDetailDialog({ detail, warehouses, salespeople, onClose }: { detail: TrackingBarcodeDetail; warehouses: WarehouseRecord[]; salespeople: Salesperson[]; onClose: () => void }) {
-  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/40 p-4"><section className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-md bg-white shadow-2xl" role="dialog" aria-modal="true"><div className="sticky top-0 flex items-start justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4"><div><p className="font-mono text-lg font-semibold text-ink">{detail.item.barcode}</p><p className="mt-1 text-sm text-muted">{detail.item.externalGoodsName ?? "商品名称待勤策补全"}</p></div><button className="icon-button" onClick={onClose} aria-label="关闭详情"><X className="h-4 w-4" /></button></div><div className="grid gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-3"><DetailMetric label="当前归属" value={ownerLabel(detail.item, warehouses, salespeople)} /><DetailMetric label="签收状态" value={receiptStatusLabel(detail.item.receiptStatus)} /><DetailMetric label="最近流转" value={detail.item.lastMovedAt} /></div><div className="p-5"><h3 className="text-sm font-semibold text-ink">完整流转履历</h3><div className="mt-3 space-y-3">{detail.movements.map((movement) => <MovementEntry movement={movement} key={movement.id} />)}{detail.movements.length === 0 ? <p className="text-sm text-muted">暂无流转记录</p> : null}</div>{detail.terminalReceipts.length > 0 ? <><h3 className="mt-6 text-sm font-semibold text-ink">勤策签收记录</h3><div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200">{detail.terminalReceipts.map((receipt) => <div className="p-3 text-sm" key={receipt.id}><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold text-slate-700">{receipt.receivingOrganizationName}</p><span className="text-xs text-muted">{receipt.scannedAt}</span></div><p className="mt-1 text-slate-600">{receipt.externalGoodsName} · 扫码人 {receipt.scannerName}</p></div>)}</div></> : null}</div></section></div>;
+function TrackingDetailDialog({ detail, warehouses, salespeople, canMaintain, onRemoved, showToast, onClose }: { detail: TrackingBarcodeDetail; warehouses: WarehouseRecord[]; salespeople: Salesperson[]; canMaintain: boolean; onRemoved: () => Promise<void>; showToast: (toast: Toast) => void; onClose: () => void }) {
+  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/40 p-4"><section className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-md bg-white shadow-2xl" role="dialog" aria-modal="true"><div className="sticky top-0 flex items-start justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4"><div><p className="font-mono text-lg font-semibold text-ink">{detail.item.barcode}</p><p className="mt-1 text-sm text-muted">{detail.item.externalGoodsName ?? "商品名称待勤策补全"}</p></div><div className="flex items-center gap-2">{canMaintain ? <TrackedBarcodeAdminActions barcode={detail.item.barcode} onChanged={onRemoved} showToast={showToast} /> : null}<button className="icon-button" onClick={onClose} aria-label="关闭详情"><X className="h-4 w-4" /></button></div></div><div className="grid gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-3"><DetailMetric label="当前归属" value={ownerLabel(detail.item, warehouses, salespeople)} /><DetailMetric label="签收状态" value={receiptStatusLabel(detail.item.receiptStatus)} /><DetailMetric label="最近流转" value={detail.item.lastMovedAt} /></div><div className="p-5"><h3 className="text-sm font-semibold text-ink">完整流转履历</h3><div className="mt-3 space-y-3">{detail.movements.map((movement) => <MovementEntry movement={movement} key={movement.id} />)}{detail.movements.length === 0 ? <p className="text-sm text-muted">暂无流转记录</p> : null}</div>{detail.terminalReceipts.length > 0 ? <><h3 className="mt-6 text-sm font-semibold text-ink">勤策签收记录</h3><div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200">{detail.terminalReceipts.map((receipt) => <div className="p-3 text-sm" key={receipt.id}><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold text-slate-700">{receipt.receivingOrganizationName}</p><span className="text-xs text-muted">{receipt.scannedAt}</span></div><p className="mt-1 text-slate-600">{receipt.externalGoodsName} · 扫码人 {receipt.scannerName}</p></div>)}</div></> : null}</div></section></div>;
 }
 
 function TrackingOrderDetailDialog({
   detail,
   warehouses,
   salespeople,
+  canMaintain,
+  onChanged,
+  showToast,
   onClose
 }: {
   detail: TrackingOrderDetail;
   warehouses: WarehouseRecord[];
   salespeople: Salesperson[];
+  canMaintain: boolean;
+  onChanged: () => Promise<void>;
+  showToast: (toast: Toast) => void;
   onClose: () => void;
 }) {
   const { order, receiptSummary } = detail;
@@ -1267,73 +1256,38 @@ function TrackingOrderDetailDialog({
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-2 sm:p-4">
       <section className="max-h-[94vh] w-full max-w-5xl overflow-y-auto rounded-md bg-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="tracking-order-detail-title">
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
-          <div className="min-w-0">
+        <div className="sticky top-0 z-10 flex flex-col items-stretch gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-5">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate font-mono text-lg font-semibold text-ink" id="tracking-order-detail-title">{order.orderNo}</h2>
               <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-600">{trackingOrderLabel(order.type)}</span>
+              <ReviewStatusBadge status={order.reviewStatus} />
+              {order.status === "merged" ? <LifecycleBadge label="已合并" tone="neutral" /> : null}
               {order.status === "voided" ? <span className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-danger">已作废</span> : null}
             </div>
             <p className="mt-1 text-sm text-muted">单据详情与本次流转后的勤策签收进度</p>
           </div>
-          <button className="icon-button shrink-0" onClick={onClose} aria-label="关闭单据详情"><X className="h-4 w-4" /></button>
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:shrink-0">{canMaintain ? <TrackingBusinessAdminActions targetType="order" target={order} warehouses={warehouses} salespeople={salespeople} onChanged={onChanged} showToast={showToast} /> : null}<button className="icon-button" onClick={onClose} aria-label="关闭单据详情"><X className="h-4 w-4" /></button></div>
         </div>
 
-        <div className="grid gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-5">
           <DetailMetric label="来源 / 去向" value={`${source} → ${destination}`} />
-          <DetailMetric label="单据箱数" value={`${order.barcodeCount} 件`} />
+          <DetailMetric label="有效箱码" value={`${order.activeBarcodeCount} 件`} />
+          <DetailMetric label="已撤销箱码" value={`${order.voidedBarcodeCount} 件`} />
           <DetailMetric label="操作人" value={order.operator} />
           <DetailMetric label="操作时间" value={order.createdAt} />
         </div>
 
-        {receiptSummary ? (
-          <div className="border-b border-slate-200 p-4 sm:p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div>
-                <p className="text-xs font-semibold text-slate-500">整单签收率</p>
-                <p className="mt-1 text-3xl font-semibold text-ink">{formatReceiptRate(receiptSummary.signedRate)}</p>
-                <p className="mt-1 text-xs text-muted">已签收箱码 ÷ 本单全部箱码；签收异常单独列出，不计入已签收。</p>
-              </div>
-              <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 text-center sm:min-w-[420px]">
-                <ReceiptCount label="已签收" value={receiptSummary.signed} tone="signed" />
-                <ReceiptCount label="待签收" value={receiptSummary.pending} tone="pending" />
-                <ReceiptCount label="签收异常" value={receiptSummary.exceptions} tone="exception" />
-              </dl>
-            </div>
-            <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100" aria-label={`整单签收率 ${formatReceiptRate(receiptSummary.signedRate)}`}>
-              <div className="h-full rounded-full bg-work transition-all" style={{ width: `${receiptSummary.signedRate}%` }} />
-            </div>
-          </div>
-        ) : null}
+        <TrackingLifecycleHistory
+          correctedAfterReview={order.correctedAfterReview}
+          corrections={detail.corrections}
+          reviews={detail.reviews}
+          reviewStatus={order.reviewStatus}
+          salespersonNames={salespersonNames}
+          warehouseNames={warehouseNames}
+        />
 
-        {detail.goodsReceiptSummaries.length > 0 ? (
-          <div className="border-b border-slate-200 p-4 sm:p-5">
-            <div className="flex flex-wrap items-end justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-ink">各项货物签收率</h3>
-                <p className="mt-1 text-xs text-muted">商品名称和单位以勤策签收数据为准；未返回商品的箱码归入“待勤策补全”。</p>
-              </div>
-              <span className="text-xs text-muted">共 {detail.goodsReceiptSummaries.length} 项</span>
-            </div>
-            <div className="mt-3 overflow-x-auto rounded-md border border-slate-200">
-              <table className="w-full min-w-[700px] text-left text-sm">
-                <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-3 py-2.5">勤策商品</th><th className="px-3 py-2.5 text-right">总数</th><th className="px-3 py-2.5 text-right">已签收</th><th className="px-3 py-2.5 text-right">待签收</th><th className="px-3 py-2.5 text-right">异常</th><th className="px-3 py-2.5 text-right">签收率</th></tr></thead>
-                <tbody className="divide-y divide-slate-200">
-                  {detail.goodsReceiptSummaries.map((summary) => (
-                    <tr key={`${summary.goodsName}-${summary.goodsUnit ?? ""}`}>
-                      <td className="px-3 py-3"><p className="font-semibold text-slate-700">{summary.goodsName}</p>{summary.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{summary.goodsUnit}</p> : null}</td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-700">{summary.total}</td>
-                      <td className="px-3 py-3 text-right text-work">{summary.signed}</td>
-                      <td className="px-3 py-3 text-right text-amber-700">{summary.pending}</td>
-                      <td className="px-3 py-3 text-right text-danger">{summary.exceptions}</td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-700">{formatReceiptRate(summary.signedRate)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null}
+        {receiptSummary ? <TrackingReceiptAnalytics receiptSummary={receiptSummary} goodsReceiptSummaries={detail.goodsReceiptSummaries} /> : null}
 
         <div className="p-4 sm:p-5">
           <div className="flex flex-wrap items-end justify-between gap-2">
@@ -1348,8 +1302,8 @@ function TrackingOrderDetailDialog({
               <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500 shadow-[0_1px_0_0_#e2e8f0]"><tr><th className="px-3 py-2.5">箱码</th><th className="px-3 py-2.5">勤策商品</th><th className="px-3 py-2.5">本单签收状态</th><th className="px-3 py-2.5">签收店铺 / 时间</th><th className="px-3 py-2.5">当前归属（实时）</th></tr></thead>
               <tbody className="divide-y divide-slate-200">
                 {detail.items.map((item) => (
-                  <tr key={item.barcode}>
-                    <td className="px-3 py-3 font-mono font-semibold text-slate-700">{item.barcode}</td>
+                  <tr className={item.trackingStatus === "voided" ? "bg-slate-50 text-slate-500" : ""} key={item.barcode}>
+                    <td className="px-3 py-3"><p className="font-mono font-semibold text-slate-700">{item.barcode}</p>{item.trackingStatus === "voided" ? <span className="mt-1 inline-flex rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-slate-500">已撤销追踪</span> : null}</td>
                     <td className="px-3 py-3"><p className="font-medium text-slate-700">{item.externalGoodsName ?? "待勤策补全"}</p>{item.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{item.goodsUnit}</p> : null}</td>
                     <td className="px-3 py-3">{item.receiptStatus ? <ReceiptBadge status={item.receiptStatus} /> : <span className="text-xs text-muted">不适用</span>}</td>
                     <td className="px-3 py-3"><p className="text-slate-700">{item.receivingOrganizationName ?? "-"}</p>{item.signedAt ? <p className="mt-0.5 text-xs text-muted">{item.signedAt}</p> : null}</td>
@@ -1369,15 +1323,17 @@ function TrackingOrderGroupDetailDialog({
   detail,
   warehouses,
   salespeople,
-  canDissolve,
-  onDissolve,
+  canMaintain,
+  onChanged,
+  showToast,
   onClose
 }: {
   detail: TrackingOrderGroupDetail;
   warehouses: WarehouseRecord[];
   salespeople: Salesperson[];
-  canDissolve: boolean;
-  onDissolve: () => void;
+  canMaintain: boolean;
+  onChanged: () => Promise<void>;
+  showToast: (toast: Toast) => void;
   onClose: () => void;
 }) {
   const warehouseNames = new Map(warehouses.map((item) => [item.id, item.name]));
@@ -1390,39 +1346,37 @@ function TrackingOrderGroupDetailDialog({
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-2 sm:p-4">
       <section className="max-h-[94vh] w-full max-w-6xl overflow-y-auto rounded-md bg-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="tracking-order-group-detail-title">
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
-          <div className="min-w-0">
+        <div className="sticky top-0 z-10 flex flex-col items-stretch gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-5">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate font-mono text-lg font-semibold text-ink" id="tracking-order-group-detail-title">{detail.group.groupNo}</h2>
-              <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">{detail.group.type === "transfer" ? "挪仓合单" : "销售合单"}</span>
+              <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">{detail.group.type === "transfer" ? "仓库流转单" : "销售出库单"}</span>
+              <ReviewStatusBadge status={detail.group.reviewStatus} />
+              {detail.group.status === "voided" ? <LifecycleBadge label="已作废" tone="danger" /> : null}
             </div>
-            <p className="mt-1 text-sm text-muted">分批出库的汇总签收进度；下方每张原始单据仍可独立追查。</p>
+            <p className="mt-1 text-sm text-muted">本单的签收、复核与纠错均统一处理。</p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {canDissolve ? <button className="secondary-button text-danger" onClick={onDissolve}><Link2Off className="h-4 w-4" />解除合单</button> : null}
-            <button className="icon-button" onClick={onClose} aria-label="关闭合单详情"><X className="h-4 w-4" /></button>
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:shrink-0">
+            {canMaintain ? <TrackingBusinessAdminActions targetType="group" target={detail.group} warehouses={warehouses} salespeople={salespeople} onChanged={onChanged} showToast={showToast} /> : null}
+            <button className="icon-button" onClick={onClose} aria-label="关闭单据详情"><X className="h-4 w-4" /></button>
           </div>
         </div>
 
         <div className="grid gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-4">
           <DetailMetric label="来源 / 去向" value={`${source} → ${destination}`} />
-          <DetailMetric label="汇总箱数" value={`${detail.group.barcodeCount} 件`} />
-          <DetailMetric label="原始单据" value={`${detail.group.orderCount} 张`} />
-          <DetailMetric label="合单信息" value={`${detail.group.operator} · ${detail.group.createdAt}`} />
+          <DetailMetric label="有效箱码" value={`${detail.group.activeBarcodeCount} 件`} />
+          <DetailMetric label="已删除箱码" value={`${detail.group.voidedBarcodeCount} 件`} />
+          <DetailMetric label="操作信息" value={`${detail.group.operator} · ${detail.group.createdAt}`} />
         </div>
 
-        <div className="border-b border-slate-200 p-4 sm:p-5">
-          <div className="flex flex-wrap items-end justify-between gap-2">
-            <div><h3 className="text-sm font-semibold text-ink">包含的原始单据</h3><p className="mt-1 text-xs text-muted">解除合单只移除下面这些单据的汇总关系，不撤销出库。</p></div>
-            <span className="text-xs text-muted">{detail.memberOrders.length} 张</span>
-          </div>
-          <div className="mt-3 overflow-x-auto rounded-md border border-slate-200">
-            <table className="w-full min-w-[680px] text-left text-sm">
-              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-3 py-2.5">原单号</th><th className="px-3 py-2.5">出库时间</th><th className="px-3 py-2.5 text-right">箱数</th><th className="px-3 py-2.5">操作人</th></tr></thead>
-              <tbody className="divide-y divide-slate-200">{detail.memberOrders.map((order) => <tr key={order.id}><td className="px-3 py-3 font-mono font-semibold text-work">{order.orderNo}</td><td className="px-3 py-3 text-slate-600">{order.createdAt}</td><td className="px-3 py-3 text-right font-semibold text-slate-700">{order.barcodeCount} 件</td><td className="px-3 py-3 text-slate-600">{order.operator}</td></tr>)}</tbody>
-            </table>
-          </div>
-        </div>
+        <TrackingLifecycleHistory
+          correctedAfterReview={detail.group.correctedAfterReview}
+          corrections={detail.corrections}
+          reviews={detail.reviews}
+          reviewStatus={detail.group.reviewStatus}
+          salespersonNames={salespersonNames}
+          warehouseNames={warehouseNames}
+        />
 
         <TrackingReceiptProgress
           receiptSummary={detail.receiptSummary}
@@ -1430,7 +1384,6 @@ function TrackingOrderGroupDetailDialog({
           items={detail.items}
           warehouseNames={warehouseNames}
           salespersonNames={salespersonNames}
-          showSourceOrder
         />
       </section>
     </div>
@@ -1442,23 +1395,55 @@ function TrackingReceiptProgress({
   goodsReceiptSummaries,
   items,
   warehouseNames,
-  salespersonNames,
-  showSourceOrder = false
+  salespersonNames
 }: {
   receiptSummary: NonNullable<TrackingOrderDetail["receiptSummary"]>;
   goodsReceiptSummaries: TrackingOrderDetail["goodsReceiptSummaries"];
-  items: Array<TrackingOrderBarcodeDetail & { orderNo?: string }>;
+  items: TrackingOrderBarcodeDetail[];
   warehouseNames: Map<string, string>;
   salespersonNames: Map<string, string>;
-  showSourceOrder?: boolean;
 }) {
+  return <>
+    <TrackingReceiptAnalytics receiptSummary={receiptSummary} goodsReceiptSummaries={goodsReceiptSummaries} />
+
+    <div className="p-4 sm:p-5">
+      <div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-sm font-semibold text-ink">单据箱码明细</h3><p className="mt-1 text-xs text-muted">签收状态按本次出库流转周期计算。</p></div><span className="text-xs text-muted">{items.length} 件</span></div>
+      <div className="mt-3 max-h-[420px] overflow-auto rounded-md border border-slate-200">
+        <table className="w-full min-w-[860px] text-left text-sm">
+          <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500 shadow-[0_1px_0_0_#e2e8f0]"><tr><th className="px-3 py-2.5">箱码</th><th className="px-3 py-2.5">勤策商品</th><th className="px-3 py-2.5">本单签收状态</th><th className="px-3 py-2.5">签收店铺 / 时间</th><th className="px-3 py-2.5">当前归属（实时）</th></tr></thead>
+          <tbody className="divide-y divide-slate-200">{items.map((item) => <tr className={item.trackingStatus === "voided" ? "bg-slate-50 text-slate-500" : ""} key={item.barcode}><td className="px-3 py-3"><p className="font-mono font-semibold text-slate-700">{item.barcode}</p>{item.trackingStatus === "voided" ? <span className="mt-1 inline-flex rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-slate-500">已删除</span> : null}</td><td className="px-3 py-3"><p className="font-medium text-slate-700">{item.externalGoodsName ?? "待勤策补全"}</p>{item.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{item.goodsUnit}</p> : null}</td><td className="px-3 py-3">{item.receiptStatus ? <ReceiptBadge status={item.receiptStatus} /> : <span className="text-xs text-muted">不适用</span>}</td><td className="px-3 py-3"><p className="text-slate-700">{item.receivingOrganizationName ?? "-"}</p>{item.signedAt ? <p className="mt-0.5 text-xs text-muted">{item.signedAt}</p> : null}</td><td className="px-3 py-3 text-slate-600">{trackingOrderItemOwnerLabel(item, warehouseNames, salespersonNames)}</td></tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+  </>;
+}
+
+function TrackingReceiptAnalytics({
+  receiptSummary,
+  goodsReceiptSummaries
+}: {
+  receiptSummary: NonNullable<TrackingOrderDetail["receiptSummary"]>;
+  goodsReceiptSummaries: TrackingOrderDetail["goodsReceiptSummaries"];
+}) {
+  const usesReview = receiptSummary.basis === "review";
+  const missingReviewQuantities = goodsReceiptSummaries.filter((summary) => summary.needsReviewQuantity).length;
+  const hasWarnings = receiptSummary.excessQuantity > 0 || receiptSummary.unallocatedCategoryQuantity > 0 || receiptSummary.categoryExcessQuantity > 0 || missingReviewQuantities > 0;
+  const progressWidth = Math.min(100, Math.max(0, receiptSummary.signedRate ?? 0));
+
   return <>
     <div className="border-b border-slate-200 p-4 sm:p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="text-xs font-semibold text-slate-500">整单签收率</p>
-          <p className="mt-1 text-3xl font-semibold text-ink">{formatReceiptRate(receiptSummary.signedRate)}</p>
-          <p className="mt-1 text-xs text-muted">已签收箱码 ÷ 全部箱码；签收异常单独列出，不计入已签收。</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-semibold text-slate-500">整单签收率</p>
+            <span className={`rounded-md border px-1.5 py-0.5 text-xs font-semibold ${usesReview ? "border-emerald-200 bg-emerald-50 text-work" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+              {usesReview ? `复核口径 v${receiptSummary.reviewVersion}` : "条码口径"}
+            </span>
+          </div>
+          <p className={`mt-1 text-3xl font-semibold ${receiptSummary.excessQuantity > 0 ? "text-danger" : "text-ink"}`}>{formatReceiptRate(receiptSummary.signedRate)}</p>
+          <p className="mt-1 text-xs text-muted">
+            {usesReview ? "已签收箱码 ÷ 最新复核实际总出货数量；签收异常单独列出。" : "已签收箱码 ÷ 本单有效追踪箱码；已删除条码不参与计算，签收异常单独列出。"}
+          </p>
         </div>
         <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 text-center sm:min-w-[420px]">
           <ReceiptCount label="已签收" value={receiptSummary.signed} tone="signed" />
@@ -1467,33 +1452,106 @@ function TrackingReceiptProgress({
         </dl>
       </div>
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100" aria-label={`整单签收率 ${formatReceiptRate(receiptSummary.signedRate)}`}>
-        <div className="h-full rounded-full bg-work transition-all" style={{ width: `${receiptSummary.signedRate}%` }} />
+        <div className={`h-full rounded-full transition-all ${receiptSummary.excessQuantity > 0 ? "bg-danger" : "bg-work"}`} style={{ width: `${progressWidth}%` }} />
       </div>
+      {hasWarnings ? <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+        <div className="flex items-start gap-2"><TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" /><div className="space-y-1">
+          {receiptSummary.excessQuantity > 0 ? <p>已签收与异常数量合计超过复核总数 {receiptSummary.excessQuantity} 件，请核对复核记录。</p> : null}
+          {receiptSummary.unallocatedCategoryQuantity > 0 ? <p>复核总数中仍有 {receiptSummary.unallocatedCategoryQuantity} 件未分配商品品类。</p> : null}
+          {receiptSummary.categoryExcessQuantity > 0 ? <p>复核品类合计超过实际总数 {receiptSummary.categoryExcessQuantity} 件。</p> : null}
+          {missingReviewQuantities > 0 ? <p>勤策识别出 {missingReviewQuantities} 个未填写复核数量的商品，需修订复核后才能计算对应签收率。</p> : null}
+        </div></div>
+      </div> : null}
     </div>
 
     {goodsReceiptSummaries.length > 0 ? <div className="border-b border-slate-200 p-4 sm:p-5">
       <div className="flex flex-wrap items-end justify-between gap-2">
-        <div><h3 className="text-sm font-semibold text-ink">各项货物签收率</h3><p className="mt-1 text-xs text-muted">商品名称和单位以勤策签收数据为准；未返回商品的箱码归入“待勤策补全”。</p></div>
+        <div>
+          <h3 className="text-sm font-semibold text-ink">各项货物签收率</h3>
+          <p className="mt-1 text-xs text-muted">{usesReview ? "复核品类数量作为分母；勤策未识别的签收继续等待补全。" : "商品名称和单位以勤策签收数据为准；未返回商品的箱码归入“待勤策补全”。"}</p>
+        </div>
         <span className="text-xs text-muted">共 {goodsReceiptSummaries.length} 项</span>
       </div>
       <div className="mt-3 overflow-x-auto rounded-md border border-slate-200">
-        <table className="w-full min-w-[700px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-3 py-2.5">勤策商品</th><th className="px-3 py-2.5 text-right">总数</th><th className="px-3 py-2.5 text-right">已签收</th><th className="px-3 py-2.5 text-right">待签收</th><th className="px-3 py-2.5 text-right">异常</th><th className="px-3 py-2.5 text-right">签收率</th></tr></thead>
-          <tbody className="divide-y divide-slate-200">{goodsReceiptSummaries.map((summary) => <tr key={`${summary.goodsName}-${summary.goodsUnit ?? ""}`}><td className="px-3 py-3"><p className="font-semibold text-slate-700">{summary.goodsName}</p>{summary.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{summary.goodsUnit}</p> : null}</td><td className="px-3 py-3 text-right font-semibold text-slate-700">{summary.total}</td><td className="px-3 py-3 text-right text-work">{summary.signed}</td><td className="px-3 py-3 text-right text-amber-700">{summary.pending}</td><td className="px-3 py-3 text-right text-danger">{summary.exceptions}</td><td className="px-3 py-3 text-right font-semibold text-slate-700">{formatReceiptRate(summary.signedRate)}</td></tr>)}</tbody>
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-3 py-2.5">商品品类</th><th className="px-3 py-2.5 text-right">{usesReview ? "复核数量" : "总数"}</th><th className="px-3 py-2.5 text-right">已签收</th><th className="px-3 py-2.5 text-right">待签收</th><th className="px-3 py-2.5 text-right">异常</th><th className="px-3 py-2.5 text-right">签收率</th></tr></thead>
+          <tbody className="divide-y divide-slate-200">{goodsReceiptSummaries.map((summary) => <tr className={summary.excessQuantity > 0 ? "bg-red-50/60" : summary.needsReviewQuantity ? "bg-amber-50/60" : ""} key={`${summary.productCategoryId ?? summary.goodsName}-${summary.goodsUnit ?? ""}`}>
+            <td className="px-3 py-3"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold text-slate-700">{summary.goodsName}</p>{summary.needsReviewQuantity ? <span className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-xs font-semibold text-amber-800">待补充复核数量</span> : null}</div>{summary.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{summary.goodsUnit}</p> : null}{summary.excessQuantity > 0 ? <p className="mt-1 text-xs font-semibold text-danger">签收与异常合计超出复核数量 {summary.excessQuantity} 件</p> : null}</td>
+            <td className="px-3 py-3 text-right font-semibold text-slate-700">{summary.total ?? "待补充"}</td>
+            <td className="px-3 py-3 text-right text-work">{summary.signed}</td>
+            <td className="px-3 py-3 text-right text-amber-700">{summary.pending ?? "-"}</td>
+            <td className="px-3 py-3 text-right text-danger">{summary.exceptions}</td>
+            <td className={`px-3 py-3 text-right font-semibold ${summary.excessQuantity > 0 ? "text-danger" : "text-slate-700"}`}>{summary.needsReviewQuantity ? "待补充" : formatReceiptRate(summary.signedRate)}</td>
+          </tr>)}</tbody>
         </table>
       </div>
     </div> : null}
-
-    <div className="p-4 sm:p-5">
-      <div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-sm font-semibold text-ink">{showSourceOrder ? "合单箱码明细" : "单据箱码明细"}</h3><p className="mt-1 text-xs text-muted">签收状态按每张原始出库单各自的业务周期计算。</p></div><span className="text-xs text-muted">{items.length} 件</span></div>
-      <div className="mt-3 max-h-[420px] overflow-auto rounded-md border border-slate-200">
-        <table className={`w-full ${showSourceOrder ? "min-w-[1040px]" : "min-w-[860px]"} text-left text-sm`}>
-          <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500 shadow-[0_1px_0_0_#e2e8f0]"><tr>{showSourceOrder ? <th className="px-3 py-2.5">原单号</th> : null}<th className="px-3 py-2.5">箱码</th><th className="px-3 py-2.5">勤策商品</th><th className="px-3 py-2.5">本单签收状态</th><th className="px-3 py-2.5">签收店铺 / 时间</th><th className="px-3 py-2.5">当前归属（实时）</th></tr></thead>
-          <tbody className="divide-y divide-slate-200">{items.map((item) => <tr key={`${item.orderNo ?? "single"}-${item.barcode}`}>{showSourceOrder ? <td className="px-3 py-3 font-mono text-xs font-semibold text-work">{item.orderNo}</td> : null}<td className="px-3 py-3 font-mono font-semibold text-slate-700">{item.barcode}</td><td className="px-3 py-3"><p className="font-medium text-slate-700">{item.externalGoodsName ?? "待勤策补全"}</p>{item.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{item.goodsUnit}</p> : null}</td><td className="px-3 py-3">{item.receiptStatus ? <ReceiptBadge status={item.receiptStatus} /> : <span className="text-xs text-muted">不适用</span>}</td><td className="px-3 py-3"><p className="text-slate-700">{item.receivingOrganizationName ?? "-"}</p>{item.signedAt ? <p className="mt-0.5 text-xs text-muted">{item.signedAt}</p> : null}</td><td className="px-3 py-3 text-slate-600">{trackingOrderItemOwnerLabel(item, warehouseNames, salespersonNames)}</td></tr>)}</tbody>
-        </table>
-      </div>
-    </div>
   </>;
+}
+
+function TrackingLifecycleHistory({
+  reviewStatus,
+  correctedAfterReview,
+  reviews,
+  corrections,
+  warehouseNames,
+  salespersonNames
+}: {
+  reviewStatus: TrackingOrderSummary["reviewStatus"];
+  correctedAfterReview: boolean;
+  reviews: TrackingOrderDetail["reviews"];
+  corrections: TrackingOrderDetail["corrections"];
+  warehouseNames: Map<string, string>;
+  salespersonNames: Map<string, string>;
+}) {
+  return <div className="border-b border-slate-200 p-4 sm:p-5">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h3 className="text-sm font-semibold text-ink">复核与纠错记录</h3>
+        <p className="mt-1 text-xs text-muted">复核版本和路线纠正均永久保留，后续修订不会覆盖历史。</p>
+      </div>
+      <ReviewStatusBadge status={reviewStatus} />
+    </div>
+    {correctedAfterReview ? <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">复核完成后发生过单据纠错或条码删除，请结合下方版本记录核对。</p> : null}
+    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <section className="flex max-h-[22rem] min-h-0 flex-col overflow-hidden rounded-md border border-slate-200">
+        <div className="shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-2.5"><h4 className="text-sm font-semibold text-slate-700">出库复核版本</h4></div>
+        {reviews.length > 0 ? <div className="min-h-0 overflow-y-auto divide-y divide-slate-200">{reviews.map((review) => {
+          const categoryTotal = review.items.reduce((total, item) => total + item.quantity, 0);
+          const mismatched = review.actualTotalQuantity !== review.activeBarcodeCount || (review.items.length > 0 && categoryTotal !== review.actualTotalQuantity);
+          return <div className="p-3 text-sm" key={review.id}>
+            <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold text-slate-700">第 {review.version} 版 · 实际 {review.actualTotalQuantity} 件</p><span className="text-xs text-muted">{review.createdAt}</span></div>
+            <p className="mt-1 text-xs text-muted">有效扫码 {review.activeBarcodeCount} 件 · 复核人 {review.operator}</p>
+            {review.items.length > 0 ? <p className="mt-2 text-xs text-slate-600">{review.items.map((item) => `${item.categoryName} ${item.quantity} 件`).join("；")}</p> : <p className="mt-2 text-xs text-muted">未填写品类数量</p>}
+            {mismatched ? <p className="mt-2 text-xs font-semibold text-amber-700">数量存在差异，系统按实际填写结果保留。</p> : null}
+          </div>;
+        })}</div> : <p className="px-3 py-4 text-sm text-muted">{reviewStatus === "exempt" ? "历史业务免于补做复核。" : "尚未完成出库复核。"}</p>}
+      </section>
+      <section className="flex max-h-[22rem] min-h-0 flex-col overflow-hidden rounded-md border border-slate-200">
+        <div className="shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-2.5"><h4 className="text-sm font-semibold text-slate-700">路线纠正历史</h4></div>
+        {corrections.length > 0 ? <div className="min-h-0 overflow-y-auto divide-y divide-slate-200">{corrections.map((correction) => <div className="p-3 text-sm" key={correction.id}>
+          <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold text-slate-700">{trackingRouteLabel(correction.beforeType, correction.beforeSourceWarehouseId, correction.beforeTargetWarehouseId, correction.beforeSalespersonId, warehouseNames, salespersonNames)}</p><span className="text-xs text-muted">{correction.createdAt}</span></div>
+          <p className="mt-2 text-slate-500"><ArrowRight className="mr-1 inline h-3.5 w-3.5" />{trackingRouteLabel(correction.afterType, correction.afterSourceWarehouseId, correction.afterTargetWarehouseId, correction.afterSalespersonId, warehouseNames, salespersonNames)}</p>
+          <p className="mt-1 text-xs text-muted">纠正人 {correction.operator}{correction.note ? ` · ${correction.note}` : ""}</p>
+        </div>)}</div> : <p className="px-3 py-4 text-sm text-muted">没有路线纠正记录。</p>}
+      </section>
+    </div>
+  </div>;
+}
+
+function trackingRouteLabel(
+  type: Exclude<TrackingOrderType, "return">,
+  sourceWarehouseId: string,
+  targetWarehouseId: string | undefined,
+  salespersonId: string | undefined,
+  warehouseNames: Map<string, string>,
+  salespersonNames: Map<string, string>
+) {
+  const source = warehouseNames.get(sourceWarehouseId) ?? "未知仓库";
+  const destination = type === "transfer"
+    ? warehouseNames.get(targetWarehouseId ?? "") ?? "未知仓库"
+    : `销售人员：${salespersonNames.get(salespersonId ?? "") ?? "未知"}`;
+  return `${trackingOrderLabel(type)} · ${source} → ${destination}`;
 }
 
 function ReceiptCount({ label, value, tone }: { label: string; value: number; tone: TrackingReceiptStatus }) {
@@ -1502,7 +1560,8 @@ function ReceiptCount({ label, value, tone }: { label: string; value: number; to
 }
 
 function MovementEntry({ movement }: { movement: TrackingMovement }) {
-  return <div className="rounded-md border border-slate-200 bg-slate-50 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-semibold text-slate-700">{movementTypeLabel(movement.type)}</p><span className="text-xs text-muted">{movement.occurredAt}</span></div><p className="mt-2 text-sm text-slate-600">{movement.fromLabel} <ArrowRight className="mx-1 inline h-3.5 w-3.5" /> {movement.toLabel}</p><p className="mt-1 text-xs text-muted">操作：{movement.operator}{movement.orderNo ? ` · 单号 ${movement.orderNo}` : ""}</p>{movement.note ? <p className="mt-1 text-xs text-muted">{movement.note}</p> : null}</div>;
+  const displayedOrderNo = movement.groupNo ?? movement.orderNo;
+  return <div className="rounded-md border border-slate-200 bg-slate-50 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-semibold text-slate-700">{movementTypeLabel(movement.type)}</p><span className="text-xs text-muted">{movement.occurredAt}</span></div><p className="mt-2 text-sm text-slate-600">{movement.fromLabel} <ArrowRight className="mx-1 inline h-3.5 w-3.5" /> {movement.toLabel}</p><p className="mt-1 text-xs text-muted">操作：{movement.operator}{displayedOrderNo ? ` · 单号 ${displayedOrderNo}` : ""}</p>{movement.note ? <p className="mt-1 text-xs text-muted">{movement.note}</p> : null}</div>;
 }
 
 function WarehouseEditor({ draft, setDraft, busy, save }: { draft: Partial<WarehouseRecord>; setDraft: (value: Partial<WarehouseRecord> | null) => void; busy: boolean; save: () => void }) {
@@ -1541,6 +1600,8 @@ function DetailLoadingDialog() { return <div className="fixed inset-0 z-[70] fle
 function OrderDetailLoadingDialog() { return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/30"><div className="rounded-md bg-white px-5 py-4 text-sm text-muted shadow-xl"><RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />正在计算单据签收进度</div></div>; }
 function SummaryRow({ label, value }: { label: string; value: number }) { return <div className="flex items-center justify-between border-b border-slate-100 pb-2 last:border-0 last:pb-0"><dt className="text-slate-500">{label}</dt><dd className="font-semibold text-slate-700">{value} 件</dd></div>; }
 function DetailMetric({ label, value }: { label: string; value: string }) { return <div className="bg-white p-4"><p className="text-xs text-muted">{label}</p><p className="mt-1 text-sm font-semibold text-slate-700">{value}</p></div>; }
+function ReviewStatusBadge({ status }: { status: TrackingOrderSummary["reviewStatus"] }) { const classes = status === "reviewed" ? "border-emerald-200 bg-emerald-50 text-work" : status === "exempt" ? "border-slate-200 bg-slate-50 text-slate-500" : "border-amber-200 bg-amber-50 text-amber-700"; return <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-xs font-semibold ${classes}`}>{status === "reviewed" ? "已复核" : status === "exempt" ? "历史免复核" : "待复核"}</span>; }
+function LifecycleBadge({ label, tone }: { label: string; tone: "danger" | "neutral" }) { return <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-xs font-semibold ${tone === "danger" ? "border-red-200 bg-red-50 text-danger" : "border-slate-200 bg-slate-50 text-slate-500"}`}>{label}</span>; }
 function MasterStatus({ status }: { status: "enabled" | "disabled" }) { return <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${status === "enabled" ? "border-emerald-200 bg-emerald-50 text-work" : "border-slate-200 bg-slate-50 text-slate-500"}`}>{status === "enabled" ? "启用" : "停用"}</span>; }
 function ReceiptBadge({ status }: { status: TrackingReceiptStatus }) { const classes = status === "signed" ? "border-emerald-200 bg-emerald-50 text-work" : status === "exception" ? "border-red-200 bg-red-50 text-danger" : "border-amber-200 bg-amber-50 text-amber-700"; return <span className={`inline-flex rounded-md border px-2 py-1 text-xs font-semibold ${classes}`}>{receiptStatusLabel(status)}</span>; }
 function segmentClass(active: boolean) { return `flex h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition ${active ? "bg-white text-work shadow-sm" : "text-slate-500 hover:text-slate-700"}`; }
@@ -1551,7 +1612,7 @@ function isUncertainSubmission(error: unknown) { return !(error instanceof Clien
 function receiptStatusLabel(status: TrackingReceiptStatus) { return status === "signed" ? "已签收" : status === "exception" ? "签收异常" : "待签收"; }
 function syncStatusLabel(status: "running" | "success" | "failure") { return status === "success" ? "最近同步成功" : status === "failure" ? "最近同步失败" : "正在同步"; }
 function trackingOrderLabel(type: TrackingOrderType) { return type === "sales_outbound" ? "销售出库" : type === "transfer" ? "仓库流转" : "扫码回库"; }
-function formatReceiptRate(rate: number) { return `${rate.toLocaleString("zh-CN", { maximumFractionDigits: 1 })}%`; }
-function movementTypeLabel(type: TrackingMovement["type"]) { const labels: Record<TrackingMovement["type"], string> = { legacy_inbound: "历史入库", sales_outbound: "销售出库", transfer: "仓库流转", return: "扫码回库", qince_receipt: "勤策签收", order_reversal: "单据撤销", barcode_correction: "条码更正", write_off: "货物核销" }; return labels[type]; }
+function formatReceiptRate(rate: number | null) { return rate === null ? "—" : `${rate.toLocaleString("zh-CN", { maximumFractionDigits: 1 })}%`; }
+function movementTypeLabel(type: TrackingMovement["type"]) { const labels: Record<TrackingMovement["type"], string> = { legacy_inbound: "历史入库", sales_outbound: "销售出库", transfer: "仓库流转", return: "扫码回库", qince_receipt: "勤策签收", order_reversal: "单据撤销", barcode_correction: "条码更正", order_correction: "出库纠正", tracking_void: "撤销追踪", write_off: "货物核销" }; return labels[type]; }
 function ownerLabel(item: TrackedBarcode, warehouses: WarehouseRecord[], salespeople: Salesperson[]) { if (item.currentOwnerType === "terminal_store") return `终端店铺：${item.terminalStoreName ?? "未知"}`; if (item.currentOwnerType === "salesperson") return `销售人员：${salespeople.find((person) => person.id === item.salespersonId)?.name ?? "未知"}`; return `仓库：${warehouses.find((warehouse) => warehouse.id === item.warehouseId)?.name ?? "未知"}`; }
 function trackingOrderItemOwnerLabel(item: TrackingOrderBarcodeDetail, warehouseNames: Map<string, string>, salespersonNames: Map<string, string>) { if (item.currentOwnerType === "terminal_store") return `终端店铺：${item.terminalStoreName ?? "未知"}`; if (item.currentOwnerType === "salesperson") return `销售人员：${salespersonNames.get(item.salespersonId ?? "") ?? "未知"}`; return `仓库：${warehouseNames.get(item.warehouseId ?? "") ?? "未知"}`; }

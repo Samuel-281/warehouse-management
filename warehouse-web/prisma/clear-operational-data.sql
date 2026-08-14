@@ -3,6 +3,9 @@
 
 TRUNCATE TABLE
   business_requests,
+  tracking_order_review_items,
+  tracking_order_reviews,
+  tracking_order_corrections,
   tracking_order_groups,
   tracking_movements,
   tracking_order_barcodes,
@@ -11,6 +14,7 @@ TRUNCATE TABLE
   terminal_receipt_records,
   terminal_receipt_imports,
   tracked_barcodes,
+  product_categories,
   sales_return_order_items,
   sales_return_orders,
   outbound_order_items,

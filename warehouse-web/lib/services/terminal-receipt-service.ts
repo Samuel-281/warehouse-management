@@ -18,6 +18,7 @@ import {
   reconcileTerminalReceiptOwnership,
   reconcileTrackedBarcodeReceipts
 } from "@/lib/services/terminal-receipt-ownership-service";
+import { linkMatchedReceiptCategories } from "@/lib/services/product-category-service";
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 const MAX_DATA_ROWS = 10_000;
@@ -146,6 +147,7 @@ export async function importTerminalReceipts(input: {
         tx,
         importableRows.flatMap((row) => row.trackedBarcodeId ? [row.trackedBarcodeId] : [])
       );
+      await linkMatchedReceiptCategories(tx, importBatch.id);
 
       const result = await tx.terminalReceiptImport.findUniqueOrThrow({ where: { id: importBatch.id } });
       return mapImportSummary(result);

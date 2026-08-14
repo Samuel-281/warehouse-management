@@ -1,12 +1,13 @@
 import { Prisma } from "@prisma/client";
 
 import { getPrisma } from "@/lib/db";
+import { ensureQinceProductCategory } from "@/lib/services/product-category-service";
 
 type DbClient = Prisma.TransactionClient;
 const RECONCILIATION_BATCH_SIZE = 100;
 
 export function canTerminalReceiptFollow(movementType?: string | null) {
-  return movementType === "SALES_OUTBOUND" || movementType === "TRANSFER" || movementType === "QINCE_RECEIPT";
+  return movementType === "SALES_OUTBOUND" || movementType === "TRANSFER" || movementType === "ORDER_CORRECTION" || movementType === "QINCE_RECEIPT";
 }
 
 export async function reconcileTerminalReceiptOwnership(
@@ -166,6 +167,16 @@ export async function reconcileTrackedBarcodeReceipts(
 
     if (acceptedReceiptIds.length > 0) {
       await tx.terminalReceiptRecord.updateMany({ where: { id: { in: acceptedReceiptIds } }, data: { matchStatus: "MATCHED" } });
+      const acceptedReceipts = item.terminalReceiptRecords.filter((receipt) => acceptedReceiptIds.includes(receipt.id));
+      for (const receipt of acceptedReceipts) {
+        const category = await ensureQinceProductCategory(tx, receipt.externalGoodsName);
+        if (category) {
+          await tx.terminalReceiptRecord.update({
+            where: { id: receipt.id },
+            data: { productCategoryId: category.id }
+          });
+        }
+      }
     }
     if (conflictReceiptIds.length > 0) {
       await tx.terminalReceiptRecord.updateMany({ where: { id: { in: conflictReceiptIds } }, data: { matchStatus: "CONFLICT" } });
@@ -182,16 +193,21 @@ export async function reconcileTrackedBarcodeReceipts(
     });
     const receiptStatus = hasGoodsConflict || hasCurrentFlowConflict
       ? "EXCEPTION"
-      : latestMovement?.type === "SALES_OUTBOUND" || latestMovement?.type === "TRANSFER"
+      : latestMovement?.type === "SALES_OUTBOUND" || latestMovement?.type === "TRANSFER" || latestMovement?.type === "ORDER_CORRECTION"
         ? "PENDING"
         : "SIGNED";
 
     if (latestMovement?.type === "QINCE_RECEIPT" && latestReceipt) {
+      const category = await ensureQinceProductCategory(
+        tx,
+        canonicalReceipt?.externalGoodsName ?? latestReceipt.externalGoodsName
+      );
       await tx.trackedBarcode.update({
         where: { id: item.id },
         data: {
           externalGoodsName: canonicalReceipt?.externalGoodsName ?? latestReceipt.externalGoodsName,
           goodsUnit: canonicalReceipt?.goodsUnit ?? latestReceipt.goodsUnit,
+          productCategoryId: category?.id,
           currentOwnerType: "TERMINAL_STORE",
           warehouseId: null,
           salespersonId: null,
@@ -202,11 +218,15 @@ export async function reconcileTrackedBarcodeReceipts(
         }
       });
     } else if (canonicalReceipt || hasCurrentFlowConflict || hasGoodsConflict) {
+      const category = canonicalReceipt
+        ? await ensureQinceProductCategory(tx, canonicalReceipt.externalGoodsName)
+        : null;
       await tx.trackedBarcode.update({
         where: { id: item.id },
         data: {
           externalGoodsName: canonicalReceipt?.externalGoodsName,
           goodsUnit: canonicalReceipt?.goodsUnit,
+          productCategoryId: category?.id,
           receiptStatus
         }
       });

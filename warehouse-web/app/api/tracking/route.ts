@@ -8,6 +8,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     return ok(await listTrackedBarcodes({
       keyword: searchParams.get("keyword") ?? undefined,
+      trackingStatus: searchParams.get("trackingStatus") ?? undefined,
       receiptStatus: searchParams.get("receiptStatus") ?? undefined,
       ownerType: searchParams.get("ownerType") ?? undefined,
       warehouseId: searchParams.get("warehouseId") ?? undefined,

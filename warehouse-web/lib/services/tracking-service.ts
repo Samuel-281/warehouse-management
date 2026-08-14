@@ -18,6 +18,8 @@ import type {
   TrackingOrderGoodsReceiptSummary,
   TrackingOrderListResult,
   TrackingOrderSummary,
+  TrackingOrderReview,
+  TrackingOrderCorrection,
   TrackingReceiptStatus,
   TrackingSummary
 } from "@/lib/types";
@@ -222,6 +224,7 @@ export async function submitTrackingOutbound(input: SubmitTrackingOutboundInput)
             beforeSalespersonId: before?.salespersonId,
             beforeTerminalStoreName: before?.terminalStoreName,
             beforeReceiptStatus: before?.receiptStatus,
+            beforeSignedAt: before?.signedAt,
             createdTrackingItem: !before
           };
         })
@@ -289,6 +292,7 @@ export async function submitTrackingReturn(input: SubmitTrackingReturnInput) {
           targetWarehouseId: warehouse.id,
           operatorId: input.operatorUserId,
           operatorName: input.operatorName,
+          reviewStatus: "EXEMPT",
           createdAt: time
         }
       });
@@ -339,6 +343,7 @@ export async function submitTrackingReturn(input: SubmitTrackingReturnInput) {
             beforeSalespersonId: before?.salespersonId,
             beforeTerminalStoreName: before?.terminalStoreName,
             beforeReceiptStatus: before?.receiptStatus,
+            beforeSignedAt: before?.signedAt,
             createdTrackingItem: !before
           };
         })
@@ -381,6 +386,7 @@ export async function submitTrackingReturn(input: SubmitTrackingReturnInput) {
 
 export async function listTrackedBarcodes(input: {
   keyword?: string;
+  trackingStatus?: string;
   receiptStatus?: string;
   ownerType?: string;
   warehouseId?: string;
@@ -391,7 +397,9 @@ export async function listTrackedBarcodes(input: {
   const prisma = getPrisma();
   const page = normalizePage(input.page);
   const pageSize = normalizePageSize(input.pageSize);
-  const where: Prisma.TrackedBarcodeWhereInput = { status: "ACTIVE" };
+  const where: Prisma.TrackedBarcodeWhereInput = {
+    status: input.trackingStatus === "voided" ? "VOIDED" : "ACTIVE"
+  };
   const keyword = input.keyword?.trim();
   if (keyword) {
     where.OR = [
@@ -508,7 +516,7 @@ export async function listTrackingOrders(input: {
   const prisma = getPrisma();
   const page = normalizePage(input.page);
   const pageSize = normalizePageSize(input.pageSize);
-  const where: Prisma.TrackingOrderWhereInput = {};
+  const where: Prisma.TrackingOrderWhereInput = { status: { not: "MERGED" } };
   if (input.type === "sales_outbound") where.type = "SALES_OUTBOUND";
   if (input.type === "transfer") where.type = "TRANSFER";
   if (input.type === "return") where.type = "RETURN";
@@ -519,7 +527,7 @@ export async function listTrackingOrders(input: {
     prisma.trackingOrder.findMany({
       where,
       include: {
-        items: { orderBy: { barcode: "asc" }, take: 4 },
+        items: { include: { trackedBarcode: { select: { status: true } } }, orderBy: { barcode: "asc" }, take: 4 },
         groupMembership: { include: { group: { select: { id: true, groupNo: true } } } },
         _count: { select: { items: true } }
       },
@@ -528,10 +536,21 @@ export async function listTrackingOrders(input: {
       take: pageSize
     })
   ]);
-  return { items: orders.map(mapTrackingOrder), total, page, pageSize };
+  const counts = orders.length > 0 ? await prisma.$queryRaw<Array<{ orderId: string; active: number }>>(Prisma.sql`
+    SELECT item."orderId", COUNT(*) FILTER (WHERE barcode.status = 'ACTIVE')::integer AS active
+    FROM "tracking_order_barcodes" AS item
+    JOIN "tracked_barcodes" AS barcode ON barcode.id = item."trackedBarcodeId"
+    WHERE item."orderId" IN (${Prisma.join(orders.map((order) => order.id))})
+    GROUP BY item."orderId"
+  `) : [];
+  const activeByOrder = new Map(counts.map((entry) => [entry.orderId, Number(entry.active)]));
+  return { items: orders.map((order) => mapTrackingOrder({ ...order, activeBarcodeCount: activeByOrder.get(order.id) })), total, page, pageSize };
 }
 
-export async function getTrackingOrderDetail(orderId: string): Promise<TrackingOrderDetail> {
+export async function getTrackingOrderDetail(
+  orderId: string,
+  options: { allowMerged?: boolean } = {}
+): Promise<TrackingOrderDetail> {
   const prisma = getPrisma();
   const order = await prisma.trackingOrder.findUnique({
     where: { id: orderId },
@@ -540,10 +559,15 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
         include: { trackedBarcode: true },
         orderBy: { barcode: "asc" }
       },
-      _count: { select: { items: true } }
+      _count: { select: { items: true } },
+      reviews: { include: { items: true }, orderBy: { version: "desc" } },
+      corrections: { orderBy: { createdAt: "desc" } }
     }
   });
   if (!order) throw new ApiError("流转单据不存在", 404);
+  if (order.status === "MERGED" && !options.allowMerged) {
+    throw new ApiError("该单据已合并，请查看合并后生成的出库单", 409);
+  }
 
   const trackedBarcodeIds = order.items.map((item) => item.trackedBarcodeId);
   const tracksTerminalReceipts = order.type === "SALES_OUTBOUND" || order.type === "TRANSFER";
@@ -586,11 +610,13 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
       currentOwnerType: mapOwnerType(tracked.currentOwnerType),
       warehouseId: tracked.warehouseId ?? undefined,
       salespersonId: tracked.salespersonId ?? undefined,
-      terminalStoreName: tracked.terminalStoreName ?? undefined
+      terminalStoreName: tracked.terminalStoreName ?? undefined,
+      trackingStatus: tracked.status === "WRITTEN_OFF" ? "written_off" as const : tracked.status === "VOIDED" ? "voided" as const : "active" as const
     };
     if (!tracksTerminalReceipts) {
       return {
         barcode: orderItem.barcode,
+        productCategoryId: tracked.productCategoryId ?? undefined,
         externalGoodsName: tracked.externalGoodsName ?? undefined,
         goodsUnit: tracked.goodsUnit ?? undefined,
         ...currentOwner
@@ -616,6 +642,7 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
 
     return {
       barcode: orderItem.barcode,
+      productCategoryId: matchedReceipt?.productCategoryId ?? tracked.productCategoryId ?? undefined,
       externalGoodsName: matchedReceipt?.externalGoodsName ?? tracked.externalGoodsName ?? undefined,
       goodsUnit: matchedReceipt?.goodsUnit ?? tracked.goodsUnit ?? undefined,
       receiptStatus,
@@ -625,61 +652,81 @@ export async function getTrackingOrderDetail(orderId: string): Promise<TrackingO
     };
   });
 
+  const reviews = order.reviews.map(mapTrackingOrderReview);
+  const latestReview = order.reviewStatus === "REVIEWED" ? reviews[0] : undefined;
   const receiptSummary = tracksTerminalReceipts
-    ? summarizeTrackingOrderReceipts(items)
+    ? summarizeTrackingOrderReceipts(items, latestReview)
     : undefined;
   const goodsReceiptSummaries = tracksTerminalReceipts
-    ? summarizeTrackingOrderGoodsReceipts(items)
+    ? summarizeTrackingOrderGoodsReceipts(items, latestReview)
     : [];
 
   return {
     order: mapTrackingOrder(order),
     receiptSummary,
     goodsReceiptSummaries,
-    items
+    items,
+    reviews,
+    corrections: order.corrections.map(mapTrackingOrderCorrection)
   };
 }
 
-function closesTrackingReceiptCycle(type: "LEGACY_INBOUND" | "SALES_OUTBOUND" | "TRANSFER" | "RETURN" | "QINCE_RECEIPT" | "ORDER_REVERSAL" | "BARCODE_CORRECTION" | "WRITE_OFF") {
+function closesTrackingReceiptCycle(type: "LEGACY_INBOUND" | "SALES_OUTBOUND" | "TRANSFER" | "RETURN" | "QINCE_RECEIPT" | "ORDER_REVERSAL" | "BARCODE_CORRECTION" | "ORDER_CORRECTION" | "TRACKING_VOID" | "WRITE_OFF") {
   return type === "SALES_OUTBOUND" ||
     type === "TRANSFER" ||
     type === "RETURN" ||
     type === "ORDER_REVERSAL" ||
+    type === "TRACKING_VOID" ||
     type === "WRITE_OFF";
 }
 
-export function summarizeTrackingOrderReceipts(items: TrackingOrderBarcodeDetail[]) {
-  const signed = items.filter((item) => item.receiptStatus === "signed").length;
-  const exceptions = items.filter((item) => item.receiptStatus === "exception").length;
-  const pending = items.length - signed - exceptions;
+export function summarizeTrackingOrderReceipts(items: TrackingOrderBarcodeDetail[], review?: TrackingOrderReview) {
+  const activeItems = items.filter((item) => item.trackingStatus === "active");
+  const signed = activeItems.filter((item) => item.receiptStatus === "signed").length;
+  const exceptions = activeItems.filter((item) => item.receiptStatus === "exception").length;
+  const total = review?.actualTotalQuantity ?? activeItems.length;
+  const reviewedCategoryQuantity = review?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
   return {
-    total: items.length,
+    basis: review ? "review" as const : "barcode" as const,
+    ...(review ? { reviewVersion: review.version } : {}),
+    total,
     signed,
-    pending,
+    pending: Math.max(total - signed - exceptions, 0),
     exceptions,
-    signedRate: receiptRate(signed, items.length)
+    signedRate: receiptRate(signed, total),
+    reviewedCategoryQuantity,
+    unallocatedCategoryQuantity: review ? Math.max(total - reviewedCategoryQuantity, 0) : 0,
+    categoryExcessQuantity: review ? Math.max(reviewedCategoryQuantity - total, 0) : 0,
+    excessQuantity: Math.max(signed + exceptions - total, 0)
   };
 }
 
-export function summarizeTrackingOrderGoodsReceipts(items: TrackingOrderBarcodeDetail[]): TrackingOrderGoodsReceiptSummary[] {
+export function summarizeTrackingOrderGoodsReceipts(items: TrackingOrderBarcodeDetail[], review?: TrackingOrderReview): TrackingOrderGoodsReceiptSummary[] {
+  if (review) return summarizeReviewedGoodsReceipts(items, review);
+
   const grouped = new Map<string, TrackingOrderGoodsReceiptSummary>();
   for (const item of items) {
+    if (item.trackingStatus !== "active") continue;
     const goodsName = item.externalGoodsName?.trim() || "待勤策补全";
     const goodsUnit = item.goodsUnit?.trim() || undefined;
     const key = `${goodsName}\u0000${goodsUnit ?? ""}`;
     const summary = grouped.get(key) ?? {
+      productCategoryId: item.productCategoryId,
       goodsName,
       goodsUnit,
+      quantitySource: "barcode" as const,
       total: 0,
       signed: 0,
       pending: 0,
       exceptions: 0,
-      signedRate: 0
+      signedRate: null,
+      needsReviewQuantity: false,
+      excessQuantity: 0
     };
-    summary.total += 1;
+    summary.total = (summary.total ?? 0) + 1;
     if (item.receiptStatus === "signed") summary.signed += 1;
     else if (item.receiptStatus === "exception") summary.exceptions += 1;
-    else summary.pending += 1;
+    else summary.pending = (summary.pending ?? 0) + 1;
     summary.signedRate = receiptRate(summary.signed, summary.total);
     grouped.set(key, summary);
   }
@@ -690,8 +737,76 @@ export function summarizeTrackingOrderGoodsReceipts(items: TrackingOrderBarcodeD
   });
 }
 
+function summarizeReviewedGoodsReceipts(items: TrackingOrderBarcodeDetail[], review: TrackingOrderReview): TrackingOrderGoodsReceiptSummary[] {
+  const observed = new Map<string, {
+    productCategoryId?: string;
+    goodsName: string;
+    goodsUnit?: string;
+    signed: number;
+    exceptions: number;
+  }>();
+  for (const item of items) {
+    if (item.trackingStatus !== "active") continue;
+    const goodsName = item.externalGoodsName?.trim();
+    if (!item.productCategoryId && !goodsName) continue;
+    const key = item.productCategoryId ? `id:${item.productCategoryId}` : `name:${goodsName}\u0000${item.goodsUnit?.trim() ?? ""}`;
+    const current = observed.get(key) ?? {
+      productCategoryId: item.productCategoryId,
+      goodsName: goodsName ?? "待勤策补全",
+      goodsUnit: item.goodsUnit?.trim() || undefined,
+      signed: 0,
+      exceptions: 0
+    };
+    if (item.receiptStatus === "signed") current.signed += 1;
+    else if (item.receiptStatus === "exception") current.exceptions += 1;
+    observed.set(key, current);
+  }
+
+  const summaries: TrackingOrderGoodsReceiptSummary[] = review.items.map((reviewItem) => {
+    const key = `id:${reviewItem.productCategoryId}`;
+    const current = observed.get(key);
+    observed.delete(key);
+    const signed = current?.signed ?? 0;
+    const exceptions = current?.exceptions ?? 0;
+    return {
+      productCategoryId: reviewItem.productCategoryId,
+      goodsName: reviewItem.categoryName,
+      goodsUnit: current?.goodsUnit,
+      quantitySource: "review",
+      total: reviewItem.quantity,
+      signed,
+      pending: Math.max(reviewItem.quantity - signed - exceptions, 0),
+      exceptions,
+      signedRate: receiptRate(signed, reviewItem.quantity),
+      needsReviewQuantity: false,
+      excessQuantity: Math.max(signed + exceptions - reviewItem.quantity, 0)
+    };
+  });
+
+  for (const current of observed.values()) {
+    summaries.push({
+      productCategoryId: current.productCategoryId,
+      goodsName: current.goodsName,
+      goodsUnit: current.goodsUnit,
+      quantitySource: "unreviewed",
+      total: null,
+      signed: current.signed,
+      pending: null,
+      exceptions: current.exceptions,
+      signedRate: null,
+      needsReviewQuantity: true,
+      excessQuantity: 0
+    });
+  }
+
+  return summaries.sort((left, right) => {
+    if (left.quantitySource !== right.quantitySource) return left.quantitySource === "unreviewed" ? 1 : -1;
+    return left.goodsName.localeCompare(right.goodsName, "zh-CN");
+  });
+}
+
 function receiptRate(signed: number, total: number) {
-  return total === 0 ? 0 : Math.round((signed / total) * 1000) / 10;
+  return total === 0 ? null : Math.round((signed / total) * 1000) / 10;
 }
 
 function normalizeBarcodes(values: string[]) {
@@ -748,7 +863,7 @@ export function mapTrackedBarcode(item: {
 export function mapTrackingMovement(movement: {
   id: string;
   barcode: string;
-  type: "LEGACY_INBOUND" | "SALES_OUTBOUND" | "TRANSFER" | "RETURN" | "QINCE_RECEIPT" | "ORDER_REVERSAL" | "BARCODE_CORRECTION" | "WRITE_OFF";
+  type: "LEGACY_INBOUND" | "SALES_OUTBOUND" | "TRANSFER" | "RETURN" | "QINCE_RECEIPT" | "ORDER_REVERSAL" | "BARCODE_CORRECTION" | "ORDER_CORRECTION" | "TRACKING_VOID" | "WRITE_OFF";
   fromOwnerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE" | null;
   toOwnerType: "WAREHOUSE" | "SALESPERSON" | "TERMINAL_STORE";
   fromLabel: string;
@@ -758,6 +873,8 @@ export function mapTrackingMovement(movement: {
   note: string;
   orderId: string | null;
   orderNo: string | null;
+  groupId: string | null;
+  groupNo: string | null;
 }): TrackingMovement {
   const types = {
     LEGACY_INBOUND: "legacy_inbound",
@@ -767,6 +884,8 @@ export function mapTrackingMovement(movement: {
     QINCE_RECEIPT: "qince_receipt",
     ORDER_REVERSAL: "order_reversal",
     BARCODE_CORRECTION: "barcode_correction",
+    ORDER_CORRECTION: "order_correction",
+    TRACKING_VOID: "tracking_void",
     WRITE_OFF: "write_off"
   } as const;
   return {
@@ -781,7 +900,9 @@ export function mapTrackingMovement(movement: {
     occurredAt: formatAppDateTime(movement.occurredAt),
     note: movement.note,
     orderId: movement.orderId ?? undefined,
-    orderNo: movement.orderNo ?? undefined
+    orderNo: movement.orderNo ?? undefined,
+    groupId: movement.groupId ?? undefined,
+    groupNo: movement.groupNo ?? undefined
   };
 }
 
@@ -794,10 +915,13 @@ export function mapTrackingOrder(order: {
   salespersonId: string | null;
   operatorName: string;
   createdAt: Date;
-  status: "ACTIVE" | "VOIDED";
-  items: Array<{ barcode: string }>;
+  status: "ACTIVE" | "MERGED" | "VOIDED";
+  reviewStatus: "PENDING" | "REVIEWED" | "EXEMPT";
+  correctedAfterReview: boolean;
+  items: Array<{ barcode: string; trackedBarcode?: { status: "ACTIVE" | "WRITTEN_OFF" | "VOIDED" } }>;
   _count: { items: number };
   groupMembership?: { group: { id: string; groupNo: string } } | null;
+  activeBarcodeCount?: number;
 }): TrackingOrderSummary {
   return {
     id: order.id,
@@ -810,9 +934,72 @@ export function mapTrackingOrder(order: {
     createdAt: formatAppDateTime(order.createdAt),
     barcodeCount: order._count.items,
     barcodePreview: order.items.map((item) => item.barcode),
-    status: order.status === "VOIDED" ? "voided" : "active",
+    status: order.status === "VOIDED" ? "voided" : order.status === "MERGED" ? "merged" : "active",
+    reviewStatus: mapTrackingReviewStatus(order.reviewStatus),
+    correctedAfterReview: order.correctedAfterReview,
+    activeBarcodeCount: order.activeBarcodeCount ?? order.items.filter((item) => !item.trackedBarcode || item.trackedBarcode.status === "ACTIVE").length,
+    voidedBarcodeCount: order._count.items - (order.activeBarcodeCount ?? order.items.filter((item) => !item.trackedBarcode || item.trackedBarcode.status === "ACTIVE").length),
     groupId: order.groupMembership?.group.id,
     groupNo: order.groupMembership?.group.groupNo
+  };
+}
+
+export function mapTrackingReviewStatus(value: "PENDING" | "REVIEWED" | "EXEMPT") {
+  return value === "REVIEWED" ? "reviewed" as const : value === "EXEMPT" ? "exempt" as const : "pending" as const;
+}
+
+export function mapTrackingOrderReview(review: {
+  id: string;
+  version: number;
+  actualTotalQuantity: number;
+  activeBarcodeCount: number;
+  operatorName: string;
+  createdAt: Date;
+  items: Array<{ productCategoryId: string; categoryName: string; quantity: number }>;
+}): TrackingOrderReview {
+  return {
+    id: review.id,
+    version: review.version,
+    actualTotalQuantity: review.actualTotalQuantity,
+    activeBarcodeCount: review.activeBarcodeCount,
+    operator: review.operatorName,
+    createdAt: formatAppDateTime(review.createdAt),
+    items: review.items.map((item) => ({
+      productCategoryId: item.productCategoryId,
+      categoryName: item.categoryName,
+      quantity: item.quantity
+    }))
+  };
+}
+
+export function mapTrackingOrderCorrection(correction: {
+  id: string;
+  beforeType: "SALES_OUTBOUND" | "TRANSFER" | "RETURN";
+  afterType: "SALES_OUTBOUND" | "TRANSFER" | "RETURN";
+  beforeSourceWarehouseId: string;
+  afterSourceWarehouseId: string;
+  beforeTargetWarehouseId: string | null;
+  afterTargetWarehouseId: string | null;
+  beforeSalespersonId: string | null;
+  afterSalespersonId: string | null;
+  note: string | null;
+  operatorName: string;
+  createdAt: Date;
+}): TrackingOrderCorrection {
+  const type = (value: "SALES_OUTBOUND" | "TRANSFER" | "RETURN") => value === "TRANSFER" ? "transfer" as const : "sales_outbound" as const;
+  return {
+    id: correction.id,
+    beforeType: type(correction.beforeType),
+    afterType: type(correction.afterType),
+    beforeSourceWarehouseId: correction.beforeSourceWarehouseId,
+    afterSourceWarehouseId: correction.afterSourceWarehouseId,
+    beforeTargetWarehouseId: correction.beforeTargetWarehouseId ?? undefined,
+    afterTargetWarehouseId: correction.afterTargetWarehouseId ?? undefined,
+    beforeSalespersonId: correction.beforeSalespersonId ?? undefined,
+    afterSalespersonId: correction.afterSalespersonId ?? undefined,
+    note: correction.note ?? undefined,
+    operator: correction.operatorName,
+    createdAt: formatAppDateTime(correction.createdAt)
   };
 }
 

@@ -6,6 +6,8 @@ import { buildTrackingCreatedAtRange } from "@/lib/services/tracking-date-range"
 import {
   getTrackingOrderDetail,
   mapTrackingOrder,
+  mapTrackingOrderCorrection,
+  mapTrackingOrderReview,
   summarizeTrackingOrderGoodsReceipts,
   summarizeTrackingOrderReceipts
 } from "@/lib/services/tracking-service";
@@ -45,12 +47,14 @@ export async function createTrackingOrderGroup(input: CreateTrackingOrderGroupIn
       });
       if (orders.length !== orderIds.length) throw new ApiError("部分流转单据不存在，请刷新后重试", 404);
 
-      const invalid = orders.find((order) =>
-        (order.type !== "SALES_OUTBOUND" && order.type !== "TRANSFER") || order.status !== "ACTIVE"
-      );
-      if (invalid) throw new ApiError(`单据 ${invalid.orderNo} 不是有效的销售出库或挪仓单`, 409);
       const grouped = orders.find((order) => order.groupMembership);
       if (grouped) throw new ApiError(`单据 ${grouped.orderNo} 已属于合单 ${grouped.groupMembership?.group.groupNo}`, 409);
+      const invalid = orders.find((order) =>
+        (order.type !== "SALES_OUTBOUND" && order.type !== "TRANSFER")
+        || order.status !== "ACTIVE"
+        || order.reviewStatus === "EXEMPT"
+      );
+      if (invalid) throw new ApiError(`单据 ${invalid.orderNo} 不是可合并的有效销售出库或挪仓单；历史免复核单据不能合并`, 409);
 
       const first = orders[0]!;
       if (!first.sourceWarehouseId) throw new ApiError("出库单缺少来源仓库", 409);
@@ -80,7 +84,7 @@ export async function createTrackingOrderGroup(input: CreateTrackingOrderGroupIn
 
       const group = await tx.trackingOrderGroup.create({
         data: {
-          groupNo: makeGroupNo(),
+          groupNo: makeMergedOrderNo(first.type as "SALES_OUTBOUND" | "TRANSFER"),
           type: first.type,
           sourceWarehouseId: first.sourceWarehouseId,
           targetWarehouseId: first.targetWarehouseId,
@@ -101,6 +105,15 @@ export async function createTrackingOrderGroup(input: CreateTrackingOrderGroupIn
             }
           }
         }
+      });
+      const merged = await tx.trackingOrder.updateMany({
+        where: { id: { in: orderIds }, status: "ACTIVE", reviewStatus: { in: ["PENDING", "REVIEWED"] } },
+        data: { status: "MERGED" }
+      });
+      if (merged.count !== orderIds.length) throw new ApiError("部分单据状态已变化，请刷新后重试", 409);
+      await tx.trackingMovement.updateMany({
+        where: { orderId: { in: orderIds } },
+        data: { groupId: group.id, groupNo: group.groupNo }
       });
       return mapTrackingOrderGroup(group);
     });
@@ -153,11 +166,13 @@ export async function listTrackingOrderGroups(input: {
         }
       }
     });
+  const counts = await loadTrackingCounts([], candidates.map((candidate) => candidate.id));
+  const countByGroup = new Map(counts.map((entry) => [`${entry.kind}:${entry.id}`, entry]));
   const groupById = new Map(groups.map((group) => [group.id, group]));
   const items = candidates
     .map((candidate) => groupById.get(candidate.id))
     .filter((group): group is NonNullable<typeof group> => Boolean(group))
-    .map(mapTrackingOrderGroup);
+    .map((group) => mapTrackingOrderGroup({ ...group, activeBarcodeCount: countByGroup.get(`group:${group.id}`)?.active }));
   return { items, total: Number(totals[0]?.total ?? 0), page, pageSize };
 }
 
@@ -214,21 +229,21 @@ export async function listTrackingOrderFeed(input: {
       }
     })
   ]);
+  const memberOrderIds = groups.flatMap((group) => group.members.map((member) => member.order.id));
+  const counts = await loadTrackingCounts([...orderIds, ...memberOrderIds], groupIds);
+  const countByTarget = new Map(counts.map((entry) => [`${entry.kind}:${entry.id}`, entry]));
   const orderById = new Map(orders.map((order) => [order.id, order]));
   const groupById = new Map(groups.map((group) => [group.id, group]));
   const items: TrackingOrderFeedResult["items"] = [];
   for (const candidate of candidates) {
     if (candidate.kind === "order") {
       const order = orderById.get(candidate.id);
-      if (order) items.push({ kind: "order", order: mapTrackingOrder(order) });
+      if (order) items.push({ kind: "order", order: mapTrackingOrder({ ...order, activeBarcodeCount: countByTarget.get(`order:${order.id}`)?.active }) });
       continue;
     }
     const group = groupById.get(candidate.id);
     if (!group) continue;
-    const memberOrders = [...group.members]
-      .sort((left, right) => right.order.createdAt.getTime() - left.order.createdAt.getTime())
-      .map((member) => mapTrackingOrder(member.order));
-    items.push({ kind: "group", group: mapTrackingOrderGroup(group), memberOrders });
+    items.push({ kind: "group", group: mapTrackingOrderGroup({ ...group, activeBarcodeCount: countByTarget.get(`group:${group.id}`)?.active }) });
   }
 
   return {
@@ -253,37 +268,27 @@ export async function getTrackingOrderGroupDetail(groupId: string): Promise<Trac
             }
           }
         }
-      }
+      },
+      reviews: { include: { items: true }, orderBy: { version: "desc" } },
+      corrections: { orderBy: { createdAt: "desc" } }
     }
   });
-  if (!group) throw new ApiError("出库合单不存在", 404);
+  if (!group) throw new ApiError("出库单不存在", 404);
 
-  const details = await Promise.all(group.members.map((member) => getTrackingOrderDetail(member.orderId)));
+  const details = await Promise.all(group.members.map((member) => getTrackingOrderDetail(member.orderId, { allowMerged: true })));
   details.sort((left, right) => left.order.createdAt.localeCompare(right.order.createdAt));
-  const items = details.flatMap((detail) => detail.items.map((item) => ({
-    ...item,
-    orderId: detail.order.id,
-    orderNo: detail.order.orderNo
-  })));
+  const items = details.flatMap((detail) => detail.items);
+  const reviews = group.reviews.map(mapTrackingOrderReview);
+  const latestReview = group.reviewStatus === "REVIEWED" ? reviews[0] : undefined;
 
   return {
-    group: mapTrackingOrderGroup(group),
-    memberOrders: details.map((detail) => detail.order),
-    receiptSummary: summarizeTrackingOrderReceipts(items),
-    goodsReceiptSummaries: summarizeTrackingOrderGoodsReceipts(items),
-    items
+    group: mapTrackingOrderGroup({ ...group, activeBarcodeCount: items.filter((item) => item.trackingStatus === "active").length }),
+    receiptSummary: summarizeTrackingOrderReceipts(items, latestReview),
+    goodsReceiptSummaries: summarizeTrackingOrderGoodsReceipts(items, latestReview),
+    items,
+    reviews,
+    corrections: group.corrections.map(mapTrackingOrderCorrection)
   };
-}
-
-export async function dissolveTrackingOrderGroup(groupId: string) {
-  const prisma = getPrisma();
-  const group = await prisma.trackingOrderGroup.findUnique({
-    where: { id: groupId },
-    include: { _count: { select: { members: true } } }
-  });
-  if (!group) throw new ApiError("出库合单不存在", 404);
-  await prisma.trackingOrderGroup.delete({ where: { id: groupId } });
-  return { id: group.id, groupNo: group.groupNo, orderCount: group._count.members };
 }
 
 type GroupWithOrders = {
@@ -295,6 +300,11 @@ type GroupWithOrders = {
   salespersonId: string | null;
   operatorName: string;
   createdAt: Date;
+  status: "ACTIVE" | "VOIDED";
+  reviewStatus: "PENDING" | "REVIEWED" | "EXEMPT";
+  correctedAfterReview: boolean;
+  correctedAt: Date | null;
+  activeBarcodeCount?: number;
   members: Array<{
     order: TrackingOrderWithPreview;
   }>;
@@ -309,7 +319,9 @@ type TrackingOrderWithPreview = {
   salespersonId: string | null;
   operatorName: string;
   createdAt: Date;
-  status: "ACTIVE" | "VOIDED";
+  status: "ACTIVE" | "MERGED" | "VOIDED";
+  reviewStatus: "PENDING" | "REVIEWED" | "EXEMPT";
+  correctedAfterReview: boolean;
   items: Array<{ barcode: string }>;
   _count: { items: number };
 };
@@ -343,14 +355,18 @@ function mapTrackingOrderGroup(group: GroupWithOrders): TrackingOrderGroupSummar
     salespersonId: group.salespersonId ?? undefined,
     operator: group.operatorName,
     createdAt: formatAppDateTime(latestOrderAt ?? group.createdAt),
-    orderCount: orderedMembers.length,
     barcodeCount: orderedMembers.reduce((total, member) => total + member.order._count.items, 0),
-    orderPreview: orderedMembers.slice(0, 4).map((member) => member.order.orderNo)
+    barcodePreview: orderedMembers.flatMap((member) => member.order.items.map((item) => item.barcode)).slice(0, 4),
+    status: group.status === "VOIDED" ? "voided" : "active",
+    reviewStatus: group.reviewStatus === "REVIEWED" ? "reviewed" : group.reviewStatus === "EXEMPT" ? "exempt" : "pending",
+    correctedAfterReview: group.correctedAfterReview,
+    activeBarcodeCount: group.activeBarcodeCount ?? orderedMembers.reduce((total, member) => total + member.order._count.items, 0),
+    voidedBarcodeCount: orderedMembers.reduce((total, member) => total + member.order._count.items, 0) - (group.activeBarcodeCount ?? orderedMembers.reduce((total, member) => total + member.order._count.items, 0))
   };
 }
 
-function makeGroupNo() {
-  return `HD${Date.now()}${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
+function makeMergedOrderNo(type: "SALES_OUTBOUND" | "TRANSFER") {
+  return `${type === "TRANSFER" ? "ZC" : "ZX"}${Date.now()}${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
 }
 
 function normalizePage(value?: number) {
@@ -361,6 +377,32 @@ function normalizePageSize(value?: number) {
   return Number.isFinite(value) && value && value > 0 ? Math.min(50, Math.floor(value)) : 20;
 }
 
+async function loadTrackingCounts(orderIds: string[], groupIds: string[]) {
+  const prisma = getPrisma();
+  const orderCounts = orderIds.length > 0 ? await prisma.$queryRaw<TrackingCountRow[]>(Prisma.sql`
+    SELECT 'order'::text AS kind, item."orderId" AS id,
+      COUNT(*)::integer AS total,
+      COUNT(*) FILTER (WHERE barcode.status = 'ACTIVE')::integer AS active
+    FROM "tracking_order_barcodes" AS item
+    JOIN "tracked_barcodes" AS barcode ON barcode.id = item."trackedBarcodeId"
+    WHERE item."orderId" IN (${Prisma.join(orderIds)})
+    GROUP BY item."orderId"
+  `) : [];
+  const groupCounts = groupIds.length > 0 ? await prisma.$queryRaw<TrackingCountRow[]>(Prisma.sql`
+    SELECT 'group'::text AS kind, member."groupId" AS id,
+      COUNT(*)::integer AS total,
+      COUNT(*) FILTER (WHERE barcode.status = 'ACTIVE')::integer AS active
+    FROM "tracking_order_group_members" AS member
+    JOIN "tracking_order_barcodes" AS item ON item."orderId" = member."orderId"
+    JOIN "tracked_barcodes" AS barcode ON barcode.id = item."trackedBarcodeId"
+    WHERE member."groupId" IN (${Prisma.join(groupIds)})
+    GROUP BY member."groupId"
+  `) : [];
+  return [...orderCounts, ...groupCounts];
+}
+
+type TrackingCountRow = { id: string; kind: "order" | "group"; total: number; active: number };
+
 function buildTrackingOrderFeedUnion(input: { type?: string; startDate?: string; endDate?: string }) {
   const createdAt = buildTrackingCreatedAtRange(input);
   return Prisma.sql`
@@ -368,6 +410,7 @@ function buildTrackingOrderFeedUnion(input: { type?: string; startDate?: string;
     FROM "tracking_orders" AS order_row
     LEFT JOIN "tracking_order_group_members" AS membership ON membership."orderId" = order_row.id
     WHERE membership.id IS NULL
+      AND order_row."status" = 'ACTIVE'
       ${trackingOrderTypeClause(input.type, "order")}
       ${trackingDateClause(createdAt, Prisma.sql`order_row."createdAt"`)}
     UNION ALL
@@ -375,7 +418,7 @@ function buildTrackingOrderFeedUnion(input: { type?: string; startDate?: string;
     FROM "tracking_order_groups" AS group_row
     JOIN "tracking_order_group_members" AS membership ON membership."groupId" = group_row.id
     JOIN "tracking_orders" AS member_order ON member_order.id = membership."orderId"
-    WHERE 1=1
+    WHERE group_row."status" = 'ACTIVE'
       ${trackingOrderTypeClause(input.type, "group")}
     GROUP BY group_row.id
     HAVING 1=1
@@ -390,7 +433,7 @@ function buildTrackingGroupEntries(input: { type?: string; startDate?: string; e
     FROM "tracking_order_groups" AS group_row
     JOIN "tracking_order_group_members" AS membership ON membership."groupId" = group_row.id
     JOIN "tracking_orders" AS member_order ON member_order.id = membership."orderId"
-    WHERE 1=1
+    WHERE group_row."status" = 'ACTIVE'
       ${trackingOrderTypeClause(input.type, "group")}
     GROUP BY group_row.id
     HAVING 1=1

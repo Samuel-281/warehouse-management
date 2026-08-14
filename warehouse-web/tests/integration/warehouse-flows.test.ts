@@ -17,6 +17,20 @@ import { submitOutbound } from "@/lib/services/outbound-service";
 import { submitSalesReturn } from "@/lib/services/sales-return-service";
 import { adjustStockManually } from "@/lib/services/stock-adjustment-service";
 import {
+  createProductCategory,
+  listProductCategories,
+  setProductCategoryStatus
+} from "@/lib/services/product-category-service";
+import {
+  correctTrackingRoute,
+  deleteTrackedBarcodeRecords,
+  voidTrackingBusiness
+} from "@/lib/services/tracking-governance-service";
+import {
+  listTrackingReviewTargets,
+  saveTrackingReview
+} from "@/lib/services/tracking-review-service";
+import {
   getTrackedBarcodeDetail,
   getTrackingOrderDetail,
   getTrackingSummary,
@@ -27,7 +41,6 @@ import {
 } from "@/lib/services/tracking-service";
 import {
   createTrackingOrderGroup,
-  dissolveTrackingOrderGroup,
   getTrackingOrderGroupDetail,
   listTrackingOrderFeed,
   listTrackingOrderGroups
@@ -50,9 +63,13 @@ import { downloadQinceTerminalReceipts } from "@/lib/services/qince-terminal-rec
 import { changeOwnPassword, createUser, resetUserPassword, updateUser } from "@/lib/services/user-service";
 import { verifyPassword } from "@/lib/password";
 import type { CurrentUser } from "@/lib/types";
+import { PATCH as patchProductCategory } from "@/app/api/product-categories/[id]/route";
+import { POST as postProductCategory } from "@/app/api/product-categories/route";
 import { GET as getConsistencyAudit } from "@/app/api/system/consistency-audit/route";
 import { GET as getHealth } from "@/app/api/health/route";
 import { GET as getBackupStatus } from "@/app/api/system/backup-status/route";
+import { POST as postTrackingOrderCorrection } from "@/app/api/tracking/orders/[id]/correct/route";
+import { POST as postTrackingReview } from "@/app/api/tracking/reviews/[targetType]/[id]/route";
 
 const prisma = getPrisma();
 const operatorName = "集成测试管理员";
@@ -68,7 +85,7 @@ let context: Context;
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE "terminal_receipt_imports", "users", "roles", "goods", "warehouses", "salespeople", "terminal_stores"
+    TRUNCATE TABLE "product_categories", "terminal_receipt_imports", "users", "roles", "goods", "warehouses", "salespeople", "terminal_stores"
     RESTART IDENTITY CASCADE
   `);
   context = await seedContext();
@@ -368,11 +385,16 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
 
   const detail = await getTrackingOrderDetail(outbound.orderId);
   assert.deepEqual(detail.receiptSummary, {
+    basis: "barcode",
     total: 4,
     signed: 2,
     pending: 1,
     exceptions: 1,
-    signedRate: 50
+    signedRate: 50,
+    reviewedCategoryQuantity: 0,
+    unallocatedCategoryQuantity: 0,
+    categoryExcessQuantity: 0,
+    excessQuantity: 0
   });
   assert.deepEqual(
     detail.goodsReceiptSummaries.map((item) => ({
@@ -389,6 +411,109 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
       { goodsName: "待勤策补全", total: 1, signed: 0, pending: 1, exceptions: 0, signedRate: 0 }
     ]
   );
+
+  const reviewedCategories = await prisma.productCategory.findMany({
+    where: { name: { in: ["商品甲_1*24", "商品乙_1*12"] } }
+  });
+  const categoryA = reviewedCategories.find((item) => item.name === "商品甲_1*24");
+  const categoryB = reviewedCategories.find((item) => item.name === "商品乙_1*12");
+  assert.ok(categoryA);
+  assert.ok(categoryB);
+  const unsignedCategory = await createProductCategory("商品未签收_1*6");
+  await saveTrackingReview({
+    targetType: "order",
+    targetId: outbound.orderId,
+    actualTotalQuantity: 8,
+    items: [
+      { productCategoryId: categoryA.id, quantity: 4 },
+      { productCategoryId: unsignedCategory.id, quantity: 2 }
+    ],
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  });
+
+  const reviewedDetail = await getTrackingOrderDetail(outbound.orderId);
+  assert.deepEqual(reviewedDetail.receiptSummary, {
+    basis: "review",
+    reviewVersion: 1,
+    total: 8,
+    signed: 2,
+    pending: 5,
+    exceptions: 1,
+    signedRate: 25,
+    reviewedCategoryQuantity: 6,
+    unallocatedCategoryQuantity: 2,
+    categoryExcessQuantity: 0,
+    excessQuantity: 0
+  });
+  const reviewedA = reviewedDetail.goodsReceiptSummaries.find((item) => item.productCategoryId === categoryA.id);
+  const reviewedUnsigned = reviewedDetail.goodsReceiptSummaries.find((item) => item.productCategoryId === unsignedCategory.id);
+  const unreviewedB = reviewedDetail.goodsReceiptSummaries.find((item) => item.productCategoryId === categoryB.id);
+  assert.deepEqual(reviewedA, {
+    productCategoryId: categoryA.id,
+    goodsName: "商品甲_1*24",
+    goodsUnit: "件",
+    quantitySource: "review",
+    total: 4,
+    signed: 2,
+    pending: 2,
+    exceptions: 0,
+    signedRate: 50,
+    needsReviewQuantity: false,
+    excessQuantity: 0
+  });
+  assert.deepEqual(reviewedUnsigned, {
+    productCategoryId: unsignedCategory.id,
+    goodsName: "商品未签收_1*6",
+    goodsUnit: undefined,
+    quantitySource: "review",
+    total: 2,
+    signed: 0,
+    pending: 2,
+    exceptions: 0,
+    signedRate: 0,
+    needsReviewQuantity: false,
+    excessQuantity: 0
+  });
+  assert.equal(unreviewedB?.quantitySource, "unreviewed");
+  assert.equal(unreviewedB?.total, null);
+  assert.equal(unreviewedB?.pending, null);
+  assert.equal(unreviewedB?.signedRate, null);
+  assert.equal(unreviewedB?.exceptions, 1);
+  assert.equal(unreviewedB?.needsReviewQuantity, true);
+
+  await saveTrackingReview({
+    targetType: "order",
+    targetId: outbound.orderId,
+    actualTotalQuantity: 1,
+    items: [
+      { productCategoryId: categoryA.id, quantity: 1 },
+      { productCategoryId: unsignedCategory.id, quantity: 0 }
+    ],
+    operatorName,
+    operatorUserId: currentUser.id,
+    isSuperAdmin: true
+  });
+  const revisedDetail = await getTrackingOrderDetail(outbound.orderId);
+  assert.deepEqual(revisedDetail.receiptSummary, {
+    basis: "review",
+    reviewVersion: 2,
+    total: 1,
+    signed: 2,
+    pending: 0,
+    exceptions: 1,
+    signedRate: 200,
+    reviewedCategoryQuantity: 1,
+    unallocatedCategoryQuantity: 0,
+    categoryExcessQuantity: 0,
+    excessQuantity: 2
+  });
+  const revisedA = revisedDetail.goodsReceiptSummaries.find((item) => item.productCategoryId === categoryA.id);
+  const revisedUnsigned = revisedDetail.goodsReceiptSummaries.find((item) => item.productCategoryId === unsignedCategory.id);
+  assert.equal(revisedA?.signedRate, 200);
+  assert.equal(revisedA?.excessQuantity, 1);
+  assert.equal(revisedUnsigned?.total, 0);
+  assert.equal(revisedUnsigned?.signedRate, null, "复核数量为零时不能除零");
 
   await new Promise((resolve) => setTimeout(resolve, 10));
   await submitTrackingReturn({
@@ -410,7 +535,7 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
   const historicalDetail = await getTrackingOrderDetail(outbound.orderId);
   const currentDetail = await getTrackingOrderDetail(secondOutbound.orderId);
   assert.equal(historicalDetail.items.find((item) => item.barcode === barcodes[0])?.receiptStatus, "signed");
-  assert.equal(historicalDetail.receiptSummary?.signedRate, 50, "后续回库和再次出库不能改写旧单签收率");
+  assert.equal(historicalDetail.receiptSummary?.signedRate, 200, "后续回库和再次出库不能改写旧单的复核口径签收率");
   assert.equal(currentDetail.items[0]?.receiptStatus, "pending");
   assert.equal(currentDetail.receiptSummary?.signedRate, 0);
 });
@@ -455,11 +580,16 @@ test("挪仓后允许目标仓库直接配送签收，并可重算旧流转异�
 
   const detail = await getTrackingOrderDetail(transfer.orderId);
   assert.deepEqual(detail.receiptSummary, {
+    basis: "barcode",
     total: 3,
     signed: 2,
     pending: 1,
     exceptions: 0,
-    signedRate: 66.7
+    signedRate: 66.7,
+    reviewedCategoryQuantity: 0,
+    unallocatedCategoryQuantity: 0,
+    categoryExcessQuantity: 0,
+    excessQuantity: 0
   });
   assert.deepEqual(
     detail.goodsReceiptSummaries.map((item) => ({ goodsName: item.goodsName, total: item.total, signedRate: item.signedRate })),
@@ -469,6 +599,39 @@ test("挪仓后允许目标仓库直接配送签收，并可重算旧流转异�
       { goodsName: "待勤策补全", total: 1, signedRate: 0 }
     ]
   );
+
+  const transferCategories = await prisma.productCategory.findMany({
+    where: { name: { in: ["直送商品甲_1*24", "直送商品乙_1*12"] } }
+  });
+  const transferCategoryA = transferCategories.find((item) => item.name === "直送商品甲_1*24");
+  const transferCategoryB = transferCategories.find((item) => item.name === "直送商品乙_1*12");
+  assert.ok(transferCategoryA);
+  assert.ok(transferCategoryB);
+  await saveTrackingReview({
+    targetType: "order",
+    targetId: transfer.orderId,
+    actualTotalQuantity: 5,
+    items: [
+      { productCategoryId: transferCategoryA.id, quantity: 3 },
+      { productCategoryId: transferCategoryB.id, quantity: 1 }
+    ],
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  });
+  const reviewedTransfer = await getTrackingOrderDetail(transfer.orderId);
+  assert.deepEqual(reviewedTransfer.receiptSummary, {
+    basis: "review",
+    reviewVersion: 1,
+    total: 5,
+    signed: 2,
+    pending: 3,
+    exceptions: 0,
+    signedRate: 40,
+    reviewedCategoryQuantity: 4,
+    unallocatedCategoryQuantity: 1,
+    categoryExcessQuantity: 0,
+    excessQuantity: 0
+  });
 
   const historicalReceipt = await prisma.terminalReceiptRecord.findFirstOrThrow({
     where: { barcode: barcodes[1], importId: imported.id }
@@ -541,7 +704,7 @@ test("挪仓后允许目标仓库直接配送签收，并可重算旧流转异�
   assert.equal(repairedSyncRun.conflictRows, 0);
 });
 
-test("同一路线的分批销售出库可合单汇总且解除后保留原始履历", async () => {
+test("同一路线的分批销售出库合并后只保留一张业务单据", async () => {
   const batches = [
     ["GROUP-A-001", "GROUP-A-002"],
     ["GROUP-B-001", "GROUP-B-002"],
@@ -565,17 +728,18 @@ test("同一路线的分批销售出库可合单汇总且解除后保留原始�
     operatorName,
     operatorUserId: currentUser.id
   });
-  assert.equal(group.orderCount, 3);
   assert.equal(group.barcodeCount, 6);
-  assert.match(group.groupNo, /^HD/);
+  assert.match(group.groupNo, /^ZX/);
   assert.equal(await prisma.trackingMovement.count(), movementCountBefore, "创建合单不能新增条码流转");
+  assert.equal(await prisma.trackingMovement.count({ where: { groupId: group.id, groupNo: group.groupNo } }), 6, "原流转应统一显示合并后的新单号");
 
   const listedGroups = await listTrackingOrderGroups({ page: 1, pageSize: 20 });
   assert.equal(listedGroups.total, 1);
   assert.equal(listedGroups.items[0]?.groupNo, group.groupNo);
 
   const listedOrders = await listTrackingOrders({ type: "sales_outbound", page: 1, pageSize: 20 });
-  assert.equal(listedOrders.items.filter((order) => order.groupNo === group.groupNo).length, 3);
+  assert.equal(listedOrders.items.length, 0, "已合并原单应退出普通单据列表");
+  await assert.rejects(getTrackingOrderDetail(orders[0]!.orderId), /已合并，请查看合并后生成的出库单/);
 
   await assert.rejects(
     createTrackingOrderGroup({
@@ -605,14 +769,19 @@ test("同一路线的分批销售出库可合单汇总且解除后保留原始�
   });
 
   const detail = await getTrackingOrderGroupDetail(group.id);
-  assert.equal(detail.memberOrders.length, 3);
   assert.equal(detail.items.length, 6);
+  assert.equal("memberOrders" in detail, false, "新出库单详情不得返回原单列表");
   assert.deepEqual(detail.receiptSummary, {
+    basis: "barcode",
     total: 6,
     signed: 2,
     pending: 3,
     exceptions: 1,
-    signedRate: 33.3
+    signedRate: 33.3,
+    reviewedCategoryQuantity: 0,
+    unallocatedCategoryQuantity: 0,
+    categoryExcessQuantity: 0,
+    excessQuantity: 0
   });
   assert.deepEqual(
     detail.goodsReceiptSummaries.map((item) => ({
@@ -629,13 +798,50 @@ test("同一路线的分批销售出库可合单汇总且解除后保留原始�
     ]
   );
 
-  const movementCountBeforeDissolve = await prisma.trackingMovement.count();
-  await dissolveTrackingOrderGroup(group.id);
-  assert.equal(await prisma.trackingOrderGroup.count(), 0);
-  assert.equal(await prisma.trackingOrder.count({ where: { id: { in: orders.map((order) => order.orderId) } } }), 3);
-  assert.equal(await prisma.trackingMovement.count(), movementCountBeforeDissolve, "解除合单不能创建或删除条码流转");
-  const ungroupedOrders = await listTrackingOrders({ type: "sales_outbound", page: 1, pageSize: 20 });
-  assert.equal(ungroupedOrders.items.some((order) => order.groupId), false);
+  const groupCategories = await prisma.productCategory.findMany({
+    where: { name: { in: ["合单商品甲_1*24", "合单商品乙_1*12"] } }
+  });
+  const groupCategoryA = groupCategories.find((item) => item.name === "合单商品甲_1*24");
+  const groupCategoryB = groupCategories.find((item) => item.name === "合单商品乙_1*12");
+  assert.ok(groupCategoryA);
+  assert.ok(groupCategoryB);
+  await saveTrackingReview({
+    targetType: "group",
+    targetId: group.id,
+    actualTotalQuantity: 8,
+    items: [
+      { productCategoryId: groupCategoryA.id, quantity: 4 },
+      { productCategoryId: groupCategoryB.id, quantity: 2 }
+    ],
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  });
+  const reviewedGroup = await getTrackingOrderGroupDetail(group.id);
+  assert.deepEqual(reviewedGroup.receiptSummary, {
+    basis: "review",
+    reviewVersion: 1,
+    total: 8,
+    signed: 2,
+    pending: 5,
+    exceptions: 1,
+    signedRate: 25,
+    reviewedCategoryQuantity: 6,
+    unallocatedCategoryQuantity: 2,
+    categoryExcessQuantity: 0,
+    excessQuantity: 0
+  });
+  const reviewedGroupA = reviewedGroup.goodsReceiptSummaries.find((item) => item.productCategoryId === groupCategoryA.id);
+  const reviewedGroupB = reviewedGroup.goodsReceiptSummaries.find((item) => item.productCategoryId === groupCategoryB.id);
+  assert.equal(reviewedGroupA?.total, 4);
+  assert.equal(reviewedGroupA?.signedRate, 50);
+  assert.equal(reviewedGroupB?.total, 2);
+  assert.equal(reviewedGroupB?.signedRate, 0);
+  assert.equal(reviewedGroupB?.exceptions, 1);
+
+  const feed = await listTrackingOrderFeed({ type: "sales_outbound", page: 1, pageSize: 20 });
+  assert.equal(feed.total, 1);
+  assert.equal(feed.items[0]?.kind, "group");
+  assert.equal(feed.items[0] && "memberOrders" in feed.items[0], false, "单据列表不得返回可展开的原单数据");
 });
 
 test("同一路线的分批挪仓可合单，且不同目标仓库不能混合", async () => {
@@ -658,6 +864,7 @@ test("同一路线的分批挪仓可合单，且不同目标仓库不能混合",
     operatorUserId: currentUser.id
   });
   assert.equal(group.type, "transfer");
+  assert.match(group.groupNo, /^ZC/);
   assert.equal(group.sourceWarehouseId, context.sourceWarehouseId);
   assert.equal(group.targetWarehouseId, context.targetWarehouseId);
   assert.equal(group.salespersonId, undefined);
@@ -717,7 +924,7 @@ test("同一路线的分批挪仓可合单，且不同目标仓库不能混合",
   );
 });
 
-test("普通单据与合单使用同一根级分页且合单成员只在展开数据中出现", async () => {
+test("普通单据与合并出库单统一分页且原单不返回", async () => {
   const orders = [];
   for (const barcode of ["FEED-GROUP-001", "FEED-GROUP-002", "FEED-ORDER-003"]) {
     orders.push(await submitTrackingOutbound({
@@ -751,10 +958,7 @@ test("普通单据与合单使用同一根级分页且合单成员只在展开�
   assert.ok(groupItem && groupItem.kind === "group");
   assert.equal(groupItem.group.id, group.id);
   assert.equal(groupItem.group.createdAt, "2026-08-02 09:00");
-  assert.deepEqual(
-    new Set(groupItem.memberOrders.map((order) => order.id)),
-    new Set([orders[0]!.orderId, orders[1]!.orderId])
-  );
+  assert.equal("memberOrders" in groupItem, false);
   assert.ok(orderItem && orderItem.kind === "order");
   assert.equal(orderItem.order.id, orders[2]!.orderId);
   assert.equal((await listTrackingOrderFeed({ type: "return" })).total, 0);
@@ -762,10 +966,359 @@ test("普通单据与合单使用同一根级分页且合单成员只在展开�
   assert.equal(datedFeed.total, 1, "合单日期必须使用最晚成员原单时间，而不是合单创建时间");
   assert.equal(datedFeed.items[0]?.kind, "group");
 
-  await dissolveTrackingOrderGroup(group.id);
-  const dissolvedFeed = await listTrackingOrderFeed({ type: "sales_outbound", page: 1, pageSize: 20 });
-  assert.equal(dissolvedFeed.total, 3);
-  assert.equal(dissolvedFeed.items.every((item) => item.kind === "order"), true);
+  await deleteTrackedBarcodeRecords({ barcode: "FEED-GROUP-001", operatorName });
+  assert.equal(await prisma.trackingOrderGroup.count({ where: { id: group.id } }), 1, "删除空分批单后不得把新出库单自动拆回原单");
+  assert.equal(await prisma.trackingOrderGroupMember.count({ where: { groupId: group.id } }), 1);
+  const afterDeleteFeed = await listTrackingOrderFeed({ type: "sales_outbound", page: 1, pageSize: 20 });
+  assert.equal(afterDeleteFeed.items.some((item) => item.kind === "group" && item.group.id === group.id), true);
+});
+
+test("商品品类严格规范化，只有成功匹配的勤策记录会自动补建且不会恢复停用品类", async () => {
+  const category = await createProductCategory("  125ml   劲酒  ");
+  assert.equal(category.name, "125ml 劲酒");
+  await assert.rejects(createProductCategory("125ml 劲酒"), /已经存在/);
+  await setProductCategoryStatus(category.id, "disabled");
+
+  await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["CATEGORY-MATCHED-001"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const imported = await importTerminalReceipts({
+    fileName: "品类自动维护.xlsx",
+    buffer: await makeTerminalReceiptWorkbook([
+      { barcode: "CATEGORY-MATCHED-001", scannedAt: new Date(Date.now() + 20), storeName: "品类测试店", goodsName: "125ml   劲酒" },
+      { barcode: "CATEGORY-UNMATCHED-001", scannedAt: new Date(Date.now() + 20), storeName: "外部未知店", goodsName: "不应自动创建的商品" }
+    ]),
+    operatorName
+  });
+  assert.equal(imported.matchedRows, 1);
+  assert.equal(imported.unmatchedRows, 1);
+
+  const categories = await listProductCategories();
+  assert.equal(categories.length, 1, "未匹配勤策记录不能创建商品品类");
+  assert.equal(categories[0]?.status, "disabled", "勤策再次返回时不能自动恢复停用品类");
+  const matchedReceipt = await prisma.terminalReceiptRecord.findFirstOrThrow({ where: { barcode: "CATEGORY-MATCHED-001" } });
+  const unmatchedReceipt = await prisma.terminalReceiptRecord.findFirstOrThrow({ where: { barcode: "CATEGORY-UNMATCHED-001" } });
+  assert.equal(matchedReceipt.productCategoryId, category.id);
+  assert.equal(unmatchedReceipt.productCategoryId, null);
+  assert.equal((await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "CATEGORY-MATCHED-001" } })).productCategoryId, category.id);
+});
+
+test("出库复核接受零和数量差异，首次可由仓库管理员完成但修订仅限超级管理员", async () => {
+  const category = await createProductCategory("复核商品甲");
+  const order = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["REVIEW-001", "REVIEW-002"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const pending = await listTrackingReviewTargets({ status: "pending" });
+  assert.equal(pending.pendingCount, 1);
+  assert.equal(pending.items[0]?.activeBarcodeCount, 2);
+
+  const first = await saveTrackingReview({
+    targetType: "order",
+    targetId: order.orderId,
+    actualTotalQuantity: 0,
+    items: [{ productCategoryId: category.id, quantity: 5 }],
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  });
+  assert.equal(first.version, 1);
+  assert.equal(first.actualTotalQuantity, 0);
+  assert.equal(first.activeBarcodeCount, 2);
+  assert.equal(first.items[0]?.quantity, 5);
+  await assert.rejects(saveTrackingReview({
+    targetType: "order",
+    targetId: order.orderId,
+    actualTotalQuantity: 2,
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  }), /只有超级管理员可以修订/);
+
+  const revision = await saveTrackingReview({
+    targetType: "order",
+    targetId: order.orderId,
+    actualTotalQuantity: 3,
+    operatorName,
+    operatorUserId: currentUser.id,
+    isSuperAdmin: true
+  });
+  assert.equal(revision.version, 2);
+  const detail = await getTrackingOrderDetail(order.orderId);
+  assert.deepEqual(detail.reviews.map((review) => review.version), [2, 1]);
+  assert.equal(detail.order.reviewStatus, "reviewed");
+  assert.equal((await listTrackingReviewTargets({ status: "pending" })).pendingCount, 0);
+});
+
+test("已复核与待复核单可合并成新出库单，新单重新复核且回滚删除会清除全部业务记录", async () => {
+  const orders = [];
+  for (const barcode of ["FORMAL-GROUP-001", "FORMAL-GROUP-002"]) {
+    orders.push(await submitTrackingOutbound({
+      sourceWarehouseId: context.sourceWarehouseId,
+      destinationType: "salesperson",
+      salespersonId: context.salespersonId,
+      barcodes: [barcode],
+      operatorName,
+      operatorUserId: currentUser.id
+    }));
+  }
+  await saveTrackingReview({
+    targetType: "order",
+    targetId: orders[0]!.orderId,
+    actualTotalQuantity: 1,
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  });
+  const group = await createTrackingOrderGroup({
+    orderIds: orders.map((order) => order.orderId),
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  assert.equal(group.reviewStatus, "pending", "包含已复核单据的新出库单仍须重新复核");
+  assert.equal(await prisma.trackingOrderReview.count({ where: { orderId: orders[0]!.orderId } }), 1, "原复核版本应在后台继续保留");
+  assert.equal(await prisma.trackingOrder.count({ where: { id: { in: orders.map((order) => order.orderId) }, status: "MERGED" } }), 2);
+  await saveTrackingReview({
+    targetType: "group",
+    targetId: group.id,
+    actualTotalQuantity: 2,
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  });
+  await correctTrackingRoute({
+    targetType: "group",
+    targetId: group.id,
+    type: "transfer",
+    sourceWarehouseId: context.sourceWarehouseId,
+    targetWarehouseId: context.targetWarehouseId,
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const corrected = await getTrackingOrderGroupDetail(group.id);
+  assert.equal(corrected.group.type, "transfer");
+  assert.equal(corrected.group.correctedAfterReview, true);
+  assert.equal(corrected.corrections.length, 1);
+  assert.equal(corrected.reviews.length, 1);
+  assert.equal(corrected.items.every((item) => item.currentOwnerType === "warehouse" && item.warehouseId === context.targetWarehouseId), true);
+
+  await voidTrackingBusiness({ targetType: "group", targetId: group.id, operatorName, operatorUserId: currentUser.id });
+  await assert.rejects(getTrackingOrderGroupDetail(group.id), /不存在/);
+  assert.equal(await prisma.trackingOrderGroup.count({ where: { id: group.id } }), 0);
+  assert.equal(await prisma.trackingOrder.count({ where: { id: { in: orders.map((order) => order.orderId) } } }), 0);
+  assert.equal(await prisma.trackedBarcode.count({ where: { barcode: { in: ["FORMAL-GROUP-001", "FORMAL-GROUP-002"] } } }), 0);
+});
+
+test("管理员可彻底删除错误条码并重复使用，勤策记录受保护，业务单回滚后物理删除", async () => {
+  await prisma.trackedBarcode.create({
+    data: {
+      barcode: "UNREFERENCED-DELETE-001",
+      currentOwnerType: "WAREHOUSE",
+      warehouseId: context.sourceWarehouseId,
+      lastMovedAt: new Date()
+    }
+  });
+  const deleted = await deleteTrackedBarcodeRecords({ barcode: "UNREFERENCED-DELETE-001", operatorName });
+  assert.equal(deleted.action, "deleted");
+  assert.equal(await prisma.trackedBarcode.count({ where: { barcode: "UNREFERENCED-DELETE-001" } }), 0);
+
+  await prisma.trackedBarcode.create({
+    data: {
+      barcode: "EXISTING-ROUTE-001",
+      currentOwnerType: "WAREHOUSE",
+      warehouseId: context.sourceWarehouseId,
+      lastMovedAt: new Date()
+    }
+  });
+  const routeOrder = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["EXISTING-ROUTE-001"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await correctTrackingRoute({
+    targetType: "order",
+    targetId: routeOrder.orderId,
+    type: "transfer",
+    sourceWarehouseId: context.targetWarehouseId,
+    targetWarehouseId: context.sourceWarehouseId,
+    note: "出库方式填错",
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  assert.equal((await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "EXISTING-ROUTE-001" } })).warehouseId, context.sourceWarehouseId);
+  await voidTrackingBusiness({ targetType: "order", targetId: routeOrder.orderId, operatorName, operatorUserId: currentUser.id });
+  const restored = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "EXISTING-ROUTE-001" } });
+  assert.equal(restored.status, "ACTIVE");
+  assert.equal(restored.currentOwnerType, "WAREHOUSE");
+  assert.equal(restored.warehouseId, context.targetWarehouseId, "纠正来源仓库后作废应恢复到纠正后的来源仓库");
+  await assert.rejects(getTrackingOrderDetail(routeOrder.orderId), /不存在/);
+
+  const trackedOrder = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["TRACKING-VOID-001"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const removed = await deleteTrackedBarcodeRecords({ barcode: "TRACKING-VOID-001", operatorName });
+  assert.equal(removed.action, "deleted");
+  assert.equal(await prisma.trackedBarcode.count({ where: { barcode: "TRACKING-VOID-001" } }), 0);
+  assert.equal(await prisma.trackingOrder.count({ where: { id: trackedOrder.orderId } }), 0, "删除唯一条码后空单应一并清理");
+  const reusedOrder = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["TRACKING-VOID-001"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  assert.ok(reusedOrder.orderId);
+  assert.equal((await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "TRACKING-VOID-001" } })).status, "ACTIVE");
+
+  await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["QINCE-PROTECTED-001"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await importTerminalReceipts({
+    fileName: "删除保护.xlsx",
+    buffer: await makeTerminalReceiptWorkbook([{ barcode: "QINCE-PROTECTED-001", scannedAt: new Date(Date.now() + 60_000), storeName: "有效签收店铺" }]),
+    operatorName
+  });
+  await assert.rejects(
+    deleteTrackedBarcodeRecords({ barcode: "QINCE-PROTECTED-001", operatorName }),
+    /已有勤策签收记录/
+  );
+  assert.equal(await prisma.trackedBarcode.count({ where: { barcode: "QINCE-PROTECTED-001" } }), 1);
+  assert.equal(await prisma.terminalReceiptRecord.count({ where: { barcode: "QINCE-PROTECTED-001" } }), 1);
+
+  const laterOrder = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["LATER-MOVEMENT-001"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await submitTrackingReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    barcodes: ["LATER-MOVEMENT-001"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await assert.rejects(correctTrackingRoute({
+    targetType: "order",
+    targetId: laterOrder.orderId,
+    type: "transfer",
+    sourceWarehouseId: context.sourceWarehouseId,
+    targetWarehouseId: context.targetWarehouseId,
+    operatorName
+  }), /已发生后续签收或流转/);
+});
+
+test("新品类、出库复核和单据纠错接口执行完整角色权限矩阵", async () => {
+  const warehouseRole = await prisma.role.findUniqueOrThrow({ where: { code: "WAREHOUSE_ADMIN" } });
+  const viewerRole = await prisma.role.findUniqueOrThrow({ where: { code: "INVENTORY_VIEWER" } });
+  const warehouseToken = "tracking-governance-warehouse-session";
+  const viewerToken = "tracking-governance-viewer-session";
+  const superToken = "tracking-governance-super-session";
+  await prisma.user.create({
+    data: {
+      username: "tracking_warehouse_admin",
+      displayName: "复核仓库管理员",
+      passwordHash: "test-password",
+      roles: { create: { roleId: warehouseRole.id } },
+      sessions: { create: { token: warehouseToken, expiresAt: new Date(Date.now() + 60_000) } }
+    }
+  });
+  await prisma.user.create({
+    data: {
+      username: "tracking_readonly_viewer",
+      displayName: "复核只读账号",
+      passwordHash: "test-password",
+      roles: { create: { roleId: viewerRole.id } },
+      sessions: { create: { token: viewerToken, expiresAt: new Date(Date.now() + 60_000) } }
+    }
+  });
+  await prisma.userSession.create({
+    data: { token: superToken, userId: currentUser.id, expiresAt: new Date(Date.now() + 60_000) }
+  });
+
+  const categoryResponse = await postProductCategory(apiRequest("/api/product-categories", warehouseToken, { name: "权限矩阵商品" }));
+  assert.equal(categoryResponse.status, 201, "仓库管理员应能新增商品品类");
+  const categoryPayload = (await categoryResponse.json()) as { data: { id: string } };
+  const viewerCategoryResponse = await postProductCategory(apiRequest("/api/product-categories", viewerToken, { name: "只读账号商品" }));
+  assert.equal(viewerCategoryResponse.status, 403, "只读账号不能新增商品品类");
+  const warehouseDisableResponse = await patchProductCategory(
+    apiRequest(`/api/product-categories/${categoryPayload.data.id}`, warehouseToken, { status: "disabled" }, "PATCH"),
+    { params: Promise.resolve({ id: categoryPayload.data.id }) }
+  );
+  assert.equal(warehouseDisableResponse.status, 200, "仓库管理员应能停用商品品类");
+  const viewerRestoreResponse = await patchProductCategory(
+    apiRequest(`/api/product-categories/${categoryPayload.data.id}`, viewerToken, { status: "enabled" }, "PATCH"),
+    { params: Promise.resolve({ id: categoryPayload.data.id }) }
+  );
+  assert.equal(viewerRestoreResponse.status, 403, "只读账号不能恢复商品品类");
+
+  const order = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["ROLE-MATRIX-001"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const warehouseReviewResponse = await postTrackingReview(
+    apiRequest(`/api/tracking/reviews/order/${order.orderId}`, warehouseToken, { actualTotalQuantity: 0 }),
+    { params: Promise.resolve({ targetType: "order", id: order.orderId }) }
+  );
+  assert.equal(warehouseReviewResponse.status, 201, "仓库管理员应能完成首次复核");
+  const warehouseRevisionResponse = await postTrackingReview(
+    apiRequest(`/api/tracking/reviews/order/${order.orderId}`, warehouseToken, { actualTotalQuantity: 1 }),
+    { params: Promise.resolve({ targetType: "order", id: order.orderId }) }
+  );
+  assert.equal(warehouseRevisionResponse.status, 403, "仓库管理员不能修订已完成的复核");
+  const viewerReviewResponse = await postTrackingReview(
+    apiRequest(`/api/tracking/reviews/order/${order.orderId}`, viewerToken, { actualTotalQuantity: 1 }),
+    { params: Promise.resolve({ targetType: "order", id: order.orderId }) }
+  );
+  assert.equal(viewerReviewResponse.status, 403, "只读账号不能复核出库单");
+  const superRevisionResponse = await postTrackingReview(
+    apiRequest(`/api/tracking/reviews/order/${order.orderId}`, superToken, { actualTotalQuantity: 1 }),
+    { params: Promise.resolve({ targetType: "order", id: order.orderId }) }
+  );
+  assert.equal(superRevisionResponse.status, 200, "超级管理员应能修订复核");
+
+  const warehouseCorrectionResponse = await postTrackingOrderCorrection(
+    apiRequest(`/api/tracking/orders/${order.orderId}/correct`, warehouseToken, {
+      type: "transfer",
+      sourceWarehouseId: context.sourceWarehouseId,
+      targetWarehouseId: context.targetWarehouseId
+    }),
+    { params: Promise.resolve({ id: order.orderId }) }
+  );
+  assert.equal(warehouseCorrectionResponse.status, 403, "仓库管理员不能纠正出库路线");
+  const superCorrectionResponse = await postTrackingOrderCorrection(
+    apiRequest(`/api/tracking/orders/${order.orderId}/correct`, superToken, {
+      type: "transfer",
+      sourceWarehouseId: context.sourceWarehouseId,
+      targetWarehouseId: context.targetWarehouseId
+    }),
+    { params: Promise.resolve({ id: order.orderId }) }
+  );
+  assert.equal(superCorrectionResponse.status, 200, "超级管理员应能纠正出库路线");
 });
 
 test("流转单据按上海业务日期筛选并覆盖分页总数", async () => {
@@ -1470,6 +2023,17 @@ async function makeTerminalReceiptWorkbook(
 function restoreEnvironment(name: string, value: string | undefined) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
+}
+
+function apiRequest(path: string, token: string, body: unknown, method = "POST") {
+  return new Request(`http://localhost${path}`, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      cookie: `warehouse_session=${token}`
+    },
+    body: JSON.stringify(body)
+  });
 }
 
 async function seedContext() {
