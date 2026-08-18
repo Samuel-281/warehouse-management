@@ -89,58 +89,66 @@ export async function correctTrackingRoute(input: CorrectTrackingRouteInput) {
       throw new ApiError("纠正后的出库信息与当前信息完全相同", 400);
     }
     const activeItems = context.items.filter((item) => item.trackedBarcode.status === "ACTIVE");
-    await assertNoLaterMovement(tx, activeItems, context.orderIds, input.targetType === "group" ? context.id : undefined);
+    const laterActivity = await findLaterTrackingActivity(
+      tx,
+      activeItems,
+      context.orderIds,
+      input.targetType === "group" ? context.id : undefined
+    );
+    const correctionMode = laterActivity ? "history_only" as const : "current_state" as const;
 
     const occurredAt = new Date();
-    const targetOwnerType = route.type === "TRANSFER" ? "WAREHOUSE" as const : "SALESPERSON" as const;
-    const targetLabel = route.type === "TRANSFER" ? `仓库：${route.targetWarehouseName}` : `销售人员：${route.salespersonName}`;
-    for (const item of activeItems) {
-      const fromLabel = await ownerLabel(tx, item.trackedBarcode);
-      await tx.trackedBarcode.update({
-        where: { id: item.trackedBarcode.id },
-        data: {
-          currentOwnerType: targetOwnerType,
-          warehouseId: route.targetWarehouseId,
-          salespersonId: route.salespersonId,
-          terminalStoreName: null,
-          receiptStatus: "PENDING",
-          signedAt: null,
-          lastMovedAt: occurredAt
-        }
-      });
-      await tx.trackingMovement.create({
-        data: {
-          trackedBarcodeId: item.trackedBarcode.id,
-          barcode: item.barcode,
-          type: "ORDER_CORRECTION",
-          fromOwnerType: item.trackedBarcode.currentOwnerType,
-          toOwnerType: targetOwnerType,
-          fromLabel,
-          toLabel: targetLabel,
-          operatorId: input.operatorUserId,
-          operatorName: input.operatorName,
-          occurredAt,
-          note: cleanNote(input.note) ?? "管理员纠正出库路线",
-          orderId: input.targetType === "order" ? context.id : undefined,
-          orderNo: input.targetType === "order" ? context.number : undefined,
-          groupId: input.targetType === "group" ? context.id : undefined,
-          groupNo: input.targetType === "group" ? context.number : undefined
-        }
-      });
-    }
+    if (correctionMode === "current_state") {
+      const targetOwnerType = route.type === "TRANSFER" ? "WAREHOUSE" as const : "SALESPERSON" as const;
+      const targetLabel = route.type === "TRANSFER" ? `仓库：${route.targetWarehouseName}` : `销售人员：${route.salespersonName}`;
+      for (const item of activeItems) {
+        const fromLabel = await ownerLabel(tx, item.trackedBarcode);
+        await tx.trackedBarcode.update({
+          where: { id: item.trackedBarcode.id },
+          data: {
+            currentOwnerType: targetOwnerType,
+            warehouseId: route.targetWarehouseId,
+            salespersonId: route.salespersonId,
+            terminalStoreName: null,
+            receiptStatus: "PENDING",
+            signedAt: null,
+            lastMovedAt: occurredAt
+          }
+        });
+        await tx.trackingMovement.create({
+          data: {
+            trackedBarcodeId: item.trackedBarcode.id,
+            barcode: item.barcode,
+            type: "ORDER_CORRECTION",
+            fromOwnerType: item.trackedBarcode.currentOwnerType,
+            toOwnerType: targetOwnerType,
+            fromLabel,
+            toLabel: targetLabel,
+            operatorId: input.operatorUserId,
+            operatorName: input.operatorName,
+            occurredAt,
+            note: cleanNote(input.note) ?? "管理员纠正出库路线",
+            orderId: input.targetType === "order" ? context.id : undefined,
+            orderNo: input.targetType === "order" ? context.number : undefined,
+            groupId: input.targetType === "group" ? context.id : undefined,
+            groupNo: input.targetType === "group" ? context.number : undefined
+          }
+        });
+      }
 
-    if (context.sourceWarehouseId !== route.sourceWarehouseId) {
-      await tx.trackingOrderBarcode.updateMany({
-        where: { orderId: { in: context.orderIds }, createdTrackingItem: false },
-        data: {
-          beforeOwnerType: "WAREHOUSE",
-          beforeWarehouseId: route.sourceWarehouseId,
-          beforeSalespersonId: null,
-          beforeTerminalStoreName: null,
-          beforeReceiptStatus: "PENDING",
-          beforeSignedAt: null
-        }
-      });
+      if (context.sourceWarehouseId !== route.sourceWarehouseId) {
+        await tx.trackingOrderBarcode.updateMany({
+          where: { orderId: { in: context.orderIds }, createdTrackingItem: false },
+          data: {
+            beforeOwnerType: "WAREHOUSE",
+            beforeWarehouseId: route.sourceWarehouseId,
+            beforeSalespersonId: null,
+            beforeTerminalStoreName: null,
+            beforeReceiptStatus: "PENDING",
+            beforeSignedAt: null
+          }
+        });
+      }
     }
 
     const correctionData = {
@@ -152,7 +160,7 @@ export async function correctTrackingRoute(input: CorrectTrackingRouteInput) {
       afterTargetWarehouseId: route.targetWarehouseId,
       beforeSalespersonId: context.salespersonId,
       afterSalespersonId: route.salespersonId,
-      note: cleanNote(input.note),
+      note: correctionAuditNote(input.note, correctionMode),
       operatorId: input.operatorUserId,
       operatorName: input.operatorName
     };
@@ -186,7 +194,12 @@ export async function correctTrackingRoute(input: CorrectTrackingRouteInput) {
         }
       });
     }
-    return { id: context.id, number: context.number, updatedBarcodeCount: activeItems.length };
+    return {
+      id: context.id,
+      number: context.number,
+      correctionMode,
+      updatedBarcodeCount: correctionMode === "current_state" ? activeItems.length : 0
+    };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
@@ -382,6 +395,20 @@ async function assertNoLaterMovement(
   allowedOrderIds: string[],
   allowedGroupId?: string
 ) {
+  const activity = await findLaterTrackingActivity(tx, items, allowedOrderIds, allowedGroupId);
+  if (!activity) return;
+  if (activity.type === "receipt") {
+    throw new ApiError(`条码 ${activity.barcode} 已存在后续勤策签收记录，不能直接纠正或作废原单`, 409);
+  }
+  throw new ApiError(`条码 ${activity.barcode} 已发生后续签收或流转，不能直接纠正或作废原单`, 409);
+}
+
+async function findLaterTrackingActivity(
+  tx: Prisma.TransactionClient,
+  items: Array<{ trackedBarcodeId: string; barcode: string }>,
+  allowedOrderIds: string[],
+  allowedGroupId?: string
+) {
   if (items.length === 0) return;
   const latest = await tx.trackingMovement.findMany({
     where: { trackedBarcodeId: { in: items.map((item) => item.trackedBarcodeId) } },
@@ -403,7 +430,7 @@ async function assertNoLaterMovement(
     const movement = latestByItem.get(item.trackedBarcodeId);
     return !movement || (!allowedOrderIds.includes(movement.orderId ?? "") && movement.groupId !== allowedGroupId);
   });
-  if (blocked) throw new ApiError(`条码 ${blocked.barcode} 已发生后续签收或流转，不能直接纠正或作废原单`, 409);
+  if (blocked) return { type: "movement" as const, barcode: blocked.barcode };
   const receipts = await tx.terminalReceiptRecord.findMany({
     where: { trackedBarcodeId: { in: items.map((item) => item.trackedBarcodeId) } },
     select: { trackedBarcodeId: true, barcode: true, scannedAt: true }
@@ -412,7 +439,14 @@ async function assertNoLaterMovement(
     const businessStartedAt = receipt.trackedBarcodeId ? businessStartedAtByItem.get(receipt.trackedBarcodeId) : undefined;
     return businessStartedAt && receipt.scannedAt.getTime() >= businessStartedAt.getTime();
   });
-  if (laterReceipt) throw new ApiError(`条码 ${laterReceipt.barcode} 已存在后续勤策签收记录，不能直接纠正或作废原单`, 409);
+  return laterReceipt ? { type: "receipt" as const, barcode: laterReceipt.barcode } : undefined;
+}
+
+function correctionAuditNote(note: string | undefined, mode: "current_state" | "history_only") {
+  const cleaned = cleanNote(note);
+  if (mode === "current_state") return cleaned;
+  const systemNote = "仅修正历史单据信息，未改变条码当前归属和签收状态";
+  return cleaned ? `${systemNote}；${cleaned}` : systemNote;
 }
 
 async function ownerLabel(tx: Prisma.TransactionClient, item: {

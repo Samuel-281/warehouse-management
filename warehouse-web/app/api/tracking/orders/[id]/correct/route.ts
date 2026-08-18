@@ -20,7 +20,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       operatorName: user.displayName,
       operatorUserId: user.id
     });
-    await logOperation({ user, request, action: "TRACKING_ORDER_CORRECT", targetType: "TRACKING_ORDER", targetId: id, result: "SUCCESS", detail: `单号：${result.number}；纠正条码：${result.updatedBarcodeCount}` });
+    await logOperation({
+      user,
+      request,
+      action: "TRACKING_ORDER_CORRECT",
+      targetType: "TRACKING_ORDER",
+      targetId: id,
+      result: "SUCCESS",
+      detail: `单号：${result.number}；纠正范围：${result.correctionMode === "history_only" ? "仅历史单据信息" : "单据及当前归属"}；当前状态变更条码：${result.updatedBarcodeCount}`
+    });
     return ok(result);
   } catch (error) {
     await logOperation({ user, request, action: "TRACKING_ORDER_CORRECT", targetType: "TRACKING_ORDER", targetId: id, result: "FAILURE", detail: error instanceof Error ? error.message : undefined });

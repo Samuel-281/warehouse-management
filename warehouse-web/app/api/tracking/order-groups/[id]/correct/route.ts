@@ -10,7 +10,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     user = await assertSuperAdminAllowed(request);
     const input = (await request.json()) as { type?: "sales_outbound" | "transfer"; sourceWarehouseId?: string; targetWarehouseId?: string; salespersonId?: string; note?: string };
     const result = await correctTrackingRoute({ targetType: "group", targetId: id, type: input.type ?? "sales_outbound", sourceWarehouseId: input.sourceWarehouseId ?? "", targetWarehouseId: input.targetWarehouseId, salespersonId: input.salespersonId, note: input.note, operatorName: user.displayName, operatorUserId: user.id });
-    await logOperation({ user, request, action: "TRACKING_GROUP_CORRECT", targetType: "TRACKING_ORDER_GROUP", targetId: id, result: "SUCCESS", detail: `总单：${result.number}；纠正条码：${result.updatedBarcodeCount}` });
+    await logOperation({
+      user,
+      request,
+      action: "TRACKING_GROUP_CORRECT",
+      targetType: "TRACKING_ORDER_GROUP",
+      targetId: id,
+      result: "SUCCESS",
+      detail: `总单：${result.number}；纠正范围：${result.correctionMode === "history_only" ? "仅历史单据信息" : "单据及当前归属"}；当前状态变更条码：${result.updatedBarcodeCount}`
+    });
     return ok(result);
   } catch (error) {
     await logOperation({ user, request, action: "TRACKING_GROUP_CORRECT", targetType: "TRACKING_ORDER_GROUP", targetId: id, result: "FAILURE", detail: error instanceof Error ? error.message : undefined });

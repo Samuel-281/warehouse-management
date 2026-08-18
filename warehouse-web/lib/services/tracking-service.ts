@@ -443,7 +443,7 @@ export async function getTrackedBarcodeDetail(barcode: string): Promise<Tracking
   ]);
   return {
     item: mapTrackedBarcode(item),
-    movements: movements.map(mapTrackingMovement),
+    movements: await mapTrackingMovementsWithCorrectedRoutes(prisma, movements),
     terminalReceipts: receipts.map((receipt) => ({
       id: receipt.id,
       barcode: receipt.barcode,
@@ -456,6 +456,82 @@ export async function getTrackedBarcodeDetail(barcode: string): Promise<Tracking
       importedAt: formatAppDateTime(receipt.createdAt)
     }))
   };
+}
+
+async function mapTrackingMovementsWithCorrectedRoutes(
+  prisma: ReturnType<typeof getPrisma>,
+  movements: Array<Parameters<typeof mapTrackingMovement>[0]>
+): Promise<TrackingMovement[]> {
+  const outboundMovements = movements.filter((movement) =>
+    (movement.type === "SALES_OUTBOUND" || movement.type === "TRANSFER")
+    && (movement.orderId || movement.groupId)
+  );
+  if (outboundMovements.length === 0) return movements.map(mapTrackingMovement);
+
+  const orderIds = Array.from(new Set(outboundMovements.flatMap((movement) => movement.orderId ? [movement.orderId] : [])));
+  const groupIds = Array.from(new Set(outboundMovements.flatMap((movement) => movement.groupId ? [movement.groupId] : [])));
+  const [orders, groups] = await Promise.all([
+    orderIds.length > 0 ? prisma.trackingOrder.findMany({
+      where: { id: { in: orderIds } },
+      select: {
+        id: true,
+        type: true,
+        sourceWarehouse: { select: { name: true } },
+        targetWarehouse: { select: { name: true } },
+        salesperson: { select: { name: true } },
+        corrections: { select: { id: true }, take: 1 }
+      }
+    }) : [],
+    groupIds.length > 0 ? prisma.trackingOrderGroup.findMany({
+      where: { id: { in: groupIds } },
+      select: {
+        id: true,
+        type: true,
+        sourceWarehouse: { select: { name: true } },
+        targetWarehouse: { select: { name: true } },
+        salesperson: { select: { name: true } },
+        corrections: { select: { id: true }, take: 1 }
+      }
+    }) : []
+  ]);
+
+  const orderRoutes = new Map(orders.map((order) => [order.id, {
+    type: order.type,
+    sourceWarehouseName: order.sourceWarehouse?.name ?? "未知",
+    targetWarehouseName: order.targetWarehouse?.name,
+    salespersonName: order.salesperson?.name,
+    corrected: order.corrections.length > 0
+  }]));
+  const groupRoutes = new Map(groups.map((group) => [group.id, {
+    type: group.type,
+    sourceWarehouseName: group.sourceWarehouse.name,
+    targetWarehouseName: group.targetWarehouse?.name,
+    salespersonName: group.salesperson?.name,
+    corrected: group.corrections.length > 0
+  }]));
+
+  return movements.map((movement) => {
+    const mapped = mapTrackingMovement(movement);
+    if (movement.type !== "SALES_OUTBOUND" && movement.type !== "TRANSFER") return mapped;
+
+    const orderRoute = movement.orderId ? orderRoutes.get(movement.orderId) : undefined;
+    const groupRoute = movement.groupId ? groupRoutes.get(movement.groupId) : undefined;
+    const currentRoute = groupRoute ?? orderRoute;
+    if (!currentRoute || (!currentRoute.corrected && !orderRoute?.corrected)) return mapped;
+
+    const isTransfer = currentRoute.type === "TRANSFER";
+    return {
+      ...mapped,
+      type: isTransfer ? "transfer" : "sales_outbound",
+      fromOwnerType: "warehouse",
+      toOwnerType: isTransfer ? "warehouse" : "salesperson",
+      fromLabel: `仓库：${currentRoute.sourceWarehouseName}`,
+      toLabel: isTransfer
+        ? `仓库：${currentRoute.targetWarehouseName ?? "未知"}`
+        : `销售人员：${currentRoute.salespersonName ?? "未知"}`,
+      routeCorrected: true
+    };
+  });
 }
 
 export async function getTrackingSummary(): Promise<TrackingSummary> {

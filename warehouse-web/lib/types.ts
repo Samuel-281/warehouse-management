@@ -331,6 +331,7 @@ export type TrackingMovement = {
   orderNo?: string;
   groupId?: string;
   groupNo?: string;
+  routeCorrected?: boolean;
 };
 
 export type TrackingBarcodeListResult = {

@@ -152,8 +152,13 @@ function RouteCorrectionDialog({ target, endpoint, number, warehouses, salespeop
   async function save() {
     setSaving(true);
     try {
-      await postJson(`${endpoint}/correct`, { type, sourceWarehouseId, targetWarehouseId: type === "transfer" ? targetWarehouseId : undefined, salespersonId: type === "sales_outbound" ? salespersonId : undefined, note });
-      showToast({ tone: "success", message: `${number} 的出库信息已纠正` });
+      const result = await postJson<{ correctionMode: "current_state" | "history_only" }>(`${endpoint}/correct`, { type, sourceWarehouseId, targetWarehouseId: type === "transfer" ? targetWarehouseId : undefined, salespersonId: type === "sales_outbound" ? salespersonId : undefined, note });
+      showToast({
+        tone: "success",
+        message: result.correctionMode === "history_only"
+          ? `${number} 的历史出库信息已纠正，条码当前归属和签收状态未改变`
+          : `${number} 的出库信息及当前归属已纠正`
+      });
       onClose();
       await onChanged();
     } catch (error) {
@@ -171,7 +176,7 @@ function RouteCorrectionDialog({ target, endpoint, number, warehouses, salespeop
         <label className="block"><span className="label">来源仓库</span><select className="field" value={sourceWarehouseId} onChange={(event) => setSourceWarehouseId(event.target.value)}>{enabledWarehouses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         {type === "transfer" ? <label className="block"><span className="label">目标仓库</span><select className="field" value={targetWarehouseId} onChange={(event) => setTargetWarehouseId(event.target.value)}>{enabledWarehouses.filter((item) => item.id !== sourceWarehouseId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : <label className="block"><span className="label">销售人员</span><select className="field" value={salespersonId} onChange={(event) => setSalespersonId(event.target.value)}>{enabledSalespeople.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
         <label className="block"><span className="label">备注（选填）</span><textarea className="field min-h-20 py-2" value={note} onChange={(event) => setNote(event.target.value)} placeholder="不强制填写" /></label>
-        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">存在后续签收、回库或再次出库的条码时，系统会拒绝本次纠正。</p>
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">若条码已有后续签收、回库或再次出库，本次操作只纠正历史单据信息，不改变条码当前归属、签收状态和签收时间。</p>
       </div>
       <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={saving} onClick={() => void save()}><Pencil className="h-4 w-4" />{saving ? "正在保存" : "确认纠正"}</button></div>
     </section>

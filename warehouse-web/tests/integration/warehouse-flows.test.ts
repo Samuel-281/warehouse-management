@@ -1114,7 +1114,7 @@ test("已复核与待复核单可合并成新出库单，新单重新复核且�
   assert.equal(await prisma.trackedBarcode.count({ where: { barcode: { in: ["FORMAL-GROUP-001", "FORMAL-GROUP-002"] } } }), 0);
 });
 
-test("管理员可彻底删除错误条码并重复使用，勤策记录受保护，业务单回滚后物理删除", async () => {
+test("管理员可彻底删除错误条码并重复使用，勤策记录受保护，后续流转后只纠正历史单据", async () => {
   await prisma.trackedBarcode.create({
     data: {
       barcode: "UNREFERENCED-DELETE-001",
@@ -1184,7 +1184,7 @@ test("管理员可彻底删除错误条码并重复使用，勤策记录受保�
   assert.ok(reusedOrder.orderId);
   assert.equal((await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "TRACKING-VOID-001" } })).status, "ACTIVE");
 
-  await submitTrackingOutbound({
+  const qinceProtectedOrder = await submitTrackingOutbound({
     sourceWarehouseId: context.sourceWarehouseId,
     destinationType: "salesperson",
     salespersonId: context.salespersonId,
@@ -1204,6 +1204,41 @@ test("管理员可彻底删除错误条码并重复使用，勤策记录受保�
   assert.equal(await prisma.trackedBarcode.count({ where: { barcode: "QINCE-PROTECTED-001" } }), 1);
   assert.equal(await prisma.terminalReceiptRecord.count({ where: { barcode: "QINCE-PROTECTED-001" } }), 1);
 
+  const signedBeforeCorrection = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "QINCE-PROTECTED-001" } });
+  const signedMovementCount = await prisma.trackingMovement.count({ where: { trackedBarcodeId: signedBeforeCorrection.id } });
+  const signedCorrection = await correctTrackingRoute({
+    targetType: "order",
+    targetId: qinceProtectedOrder.orderId,
+    type: "transfer",
+    sourceWarehouseId: context.sourceWarehouseId,
+    targetWarehouseId: context.targetWarehouseId,
+    note: "签收后修正历史出库方式",
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  assert.equal(signedCorrection.correctionMode, "history_only");
+  assert.equal(signedCorrection.updatedBarcodeCount, 0);
+  const signedAfterCorrection = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "QINCE-PROTECTED-001" } });
+  assert.equal(signedAfterCorrection.currentOwnerType, signedBeforeCorrection.currentOwnerType);
+  assert.equal(signedAfterCorrection.terminalStoreName, signedBeforeCorrection.terminalStoreName);
+  assert.equal(signedAfterCorrection.receiptStatus, signedBeforeCorrection.receiptStatus);
+  assert.equal(signedAfterCorrection.signedAt?.getTime(), signedBeforeCorrection.signedAt?.getTime());
+  assert.equal(await prisma.trackingMovement.count({ where: { trackedBarcodeId: signedBeforeCorrection.id } }), signedMovementCount, "仅修正历史单据时不得新增货物流转");
+  const rawSignedOutbound = await prisma.trackingMovement.findFirstOrThrow({
+    where: { trackedBarcodeId: signedBeforeCorrection.id, orderId: qinceProtectedOrder.orderId, type: "SALES_OUTBOUND" }
+  });
+  assert.equal(rawSignedOutbound.toLabel, "销售人员：测试销售", "原始流转应继续保留纠正前路线用于审计");
+  const signedBarcodeDetail = await getTrackedBarcodeDetail("QINCE-PROTECTED-001");
+  const displayedSignedOutbound = signedBarcodeDetail.movements.find((movement) => movement.id === rawSignedOutbound.id);
+  assert.equal(displayedSignedOutbound?.type, "transfer");
+  assert.equal(displayedSignedOutbound?.fromLabel, "仓库：测试仓库 A");
+  assert.equal(displayedSignedOutbound?.toLabel, "仓库：测试仓库 B");
+  assert.equal(displayedSignedOutbound?.routeCorrected, true, "条码详情应按纠正后的单据路线展示");
+  const signedOrderDetail = await getTrackingOrderDetail(qinceProtectedOrder.orderId);
+  assert.equal(signedOrderDetail.order.type, "transfer");
+  assert.equal(signedOrderDetail.order.targetWarehouseId, context.targetWarehouseId);
+  assert.match(signedOrderDetail.corrections[0]?.note ?? "", /仅修正历史单据信息/);
+
   const laterOrder = await submitTrackingOutbound({
     sourceWarehouseId: context.sourceWarehouseId,
     destinationType: "salesperson",
@@ -1218,14 +1253,24 @@ test("管理员可彻底删除错误条码并重复使用，勤策记录受保�
     operatorName,
     operatorUserId: currentUser.id
   });
-  await assert.rejects(correctTrackingRoute({
+  const returnedBeforeCorrection = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "LATER-MOVEMENT-001" } });
+  const returnedMovementCount = await prisma.trackingMovement.count({ where: { trackedBarcodeId: returnedBeforeCorrection.id } });
+  const returnedCorrection = await correctTrackingRoute({
     targetType: "order",
     targetId: laterOrder.orderId,
     type: "transfer",
     sourceWarehouseId: context.sourceWarehouseId,
     targetWarehouseId: context.targetWarehouseId,
     operatorName
-  }), /已发生后续签收或流转/);
+  });
+  assert.equal(returnedCorrection.correctionMode, "history_only");
+  assert.equal(returnedCorrection.updatedBarcodeCount, 0);
+  const returnedAfterCorrection = await prisma.trackedBarcode.findUniqueOrThrow({ where: { barcode: "LATER-MOVEMENT-001" } });
+  assert.equal(returnedAfterCorrection.currentOwnerType, returnedBeforeCorrection.currentOwnerType);
+  assert.equal(returnedAfterCorrection.warehouseId, returnedBeforeCorrection.warehouseId);
+  assert.equal(returnedAfterCorrection.receiptStatus, returnedBeforeCorrection.receiptStatus);
+  assert.equal(await prisma.trackingMovement.count({ where: { trackedBarcodeId: returnedBeforeCorrection.id } }), returnedMovementCount, "回库后的历史纠正不得产生新的流转");
+  assert.equal((await getTrackingOrderDetail(laterOrder.orderId)).order.type, "transfer");
 });
 
 test("新品类、出库复核和单据纠错接口执行完整角色权限矩阵", async () => {
