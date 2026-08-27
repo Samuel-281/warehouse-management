@@ -40,6 +40,10 @@ import {
   validateTrackingBarcodes
 } from "@/lib/services/tracking-service";
 import {
+  heartbeatTrackingBarcodeReservations,
+  releaseTrackingBarcodeReservations
+} from "@/lib/services/tracking-reservation-service";
+import {
   createTrackingOrderGroup,
   getTrackingOrderGroupDetail,
   listTrackingOrderFeed,
@@ -355,6 +359,81 @@ test("条码流向模式无需商品库存，勤策补全商品并支持店铺�
   const summary = await getTrackingSummary();
   assert.equal(summary.total, 1);
   assert.equal(summary.inWarehouses, 1);
+});
+
+test("PDA 待出库条码在设备间互斥并于 30 秒租约失效后可重新占用", async () => {
+  const firstSessionId = randomUUID();
+  const secondSessionId = randomUUID();
+  const barcode = "PDA-RESERVATION-001";
+
+  const firstValidation = await validateTrackingBarcodes({
+    mode: "outbound",
+    sourceWarehouseId: context.sourceWarehouseId,
+    barcodes: [barcode],
+    reservationSessionId: firstSessionId
+  }, currentUser.id);
+  assert.equal(firstValidation[0]?.ok, true);
+  assert.equal(await prisma.trackingBarcodeReservation.count({ where: { barcode } }), 1);
+
+  const conflictingValidation = await validateTrackingBarcodes({
+    mode: "outbound",
+    sourceWarehouseId: context.sourceWarehouseId,
+    barcodes: [barcode],
+    reservationSessionId: secondSessionId
+  }, currentUser.id);
+  assert.equal(conflictingValidation[0]?.ok, false);
+  assert.equal(conflictingValidation[0]?.label, "设备占用中");
+
+  const heartbeat = await heartbeatTrackingBarcodeReservations({
+    sessionId: firstSessionId,
+    userId: currentUser.id,
+    barcodes: [barcode]
+  });
+  assert.deepEqual(heartbeat.activeBarcodes, [barcode]);
+
+  await assert.rejects(
+    submitTrackingOutbound({
+      sourceWarehouseId: context.sourceWarehouseId,
+      destinationType: "salesperson",
+      salespersonId: context.salespersonId,
+      barcodes: [barcode],
+      reservationSessionId: secondSessionId,
+      operatorName,
+      operatorUserId: currentUser.id
+    }),
+    /设备占用已失效/
+  );
+
+  await prisma.trackingBarcodeReservation.update({
+    where: { barcode },
+    data: { expiresAt: new Date(Date.now() - 1_000) }
+  });
+  const reclaimedValidation = await validateTrackingBarcodes({
+    mode: "outbound",
+    sourceWarehouseId: context.sourceWarehouseId,
+    barcodes: [barcode],
+    reservationSessionId: secondSessionId
+  }, currentUser.id);
+  assert.equal(reclaimedValidation[0]?.ok, true);
+
+  const outbound = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: [barcode],
+    reservationSessionId: secondSessionId,
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  assert.equal(outbound.quantity, 1);
+  assert.equal(await prisma.trackingBarcodeReservation.count({ where: { barcode } }), 0);
+
+  const released = await releaseTrackingBarcodeReservations({
+    sessionId: firstSessionId,
+    userId: currentUser.id,
+    barcodes: [barcode]
+  });
+  assert.equal(released.releasedCount, 0);
 });
 
 test("销售出库单详情按本次流转统计整单与各商品签收率", async () => {

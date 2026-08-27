@@ -4,6 +4,12 @@ import { ApiError } from "@/lib/api-response";
 import { assertBarcodeBatchLimit } from "@/lib/business-limits";
 import { getPrisma } from "@/lib/db";
 import { runIdempotentTransaction } from "@/lib/services/idempotency-service";
+import {
+  assertTrackingBarcodeReservationsForSubmit,
+  claimTrackingBarcodeReservations,
+  releaseSubmittedTrackingBarcodeReservations,
+  TRACKING_RESERVATION_LEASE_SECONDS
+} from "@/lib/services/tracking-reservation-service";
 import { linkAndReconcileTrackedReceipts } from "@/lib/services/terminal-receipt-ownership-service";
 import { buildTrackingCreatedAtRange } from "@/lib/services/tracking-date-range";
 import { formatAppDateTime } from "@/lib/warehouse-utils";
@@ -35,6 +41,7 @@ export type SubmitTrackingOutboundInput = {
   operatorName: string;
   operatorUserId?: string;
   clientRequestId?: string;
+  reservationSessionId?: string;
 };
 
 export type SubmitTrackingReturnInput = {
@@ -50,6 +57,7 @@ export type TrackingValidationInput = {
   barcodes: string[];
   sourceWarehouseId?: string;
   returnWarehouseId?: string;
+  reservationSessionId?: string;
 };
 
 export type TrackingValidationResult = {
@@ -60,7 +68,10 @@ export type TrackingValidationResult = {
   item?: TrackedBarcode;
 };
 
-export async function validateTrackingBarcodes(input: TrackingValidationInput): Promise<TrackingValidationResult[]> {
+export async function validateTrackingBarcodes(
+  input: TrackingValidationInput,
+  reservationUserId?: string
+): Promise<TrackingValidationResult[]> {
   const barcodes = normalizeBarcodes(input.barcodes);
   assertBarcodeBatchLimit(barcodes);
   if (barcodes.length === 0) return [];
@@ -69,7 +80,7 @@ export async function validateTrackingBarcodes(input: TrackingValidationInput): 
   const items = await prisma.trackedBarcode.findMany({ where: { barcode: { in: barcodes } } });
   const itemByBarcode = new Map(items.map((item) => [item.barcode, item]));
 
-  return barcodes.map((barcode) => {
+  const results = barcodes.map((barcode): TrackingValidationResult => {
     const item = itemByBarcode.get(barcode);
     if (item && item.status !== "ACTIVE") {
       return {
@@ -110,6 +121,26 @@ export async function validateTrackingBarcodes(input: TrackingValidationInput): 
     }
     return { barcode, ok: true, label: "可回库", detail: "系统将按当前归属生成回库履历", item: mapTrackedBarcode(item) };
   });
+
+  if (input.mode !== "outbound" || !input.reservationSessionId) return results;
+
+  const reservableBarcodes = results.filter((result) => result.ok).map((result) => result.barcode);
+  const reservation = await claimTrackingBarcodeReservations({
+    sessionId: input.reservationSessionId,
+    userId: reservationUserId,
+    barcodes: reservableBarcodes
+  });
+  const occupied = new Set(reservation.occupiedBarcodes);
+  return results.map((result) => occupied.has(result.barcode)
+    ? {
+        barcode: result.barcode,
+        ok: false,
+        label: "设备占用中",
+        detail: `该条码正在其他设备的待出库清单中；对方移除后会立即释放，无心跳 ${TRACKING_RESERVATION_LEASE_SECONDS} 秒后自动释放`,
+        item: result.item
+      }
+    : result
+  );
 }
 
 export async function submitTrackingOutbound(input: SubmitTrackingOutboundInput) {
@@ -129,7 +160,8 @@ export async function submitTrackingOutbound(input: SubmitTrackingOutboundInput)
         destinationType: input.destinationType,
         salespersonId: input.salespersonId ?? null,
         targetWarehouseId: input.targetWarehouseId ?? null,
-        barcodes
+        barcodes,
+        reservationSessionId: input.reservationSessionId ?? null
       }
     },
     async (tx) => {
@@ -149,6 +181,12 @@ export async function submitTrackingOutbound(input: SubmitTrackingOutboundInput)
         if (!targetWarehouse || targetWarehouse.status !== "ENABLED") throw new ApiError("请选择有效的目标仓库", 400);
         if (targetWarehouse.id === sourceWarehouse.id) throw new ApiError("目标仓库不能与来源仓库相同", 400);
       }
+
+      await assertTrackingBarcodeReservationsForSubmit(tx, {
+        sessionId: input.reservationSessionId,
+        userId: input.operatorUserId,
+        barcodes
+      });
 
       const existingItems = await tx.trackedBarcode.findMany({ where: { barcode: { in: barcodes } } });
       const invalid = existingItems.find(
@@ -250,6 +288,10 @@ export async function submitTrackingOutbound(input: SubmitTrackingOutboundInput)
         tx,
         persistedItems.map((item) => ({ id: item.id, barcode: item.barcode }))
       );
+      await releaseSubmittedTrackingBarcodeReservations(tx, {
+        sessionId: input.reservationSessionId,
+        barcodes
+      });
 
       return {
         orderId: order.id,
