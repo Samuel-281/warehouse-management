@@ -757,6 +757,7 @@ export async function getTrackingOrderDetail(
     const matchedReceipt = cycleReceipts.find((receipt) => receipt.matchStatus === "MATCHED");
     const latestReceipt = cycleReceipts.at(-1);
     const receiptStatus: TrackingReceiptStatus = hasConflict ? "exception" : matchedReceipt ? "signed" : "pending";
+    const returnedWithoutReceipt = boundary?.type === "RETURN" && !hasConflict && !matchedReceipt;
 
     return {
       barcode: orderItem.barcode,
@@ -764,6 +765,7 @@ export async function getTrackingOrderDetail(
       externalGoodsName: matchedReceipt?.externalGoodsName ?? tracked.externalGoodsName ?? undefined,
       goodsUnit: matchedReceipt?.goodsUnit ?? tracked.goodsUnit ?? undefined,
       receiptStatus,
+      returnedWithoutReceipt,
       signedAt: latestReceipt ? formatAppDateTime(latestReceipt.scannedAt) : undefined,
       receivingOrganizationName: latestReceipt?.receivingOrganizationName,
       ...currentOwner
@@ -801,21 +803,25 @@ function closesTrackingReceiptCycle(type: "LEGACY_INBOUND" | "SALES_OUTBOUND" | 
 export function summarizeTrackingOrderReceipts(items: TrackingOrderBarcodeDetail[], review?: TrackingOrderReview) {
   const activeItems = items.filter((item) => item.trackingStatus === "active");
   const signed = activeItems.filter((item) => item.receiptStatus === "signed").length;
+  const returned = activeItems.filter((item) => item.returnedWithoutReceipt).length;
   const exceptions = activeItems.filter((item) => item.receiptStatus === "exception").length;
   const total = review?.actualTotalQuantity ?? activeItems.length;
+  const effectiveQuantity = Math.max(total - returned, 0);
   const reviewedCategoryQuantity = review?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
   return {
     basis: review ? "review" as const : "barcode" as const,
     ...(review ? { reviewVersion: review.version } : {}),
     total,
+    effectiveQuantity,
     signed,
-    pending: Math.max(total - signed - exceptions, 0),
+    returned,
+    pending: Math.max(effectiveQuantity - signed - exceptions, 0),
     exceptions,
-    signedRate: receiptRate(signed, total),
+    signedRate: receiptRate(signed, effectiveQuantity),
     reviewedCategoryQuantity,
     unallocatedCategoryQuantity: review ? Math.max(total - reviewedCategoryQuantity, 0) : 0,
     categoryExcessQuantity: review ? Math.max(reviewedCategoryQuantity - total, 0) : 0,
-    excessQuantity: Math.max(signed + exceptions - total, 0)
+    excessQuantity: Math.max(signed + returned + exceptions - total, 0)
   };
 }
 
@@ -834,7 +840,9 @@ export function summarizeTrackingOrderGoodsReceipts(items: TrackingOrderBarcodeD
       goodsUnit,
       quantitySource: "barcode" as const,
       total: 0,
+      effectiveQuantity: 0,
       signed: 0,
+      returned: 0,
       pending: 0,
       exceptions: 0,
       signedRate: null,
@@ -842,10 +850,12 @@ export function summarizeTrackingOrderGoodsReceipts(items: TrackingOrderBarcodeD
       excessQuantity: 0
     };
     summary.total = (summary.total ?? 0) + 1;
-    if (item.receiptStatus === "signed") summary.signed += 1;
+    if (item.returnedWithoutReceipt) summary.returned += 1;
+    else if (item.receiptStatus === "signed") summary.signed += 1;
     else if (item.receiptStatus === "exception") summary.exceptions += 1;
     else summary.pending = (summary.pending ?? 0) + 1;
-    summary.signedRate = receiptRate(summary.signed, summary.total);
+    summary.effectiveQuantity = Math.max((summary.total ?? 0) - summary.returned, 0);
+    summary.signedRate = receiptRate(summary.signed, summary.effectiveQuantity);
     grouped.set(key, summary);
   }
   return Array.from(grouped.values()).sort((left, right) => {
@@ -861,6 +871,7 @@ function summarizeReviewedGoodsReceipts(items: TrackingOrderBarcodeDetail[], rev
     goodsName: string;
     goodsUnit?: string;
     signed: number;
+    returned: number;
     exceptions: number;
   }>();
   for (const item of items) {
@@ -873,9 +884,11 @@ function summarizeReviewedGoodsReceipts(items: TrackingOrderBarcodeDetail[], rev
       goodsName: goodsName ?? "待勤策补全",
       goodsUnit: item.goodsUnit?.trim() || undefined,
       signed: 0,
+      returned: 0,
       exceptions: 0
     };
-    if (item.receiptStatus === "signed") current.signed += 1;
+    if (item.returnedWithoutReceipt) current.returned += 1;
+    else if (item.receiptStatus === "signed") current.signed += 1;
     else if (item.receiptStatus === "exception") current.exceptions += 1;
     observed.set(key, current);
   }
@@ -885,19 +898,23 @@ function summarizeReviewedGoodsReceipts(items: TrackingOrderBarcodeDetail[], rev
     const current = observed.get(key);
     observed.delete(key);
     const signed = current?.signed ?? 0;
+    const returned = current?.returned ?? 0;
     const exceptions = current?.exceptions ?? 0;
+    const effectiveQuantity = Math.max(reviewItem.quantity - returned, 0);
     return {
       productCategoryId: reviewItem.productCategoryId,
       goodsName: reviewItem.categoryName,
       goodsUnit: current?.goodsUnit,
       quantitySource: "review",
       total: reviewItem.quantity,
+      effectiveQuantity,
       signed,
-      pending: Math.max(reviewItem.quantity - signed - exceptions, 0),
+      returned,
+      pending: Math.max(effectiveQuantity - signed - exceptions, 0),
       exceptions,
-      signedRate: receiptRate(signed, reviewItem.quantity),
+      signedRate: receiptRate(signed, effectiveQuantity),
       needsReviewQuantity: false,
-      excessQuantity: Math.max(signed + exceptions - reviewItem.quantity, 0)
+      excessQuantity: Math.max(signed + returned + exceptions - reviewItem.quantity, 0)
     };
   });
 
@@ -908,7 +925,9 @@ function summarizeReviewedGoodsReceipts(items: TrackingOrderBarcodeDetail[], rev
       goodsUnit: current.goodsUnit,
       quantitySource: "unreviewed",
       total: null,
+      effectiveQuantity: null,
       signed: current.signed,
+      returned: current.returned,
       pending: null,
       exceptions: current.exceptions,
       signedRate: null,

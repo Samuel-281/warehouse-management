@@ -1305,7 +1305,7 @@ function TrackingOrderDetailDialog({
                   <tr className={item.trackingStatus === "voided" ? "bg-slate-50 text-slate-500" : ""} key={item.barcode}>
                     <td className="px-3 py-3"><p className="font-mono font-semibold text-slate-700">{item.barcode}</p>{item.trackingStatus === "voided" ? <span className="mt-1 inline-flex rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-slate-500">已撤销追踪</span> : null}</td>
                     <td className="px-3 py-3"><p className="font-medium text-slate-700">{item.externalGoodsName ?? "待勤策补全"}</p>{item.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{item.goodsUnit}</p> : null}</td>
-                    <td className="px-3 py-3">{item.receiptStatus ? <ReceiptBadge status={item.receiptStatus} /> : <span className="text-xs text-muted">不适用</span>}</td>
+                    <td className="px-3 py-3">{item.receiptStatus ? <OrderReceiptBadge item={item} /> : <span className="text-xs text-muted">不适用</span>}</td>
                     <td className="px-3 py-3"><p className="text-slate-700">{item.receivingOrganizationName ?? "-"}</p>{item.signedAt ? <p className="mt-0.5 text-xs text-muted">{item.signedAt}</p> : null}</td>
                     <td className="px-3 py-3 text-slate-600">{trackingOrderItemOwnerLabel(item, warehouseNames, salespersonNames)}</td>
                   </tr>
@@ -1411,7 +1411,7 @@ function TrackingReceiptProgress({
       <div className="mt-3 max-h-[420px] overflow-auto rounded-md border border-slate-200">
         <table className="w-full min-w-[860px] text-left text-sm">
           <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500 shadow-[0_1px_0_0_#e2e8f0]"><tr><th className="px-3 py-2.5">箱码</th><th className="px-3 py-2.5">勤策商品</th><th className="px-3 py-2.5">本单签收状态</th><th className="px-3 py-2.5">签收店铺 / 时间</th><th className="px-3 py-2.5">当前归属（实时）</th></tr></thead>
-          <tbody className="divide-y divide-slate-200">{items.map((item) => <tr className={item.trackingStatus === "voided" ? "bg-slate-50 text-slate-500" : ""} key={item.barcode}><td className="px-3 py-3"><p className="font-mono font-semibold text-slate-700">{item.barcode}</p>{item.trackingStatus === "voided" ? <span className="mt-1 inline-flex rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-slate-500">已删除</span> : null}</td><td className="px-3 py-3"><p className="font-medium text-slate-700">{item.externalGoodsName ?? "待勤策补全"}</p>{item.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{item.goodsUnit}</p> : null}</td><td className="px-3 py-3">{item.receiptStatus ? <ReceiptBadge status={item.receiptStatus} /> : <span className="text-xs text-muted">不适用</span>}</td><td className="px-3 py-3"><p className="text-slate-700">{item.receivingOrganizationName ?? "-"}</p>{item.signedAt ? <p className="mt-0.5 text-xs text-muted">{item.signedAt}</p> : null}</td><td className="px-3 py-3 text-slate-600">{trackingOrderItemOwnerLabel(item, warehouseNames, salespersonNames)}</td></tr>)}</tbody>
+          <tbody className="divide-y divide-slate-200">{items.map((item) => <tr className={item.trackingStatus === "voided" ? "bg-slate-50 text-slate-500" : ""} key={item.barcode}><td className="px-3 py-3"><p className="font-mono font-semibold text-slate-700">{item.barcode}</p>{item.trackingStatus === "voided" ? <span className="mt-1 inline-flex rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-slate-500">已删除</span> : null}</td><td className="px-3 py-3"><p className="font-medium text-slate-700">{item.externalGoodsName ?? "待勤策补全"}</p>{item.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{item.goodsUnit}</p> : null}</td><td className="px-3 py-3">{item.receiptStatus ? <OrderReceiptBadge item={item} /> : <span className="text-xs text-muted">不适用</span>}</td><td className="px-3 py-3"><p className="text-slate-700">{item.receivingOrganizationName ?? "-"}</p>{item.signedAt ? <p className="mt-0.5 text-xs text-muted">{item.signedAt}</p> : null}</td><td className="px-3 py-3 text-slate-600">{trackingOrderItemOwnerLabel(item, warehouseNames, salespersonNames)}</td></tr>)}</tbody>
         </table>
       </div>
     </div>
@@ -1442,11 +1442,13 @@ function TrackingReceiptAnalytics({
           </div>
           <p className={`mt-1 text-3xl font-semibold ${receiptSummary.excessQuantity > 0 ? "text-danger" : "text-ink"}`}>{formatReceiptRate(receiptSummary.signedRate)}</p>
           <p className="mt-1 text-xs text-muted">
-            {usesReview ? "已签收箱码 ÷ 最新复核实际总出货数量；签收异常单独列出。" : "已签收箱码 ÷ 本单有效追踪箱码；已删除条码不参与计算，签收异常单独列出。"}
+            {usesReview ? "已签收箱码 ÷（最新复核实际总出货数量 - 未签收回库数量）。" : "已签收箱码 ÷（本单有效追踪箱码 - 未签收回库数量）；已删除条码不参与计算。"}
+            {` 原出货 ${receiptSummary.total} 件，有效签收基数 ${receiptSummary.effectiveQuantity} 件。`}
           </p>
         </div>
-        <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 text-center sm:min-w-[420px]">
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 text-center sm:min-w-[500px] sm:grid-cols-4">
           <ReceiptCount label="已签收" value={receiptSummary.signed} tone="signed" />
+          <ReceiptCount label="未签收回库" value={receiptSummary.returned} tone="returned" />
           <ReceiptCount label="待签收" value={receiptSummary.pending} tone="pending" />
           <ReceiptCount label="签收异常" value={receiptSummary.exceptions} tone="exception" />
         </dl>
@@ -1456,7 +1458,7 @@ function TrackingReceiptAnalytics({
       </div>
       {hasWarnings ? <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
         <div className="flex items-start gap-2"><TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" /><div className="space-y-1">
-          {receiptSummary.excessQuantity > 0 ? <p>已签收与异常数量合计超过复核总数 {receiptSummary.excessQuantity} 件，请核对复核记录。</p> : null}
+          {receiptSummary.excessQuantity > 0 ? <p>已签收、未签收回库与异常数量合计超过总数 {receiptSummary.excessQuantity} 件，请核对复核记录。</p> : null}
           {receiptSummary.unallocatedCategoryQuantity > 0 ? <p>复核总数中仍有 {receiptSummary.unallocatedCategoryQuantity} 件未分配商品品类。</p> : null}
           {receiptSummary.categoryExcessQuantity > 0 ? <p>复核品类合计超过实际总数 {receiptSummary.categoryExcessQuantity} 件。</p> : null}
           {missingReviewQuantities > 0 ? <p>勤策识别出 {missingReviewQuantities} 个未填写复核数量的商品，需修订复核后才能计算对应签收率。</p> : null}
@@ -1468,17 +1470,18 @@ function TrackingReceiptAnalytics({
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold text-ink">各项货物签收率</h3>
-          <p className="mt-1 text-xs text-muted">{usesReview ? "复核品类数量作为分母；勤策未识别的签收继续等待补全。" : "商品名称和单位以勤策签收数据为准；未返回商品的箱码归入“待勤策补全”。"}</p>
+          <p className="mt-1 text-xs text-muted">{usesReview ? "复核品类数量扣除可识别的未签收回库数量后作为分母；勤策未识别的商品继续等待补全。" : "各品类总数扣除未签收回库数量后作为分母；未返回商品的箱码归入“待勤策补全”。"}</p>
         </div>
         <span className="text-xs text-muted">共 {goodsReceiptSummaries.length} 项</span>
       </div>
       <div className="mt-3 overflow-x-auto rounded-md border border-slate-200">
-        <table className="w-full min-w-[760px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-3 py-2.5">商品品类</th><th className="px-3 py-2.5 text-right">{usesReview ? "复核数量" : "总数"}</th><th className="px-3 py-2.5 text-right">已签收</th><th className="px-3 py-2.5 text-right">待签收</th><th className="px-3 py-2.5 text-right">异常</th><th className="px-3 py-2.5 text-right">签收率</th></tr></thead>
+        <table className="w-full min-w-[840px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-3 py-2.5">商品品类</th><th className="px-3 py-2.5 text-right">签收基数</th><th className="px-3 py-2.5 text-right">已签收</th><th className="px-3 py-2.5 text-right">已回库</th><th className="px-3 py-2.5 text-right">待签收</th><th className="px-3 py-2.5 text-right">异常</th><th className="px-3 py-2.5 text-right">签收率</th></tr></thead>
           <tbody className="divide-y divide-slate-200">{goodsReceiptSummaries.map((summary) => <tr className={summary.excessQuantity > 0 ? "bg-red-50/60" : summary.needsReviewQuantity ? "bg-amber-50/60" : ""} key={`${summary.productCategoryId ?? summary.goodsName}-${summary.goodsUnit ?? ""}`}>
-            <td className="px-3 py-3"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold text-slate-700">{summary.goodsName}</p>{summary.needsReviewQuantity ? <span className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-xs font-semibold text-amber-800">待补充复核数量</span> : null}</div>{summary.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{summary.goodsUnit}</p> : null}{summary.excessQuantity > 0 ? <p className="mt-1 text-xs font-semibold text-danger">签收与异常合计超出复核数量 {summary.excessQuantity} 件</p> : null}</td>
-            <td className="px-3 py-3 text-right font-semibold text-slate-700">{summary.total ?? "待补充"}</td>
+            <td className="px-3 py-3"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold text-slate-700">{summary.goodsName}</p>{summary.needsReviewQuantity ? <span className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-xs font-semibold text-amber-800">待补充复核数量</span> : null}</div>{summary.goodsUnit ? <p className="mt-0.5 text-xs text-muted">单位：{summary.goodsUnit}</p> : null}{summary.excessQuantity > 0 ? <p className="mt-1 text-xs font-semibold text-danger">签收、回库与异常合计超出复核数量 {summary.excessQuantity} 件</p> : null}</td>
+            <td className="px-3 py-3 text-right"><p className="font-semibold text-slate-700">{summary.effectiveQuantity ?? "待补充"}</p>{summary.total !== null && summary.returned > 0 ? <p className="mt-0.5 text-xs text-muted">原 {summary.total}，回库 {summary.returned}</p> : null}</td>
             <td className="px-3 py-3 text-right text-work">{summary.signed}</td>
+            <td className="px-3 py-3 text-right text-sky-700">{summary.returned}</td>
             <td className="px-3 py-3 text-right text-amber-700">{summary.pending ?? "-"}</td>
             <td className="px-3 py-3 text-right text-danger">{summary.exceptions}</td>
             <td className={`px-3 py-3 text-right font-semibold ${summary.excessQuantity > 0 ? "text-danger" : "text-slate-700"}`}>{summary.needsReviewQuantity ? "待补充" : formatReceiptRate(summary.signedRate)}</td>
@@ -1554,8 +1557,8 @@ function trackingRouteLabel(
   return `${trackingOrderLabel(type)} · ${source} → ${destination}`;
 }
 
-function ReceiptCount({ label, value, tone }: { label: string; value: number; tone: TrackingReceiptStatus }) {
-  const classes = tone === "signed" ? "text-work" : tone === "exception" ? "text-danger" : "text-amber-700";
+function ReceiptCount({ label, value, tone }: { label: string; value: number; tone: TrackingReceiptStatus | "returned" }) {
+  const classes = tone === "signed" ? "text-work" : tone === "returned" ? "text-sky-700" : tone === "exception" ? "text-danger" : "text-amber-700";
   return <div className="bg-white px-3 py-3"><dt className="text-xs text-muted">{label}</dt><dd className={`mt-1 text-xl font-semibold ${classes}`}>{value} 件</dd></div>;
 }
 
@@ -1604,6 +1607,7 @@ function ReviewStatusBadge({ status }: { status: TrackingOrderSummary["reviewSta
 function LifecycleBadge({ label, tone }: { label: string; tone: "danger" | "neutral" }) { return <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-xs font-semibold ${tone === "danger" ? "border-red-200 bg-red-50 text-danger" : "border-slate-200 bg-slate-50 text-slate-500"}`}>{label}</span>; }
 function MasterStatus({ status }: { status: "enabled" | "disabled" }) { return <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${status === "enabled" ? "border-emerald-200 bg-emerald-50 text-work" : "border-slate-200 bg-slate-50 text-slate-500"}`}>{status === "enabled" ? "启用" : "停用"}</span>; }
 function ReceiptBadge({ status }: { status: TrackingReceiptStatus }) { const classes = status === "signed" ? "border-emerald-200 bg-emerald-50 text-work" : status === "exception" ? "border-red-200 bg-red-50 text-danger" : "border-amber-200 bg-amber-50 text-amber-700"; return <span className={`inline-flex rounded-md border px-2 py-1 text-xs font-semibold ${classes}`}>{receiptStatusLabel(status)}</span>; }
+function OrderReceiptBadge({ item }: { item: TrackingOrderBarcodeDetail }) { return item.returnedWithoutReceipt ? <span className="inline-flex rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">已回库</span> : <ReceiptBadge status={item.receiptStatus ?? "pending"} />; }
 function segmentClass(active: boolean) { return `flex h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition ${active ? "bg-white text-work shadow-sm" : "text-slate-500 hover:text-slate-700"}`; }
 function parseBarcodeInput(value: string) { return uniqueBarcodes(value.split(/[\s,，;；]+/).map((item) => item.trim()).filter(Boolean)); }
 function toReviewMap(results: ValidationResult[]): ReviewMap { return Object.fromEntries(results.map((result) => [result.barcode, { tone: result.ok ? "success" : "error", label: result.label, detail: result.detail }])); }

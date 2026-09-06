@@ -390,7 +390,9 @@ export type TrackingOrderReceiptSummary = {
   basis: "barcode" | "review";
   reviewVersion?: number;
   total: number;
+  effectiveQuantity: number;
   signed: number;
+  returned: number;
   pending: number;
   exceptions: number;
   signedRate: number | null;
@@ -406,7 +408,9 @@ export type TrackingOrderGoodsReceiptSummary = {
   goodsUnit?: string;
   quantitySource: "barcode" | "review" | "unreviewed";
   total: number | null;
+  effectiveQuantity: number | null;
   signed: number;
+  returned: number;
   pending: number | null;
   exceptions: number;
   signedRate: number | null;
@@ -420,6 +424,7 @@ export type TrackingOrderBarcodeDetail = {
   externalGoodsName?: string;
   goodsUnit?: string;
   receiptStatus?: TrackingReceiptStatus;
+  returnedWithoutReceipt?: boolean;
   signedAt?: string;
   receivingOrganizationName?: string;
   currentOwnerType: OwnerType;

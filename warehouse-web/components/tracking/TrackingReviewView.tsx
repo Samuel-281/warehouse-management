@@ -1,6 +1,6 @@
 "use client";
 
-import { ClipboardCheck, RefreshCw, X } from "lucide-react";
+import { ClipboardCheck, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { EmptyState, PaginationBar } from "@/components/warehouse/CommonUi";
@@ -122,24 +122,57 @@ function ReviewDialog({ target, categories, onClose, onSaved, showToast }: {
   const previous = target.latestReview;
   const [actualTotal, setActualTotal] = useState(previous ? String(previous.actualTotalQuantity) : "");
   const [quantities, setQuantities] = useState<Record<string, string>>(() => Object.fromEntries(previous?.items.map((item) => [item.productCategoryId, String(item.quantity)]) ?? []));
+  const [categoryToAdd, setCategoryToAdd] = useState("");
   const [saving, setSaving] = useState(false);
   const visibleCategories = useMemo(() => {
     const previousIds = new Set(previous?.items.map((item) => item.productCategoryId));
     return categories.filter((category) => category.status === "enabled" || previousIds.has(category.id));
   }, [categories, previous]);
+  const selectedCategories = useMemo(() => {
+    const categoryById = new Map(visibleCategories.map((category) => [category.id, category]));
+    return Object.keys(quantities).flatMap((id) => {
+      const category = categoryById.get(id);
+      return category ? [category] : [];
+    });
+  }, [quantities, visibleCategories]);
+  const availableCategories = useMemo(
+    () => visibleCategories.filter((category) => !(category.id in quantities)),
+    [quantities, visibleCategories]
+  );
   const actualNumber = actualTotal === "" ? null : Number(actualTotal);
-  const categoryTotal = Object.values(quantities).reduce((sum, value) => value === "" ? sum : sum + Number(value), 0);
+  const categoryTotal = Object.values(quantities).reduce((sum, value) => {
+    const quantity = Number(value);
+    return value !== "" && Number.isFinite(quantity) ? sum + quantity : sum;
+  }, 0);
   const totalMismatch = actualNumber !== null && actualNumber !== target.activeBarcodeCount;
-  const categoryMismatch = actualNumber !== null && Object.values(quantities).some((value) => value !== "") && categoryTotal !== actualNumber;
+  const categoryMismatch = actualNumber !== null && selectedCategories.length > 0 && categoryTotal !== actualNumber;
+
+  function addCategory() {
+    if (!categoryToAdd || categoryToAdd in quantities) return;
+    setQuantities((current) => ({ ...current, [categoryToAdd]: "" }));
+    setCategoryToAdd("");
+  }
+
+  function removeCategory(productCategoryId: string) {
+    setQuantities((current) => {
+      const next = { ...current };
+      delete next[productCategoryId];
+      return next;
+    });
+  }
 
   async function save() {
     if (actualNumber === null || !Number.isSafeInteger(actualNumber) || actualNumber < 0) {
       showToast({ tone: "error", message: "实际总出货数量必须填写包括 0 在内的非负整数" });
       return;
     }
+    if (Object.values(quantities).some((value) => value === "" || !Number.isSafeInteger(Number(value)) || Number(value) < 0)) {
+      showToast({ tone: "error", message: "已添加商品的数量必须填写包括 0 在内的非负整数；不需要的商品请删除" });
+      return;
+    }
     setSaving(true);
     try {
-      const items = Object.entries(quantities).filter(([, value]) => value !== "").map(([productCategoryId, value]) => ({ productCategoryId, quantity: Number(value) }));
+      const items = Object.entries(quantities).map(([productCategoryId, value]) => ({ productCategoryId, quantity: Number(value) }));
       await postJson<TrackingOrderReview>(`/api/tracking/reviews/${target.targetType}/${target.id}`, { actualTotalQuantity: actualNumber, items });
       await onSaved();
     } catch (error) {
@@ -156,9 +189,17 @@ function ReviewDialog({ target, categories, onClose, onSaved, showToast }: {
         <div className="grid gap-3 sm:grid-cols-3"><Metric label="单据扫码数" value={`${target.barcodeCount} 件`} /><Metric label="有效扫码数" value={`${target.activeBarcodeCount} 件`} /><Metric label="已撤销条码" value={`${target.voidedBarcodeCount} 件`} /></div>
         <label className="mt-5 block"><span className="label">实际总出货数量（必填）</span><input className="field" min="0" step="1" type="number" value={actualTotal} onChange={(event) => setActualTotal(event.target.value)} placeholder="包括 0 在内的非负整数" /></label>
         {totalMismatch || categoryMismatch ? <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{totalMismatch ? `实际总数与有效扫码数相差 ${Math.abs((actualNumber ?? 0) - target.activeBarcodeCount)} 件。` : ""}{totalMismatch && categoryMismatch ? " " : ""}{categoryMismatch ? `品类合计 ${categoryTotal} 件，与实际总数不一致。` : ""} 数量差异不会阻止提交。</div> : null}
-        <div className="mt-5"><div className="flex items-end justify-between gap-2"><div><h3 className="text-sm font-semibold text-ink">各商品品类数量（选填）</h3><p className="mt-1 text-xs text-muted">品类由勤策成功匹配数据自动补充，也可在基础资料中手工增加。</p></div><span className="text-xs text-muted">当前合计 {categoryTotal} 件</span></div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">{visibleCategories.map((category) => <label className="rounded-md border border-slate-200 p-3" key={category.id}><span className="flex items-center justify-between gap-2 text-sm font-semibold text-slate-700">{category.name}{category.status === "disabled" ? <span className="text-xs text-slate-400">已停用</span> : null}</span><input className="field mt-2" min="0" step="1" type="number" value={quantities[category.id] ?? ""} onChange={(event) => setQuantities((current) => ({ ...current, [category.id]: event.target.value }))} placeholder="不填写" /></label>)}</div>
-          {visibleCategories.length === 0 ? <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm text-muted">当前没有商品品类，可仅填写实际总出货数量完成复核。</p> : null}
+        <div className="mt-5"><div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><h3 className="text-sm font-semibold text-ink">各商品品类数量（选填）</h3><p className="mt-1 text-xs text-muted">只添加本单需要登记的商品，再填写对应数量。</p></div><span className="shrink-0 text-xs text-muted">已添加 {selectedCategories.length} 项 · 合计 {categoryTotal} 件</span></div>
+          {visibleCategories.length > 0 ? <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="min-w-0 flex-1"><span className="label">选择商品</span><select className="field" value={categoryToAdd} onChange={(event) => setCategoryToAdd(event.target.value)} disabled={availableCategories.length === 0}><option value="">{availableCategories.length === 0 ? "所有可选商品均已添加" : "请选择要添加的商品"}</option>{availableCategories.map((category) => <option value={category.id} key={category.id}>{category.name}{category.status === "disabled" ? "（已停用）" : ""}</option>)}</select></label>
+            <button className="secondary-button shrink-0" type="button" disabled={!categoryToAdd} onClick={addCategory}><Plus className="h-4 w-4" />添加商品</button>
+          </div> : null}
+          {selectedCategories.length > 0 ? <div className="mt-3 divide-y divide-slate-200 overflow-hidden rounded-md border border-slate-200">{selectedCategories.map((category) => <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-end" key={category.id}>
+            <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-700">{category.name}</p>{category.status === "disabled" ? <p className="mt-1 text-xs text-slate-400">该历史品类已停用</p> : null}</div>
+            <label className="sm:w-44"><span className="label">出货数量</span><input className="field" min="0" step="1" type="number" value={quantities[category.id] ?? ""} onChange={(event) => setQuantities((current) => ({ ...current, [category.id]: event.target.value }))} placeholder="请输入数量" /></label>
+            <button className="icon-button" type="button" title={`删除 ${category.name}`} aria-label={`删除 ${category.name}`} onClick={() => removeCategory(category.id)}><Trash2 className="h-4 w-4" /></button>
+          </div>)}</div> : null}
+          {visibleCategories.length === 0 ? <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm text-muted">当前没有商品品类，可仅填写实际总出货数量完成复核。</p> : selectedCategories.length === 0 ? <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm text-muted">尚未添加商品品类。品类数量为选填，可直接完成复核。</p> : null}
         </div>
       </div>
       <div className="sticky bottom-0 flex justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={saving} onClick={() => void save()}><ClipboardCheck className="h-4 w-4" />{saving ? "正在保存" : previous ? "保存修订" : "完成复核"}</button></div>

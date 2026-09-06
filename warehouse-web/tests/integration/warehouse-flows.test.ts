@@ -466,7 +466,9 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
   assert.deepEqual(detail.receiptSummary, {
     basis: "barcode",
     total: 4,
+    effectiveQuantity: 4,
     signed: 2,
+    returned: 0,
     pending: 1,
     exceptions: 1,
     signedRate: 50,
@@ -516,7 +518,9 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
     basis: "review",
     reviewVersion: 1,
     total: 8,
+    effectiveQuantity: 8,
     signed: 2,
+    returned: 0,
     pending: 5,
     exceptions: 1,
     signedRate: 25,
@@ -534,7 +538,9 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
     goodsUnit: "件",
     quantitySource: "review",
     total: 4,
+    effectiveQuantity: 4,
     signed: 2,
+    returned: 0,
     pending: 2,
     exceptions: 0,
     signedRate: 50,
@@ -547,7 +553,9 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
     goodsUnit: undefined,
     quantitySource: "review",
     total: 2,
+    effectiveQuantity: 2,
     signed: 0,
+    returned: 0,
     pending: 2,
     exceptions: 0,
     signedRate: 0,
@@ -578,7 +586,9 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
     basis: "review",
     reviewVersion: 2,
     total: 1,
+    effectiveQuantity: 1,
     signed: 2,
+    returned: 0,
     pending: 0,
     exceptions: 1,
     signedRate: 200,
@@ -617,6 +627,98 @@ test("销售出库单详情按本次流转统计整单与各商品签收率", as
   assert.equal(historicalDetail.receiptSummary?.signedRate, 200, "后续回库和再次出库不能改写旧单的复核口径签收率");
   assert.equal(currentDetail.items[0]?.receiptStatus, "pending");
   assert.equal(currentDetail.receiptSummary?.signedRate, 0);
+});
+
+test("未签收回库从整单签收率分母扣除，签收后回库不倒扣", async () => {
+  const barcodes = ["RETURNED-RATE-SIGNED-01", "RETURNED-RATE-SIGNED-02", "RETURNED-RATE-UNSIGNED-01"];
+  const outbound = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes,
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await importTerminalReceipts({
+    fileName: "未签收回库签收率.xlsx",
+    buffer: await makeTerminalReceiptWorkbook([
+      { barcode: barcodes[0], scannedAt: new Date(), storeName: "签收率回库测试店 A", goodsName: "回库测试商品_1*12" },
+      { barcode: barcodes[1], scannedAt: new Date(), storeName: "签收率回库测试店 B", goodsName: "回库测试商品_1*12" }
+    ]),
+    operatorName
+  });
+  await saveTrackingReview({
+    targetType: "order",
+    targetId: outbound.orderId,
+    actualTotalQuantity: 3,
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await submitTrackingReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    barcodes: [barcodes[2]],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const returnedDetail = await getTrackingOrderDetail(outbound.orderId);
+  assert.deepEqual(returnedDetail.receiptSummary, {
+    basis: "review",
+    reviewVersion: 1,
+    total: 3,
+    effectiveQuantity: 2,
+    signed: 2,
+    returned: 1,
+    pending: 0,
+    exceptions: 0,
+    signedRate: 100,
+    reviewedCategoryQuantity: 0,
+    unallocatedCategoryQuantity: 3,
+    categoryExcessQuantity: 0,
+    excessQuantity: 0
+  });
+  assert.equal(returnedDetail.items.find((item) => item.barcode === barcodes[2])?.returnedWithoutReceipt, true);
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await submitTrackingReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    barcodes: [barcodes[0]],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const signedThenReturnedDetail = await getTrackingOrderDetail(outbound.orderId);
+  assert.equal(signedThenReturnedDetail.items.find((item) => item.barcode === barcodes[0])?.returnedWithoutReceipt, false);
+  assert.equal(signedThenReturnedDetail.receiptSummary?.returned, 1);
+  assert.equal(signedThenReturnedDetail.receiptSummary?.signedRate, 100);
+
+  const allReturned = await submitTrackingOutbound({
+    sourceWarehouseId: context.sourceWarehouseId,
+    destinationType: "salesperson",
+    salespersonId: context.salespersonId,
+    barcodes: ["RETURNED-RATE-ALL-01"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  await saveTrackingReview({
+    targetType: "order",
+    targetId: allReturned.orderId,
+    actualTotalQuantity: 1,
+    operatorName: "仓库管理员",
+    isSuperAdmin: false
+  });
+  await submitTrackingReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    barcodes: ["RETURNED-RATE-ALL-01"],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const allReturnedDetail = await getTrackingOrderDetail(allReturned.orderId);
+  assert.equal(allReturnedDetail.receiptSummary?.effectiveQuantity, 0);
+  assert.equal(allReturnedDetail.receiptSummary?.pending, 0);
+  assert.equal(allReturnedDetail.receiptSummary?.signedRate, null, "全部未签收回库时分母为零，签收率应显示为无比例");
 });
 
 test("挪仓后允许目标仓库直接配送签收，并可重算旧流转异常", async () => {
@@ -661,7 +763,9 @@ test("挪仓后允许目标仓库直接配送签收，并可重算旧流转异�
   assert.deepEqual(detail.receiptSummary, {
     basis: "barcode",
     total: 3,
+    effectiveQuantity: 3,
     signed: 2,
+    returned: 0,
     pending: 1,
     exceptions: 0,
     signedRate: 66.7,
@@ -702,7 +806,9 @@ test("挪仓后允许目标仓库直接配送签收，并可重算旧流转异�
     basis: "review",
     reviewVersion: 1,
     total: 5,
+    effectiveQuantity: 5,
     signed: 2,
+    returned: 0,
     pending: 3,
     exceptions: 0,
     signedRate: 40,
@@ -853,7 +959,9 @@ test("同一路线的分批销售出库合并后只保留一张业务单据", as
   assert.deepEqual(detail.receiptSummary, {
     basis: "barcode",
     total: 6,
+    effectiveQuantity: 6,
     signed: 2,
+    returned: 0,
     pending: 3,
     exceptions: 1,
     signedRate: 33.3,
@@ -900,7 +1008,9 @@ test("同一路线的分批销售出库合并后只保留一张业务单据", as
     basis: "review",
     reviewVersion: 1,
     total: 8,
+    effectiveQuantity: 8,
     signed: 2,
+    returned: 0,
     pending: 5,
     exceptions: 1,
     signedRate: 25,
@@ -916,6 +1026,31 @@ test("同一路线的分批销售出库合并后只保留一张业务单据", as
   assert.equal(reviewedGroupB?.total, 2);
   assert.equal(reviewedGroupB?.signedRate, 0);
   assert.equal(reviewedGroupB?.exceptions, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await submitTrackingReturn({
+    returnWarehouseId: context.sourceWarehouseId,
+    barcodes: [batches[1]![1]!],
+    operatorName,
+    operatorUserId: currentUser.id
+  });
+  const returnedGroup = await getTrackingOrderGroupDetail(group.id);
+  assert.equal(returnedGroup.items.find((item) => item.barcode === batches[1]![1]!)?.returnedWithoutReceipt, true);
+  assert.deepEqual(returnedGroup.receiptSummary, {
+    basis: "review",
+    reviewVersion: 1,
+    total: 8,
+    effectiveQuantity: 7,
+    signed: 2,
+    returned: 1,
+    pending: 4,
+    exceptions: 1,
+    signedRate: 28.6,
+    reviewedCategoryQuantity: 6,
+    unallocatedCategoryQuantity: 2,
+    categoryExcessQuantity: 0,
+    excessQuantity: 0
+  });
 
   const feed = await listTrackingOrderFeed({ type: "sales_outbound", page: 1, pageSize: 20 });
   assert.equal(feed.total, 1);
